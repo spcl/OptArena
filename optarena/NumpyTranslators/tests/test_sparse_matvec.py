@@ -111,9 +111,10 @@ def test_bcsr_matvec():
     nbr = A.indptr.shape[0] - 1
     stmts = se.expand_matmul_bcsr_dense_vec(
         ast.Name(id="y", ctx=ast.Store()),
-        {"indptr": "ip", "indices": "ix", "data": "da"}, "x", "NBR", "R", "C")
+        {"indptr": "ip", "indices": "ix", "data": "da"}, "x", "NBR", "R", "C",
+        "M")
     _run(stmts, {"y": y, "ip": A.indptr, "ix": A.indices, "da": A.data,
-                 "x": x, "NBR": nbr, "R": R, "C": C})
+                 "x": x, "NBR": nbr, "R": R, "C": C, "M": M})
     assert np.allclose(y, Acsr @ x)
 
 

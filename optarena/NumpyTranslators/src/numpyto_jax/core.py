@@ -903,6 +903,8 @@ def _emit_function(fn: ast.FunctionDef,
     mutated = _mutated_params(fn, params)
     live_out: Set[str] = set(params)
 
+    if returns and mutated:
+        _augment_returns(fn, mutated)
     body_lines = _emit_body(fn.body, live_out, "    ")
     if not returns:
         # numpy mutated in place + returned None -> return the mutated outputs.
@@ -925,6 +927,8 @@ def _emit_function_eager(fn: ast.FunctionDef, decorate: Optional[str]) -> List[s
     params = [a.arg for a in fn.args.args]
     returns = [s for s in ast.walk(fn) if isinstance(s, ast.Return) and s.value]
     mutated = _mutated_params(fn, params)
+    if returns and mutated:
+        _augment_returns(fn, mutated)
     body_lines = _emit_eager_body(fn.body, "    ")
     if not returns:
         body_lines.append("    return " + ", ".join(mutated))
@@ -1623,6 +1627,25 @@ def _static_params(fn: ast.FunctionDef, params) -> List[str]:
     return [p for p in params if p in want and p not in array_like]
 
 
+def _augment_returns(fn: ast.FunctionDef, mutated: List[str]) -> None:
+    """Append in-place-mutated params to each TOP-LEVEL ``return`` so a kernel
+    that returns a scalar/derived value while mutating output arrays in place
+    (channel_flow returns the step COUNT but mutates ``u``/``v``) still hands
+    the functional results back. Only direct ``fn.body`` returns are touched
+    (the function's real exit points); names already returned are not
+    duplicated. A no-return kernel is handled by the caller's append path."""
+    for stmt in fn.body:
+        if not (isinstance(stmt, ast.Return) and stmt.value is not None):
+            continue
+        cur = list(stmt.value.elts) if isinstance(stmt.value, ast.Tuple) else [stmt.value]
+        present = {e.id for e in cur if isinstance(e, ast.Name)}
+        extra = [m for m in mutated if m not in present]
+        if extra:
+            stmt.value = ast.Tuple(
+                elts=cur + [ast.Name(id=m, ctx=ast.Load()) for m in extra],
+                ctx=ast.Load())
+
+
 def _mutated_params(fn: ast.FunctionDef, params) -> List[str]:
     """Params written in place, returned in **signature order** (OptArena's
     ``output_args`` convention) rather than mutation-encounter order."""
@@ -1632,6 +1655,18 @@ def _mutated_params(fn: ast.FunctionDef, params) -> List[str]:
             tgts = s.targets if isinstance(s, ast.Assign) else [s.target]
             for t in tgts:
                 base = t
+                while isinstance(base, ast.Subscript):
+                    base = base.value
+                if isinstance(base, ast.Name) and base.id in params:
+                    mutated.add(base.id)
+        # numpy ufunc in-place scatter ``np.add.at(target, idx, val)`` mutates its
+        # first arg through a Call, not an assignment target -- the jax emitter
+        # later rewrites it to ``target = target.at[idx].add(val)``, so the param
+        # IS mutated and must be returned.
+        elif isinstance(s, ast.Call):
+            f = s.func
+            if isinstance(f, ast.Attribute) and f.attr == "at" and isinstance(f.value, ast.Attribute) and s.args:
+                base = s.args[0]
                 while isinstance(base, ast.Subscript):
                     base = base.value
                 if isinstance(base, ast.Name) and base.id in params:

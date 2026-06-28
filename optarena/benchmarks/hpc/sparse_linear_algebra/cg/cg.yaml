@@ -68,9 +68,51 @@ sparse_layouts:
           shape:
           - nnz
           dtype: float64
+      bcsr:
+        buffers:
+        - role: indptr
+          name: A_indptr
+          shape:
+          - NBR + 1
+          dtype: int64
+        - role: indices
+          name: A_indices
+          shape:
+          - nnz_blk
+          dtype: int64
+        - role: data
+          name: A_data
+          shape:
+          - nnz_blk
+          - R
+          - C
+          dtype: float64
+      bcoo:
+        buffers:
+        - role: row
+          name: A_row
+          shape:
+          - NBLK
+          dtype: int64
+        - role: col
+          name: A_col
+          shape:
+          - NBLK
+          dtype: int64
+        - role: data
+          name: A_data
+          shape:
+          - NBLK
+          - R
+          - C
+          dtype: float64
 configurations:
   csr:
     A: csr
+  bcsr:
+    A: bcsr
+  bcoo:
+    A: bcoo
 taxonomy:
   track: hpc
   subtrack: sparse

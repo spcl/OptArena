@@ -164,6 +164,24 @@ def _norm(arr) -> np.ndarray:
     return a.astype(np.complex128 if np.iscomplexobj(a) else np.float64)
 
 
+def _within_norm_error(got, exp, norm_error: float) -> bool:
+    """Relative-L2-norm tolerance fallback (the optarena criterion). A
+    boundary-/reassociation-sensitive kernel (nbody's matmul reassociates
+    differently in jax/XLA than numpy's BLAS, amplifying over time steps) can
+    diverge elementwise while staying within its declared global tolerance.
+    Mirrors the native ``_invoke`` path so every backend treats ``norm_error``
+    identically."""
+    if norm_error <= 0.0:
+        return False
+    finite = np.isfinite(got) & np.isfinite(exp)
+    if not finite.all():
+        return False
+    denom = float(np.linalg.norm(exp.ravel()))
+    diff = float(np.linalg.norm((got - exp).ravel()))
+    rel = diff / denom if denom > 0 else diff
+    return rel <= norm_error
+
+
 def _custom_initialize(info, syms, datatype=np.float64) -> Dict[str, Any]:
     """Run a kernel's hand-written ``initialize`` (the optarena default for
     non-foundation kernels) and bind its results by ``init.output_args``.
@@ -173,11 +191,26 @@ def _custom_initialize(info, syms, datatype=np.float64) -> Dict[str, Any]:
     explicitly so the input dtype matches the emitted code's precision.
     """
     import importlib
+    import importlib.util
     import inspect
     init = info["init"]
-    mod = importlib.import_module("optarena.benchmarks.{r}.{m}".format(r=info["relative_path"].replace("/", "."),
-                                                                      m=info["module_name"]))
-    fn = vars(mod)[init["func_name"]]
+    # The custom ``initialize`` lives either in a dedicated module (HPC kernels:
+    # crc16.py) or, for foundation kernels which have no separate init file,
+    # alongside the reference in ``<module>_numpy.py``. Try the package module
+    # first (preserves intra-package relative imports), then the _numpy file.
+    fn = None
+    try:
+        mod = importlib.import_module("optarena.benchmarks.{r}.{m}".format(
+            r=info["relative_path"].replace("/", "."), m=info["module_name"]))
+        fn = vars(mod).get(init["func_name"])
+    except ModuleNotFoundError:
+        fn = None
+    if fn is None:
+        p = REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py'
+        spec = importlib.util.spec_from_file_location(f'{info["module_name"]}_numpy', p)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        fn = vars(m)[init["func_name"]]
     # Pass each init arg as-is: the preset (and the size-scaling above)
     # already types dimensions as int and physical params as float.
     # int()-ing everything truncated float params -- nbody's dt=0.05 -> 0
@@ -265,6 +298,13 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
                     return 1 << max(3, max(t, 8).bit_length() - 1)
                 return t
             syms = {k: (_scale_dim(v) if (k in ints and v > 48) else v) for k, v in syms.items()}
+    # Kernel scalar params (``init.scalars``, e.g. crc16's CRC polynomial
+    # ``poly``) pass to the kernel by value and must resolve by name like a
+    # preset symbol. They are CONSTANTS, not dimensions, so merge them only
+    # after the size down-scaling above -- otherwise a value like poly=4129
+    # would be shrunk to ~48. A preset symbol of the same name wins (setdefault).
+    for _sk, _sv in (spec.init.scalars or {}).items():
+        syms.setdefault(_sk, _sv)
     # Bound the input magnitude to [-8, 8]: codegen correctness is
     # magnitude-independent (the numpy ref and each backend see identical
     # data), but the default uniform [-1000, 1000] drives transcendental
@@ -294,6 +334,20 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
         # (not a backend that can't express the kernel), so it is a FAILURE, not
         # a silent skip that would hide the kernel for every backend at once.
         return {b: f"FAIL:init-error:{type(exc).__name__}" for b in (*BACKENDS, *PY_BACKENDS)}
+
+    # A kernel whose initializer yields a genuinely SPARSE operand (a scipy
+    # sparse matrix -- the sp_* Krylov solvers' CSR ``A``) cannot be marshalled
+    # as a dense C-ABI buffer, and its ``A @ x`` is a SpMV the dense translator
+    # does not lower. These sparse benchmarks have dedicated coverage via
+    # run_sparse_benchmark.py (see the tests/extended_smoke sparse sweep), so
+    # skip them here exactly like the ``sparse_layouts`` specs above. A DENSE
+    # banded operand (banded_mmt) is a real ndarray and is NOT skipped.
+    try:
+        from scipy.sparse import issparse
+        if any(issparse(v) for v in by.values()):
+            return {b: "skip:sparse" for b in BACKENDS}
+    except ImportError:
+        pass
 
     status: Dict[str, str] = {}
     td_ctx = tempfile.TemporaryDirectory()
@@ -457,11 +511,13 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
                                              compare,
                                              rtol,
                                              atol,
-                                             emit_prec=emit_prec)
+                                             emit_prec=emit_prec,
+                                             norm_error=spec.norm_error or 0.0)
             except Exception as exc:  # noqa: BLE001
                 status[pb] = f"FAIL:{type(exc).__name__}"
         try:
-            status["jax"] = _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_prec=emit_prec)
+            status["jax"] = _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol,
+                                             emit_prec=emit_prec, norm_error=spec.norm_error or 0.0)
         except Exception as exc:  # noqa: BLE001
             status["jax"] = f"FAIL:{type(exc).__name__}"
     finally:
@@ -491,7 +547,8 @@ def _dep_available(dep: str) -> bool:
     return True
 
 
-def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
+def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "",
+                    norm_error: float = 0.0) -> str:
     """Validate a Python/JIT backend (numba/pythran/cupy) vs numpy.
 
     Skips cleanly when the dependency is absent. Emits the backend module,
@@ -595,13 +652,16 @@ def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, ato
             if g.shape != e.shape:
                 return f"FAIL:shape:{nm}"
             if g.size and not np.allclose(g, e, rtol=rtol, atol=atol, equal_nan=True):
+                if _within_norm_error(g, e, norm_error):
+                    continue
                 fin = np.isfinite(g) & np.isfinite(e)
                 d = float(np.abs(g[fin] - e[fin]).max()) if fin.any() else float("nan")
                 return f"FAIL:{nm}:d={d:.2e}"
         return "ok"
 
 
-def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
+def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "",
+                     norm_error: float = 0.0) -> str:
     """Validate the NumpyToJAX emitter vs numpy, in a forked child.
 
     JAX is multithreaded, and importing it poisons the parent's ``os.fork``
@@ -618,7 +678,7 @@ def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_
     if pid == 0:  # child (jax lives here only)
         os.close(r)
         try:
-            res = _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec)
+            res = _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec, norm_error)
         except Exception as exc:  # noqa: BLE001
             res = f"FAIL:{type(exc).__name__}"
         try:
@@ -639,7 +699,8 @@ def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_
     return b"".join(chunks).decode() or "FAIL:no-result"
 
 
-def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str) -> str:
+def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str,
+                 norm_error: float = 0.0) -> str:
     """Emit + run + compare the jax kernel. Runs ONLY inside the forked child.
 
     JAX is functional: the emitted kernel RETURNS its outputs (even when the
@@ -707,6 +768,8 @@ def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec
         if g.shape != e.shape:
             return f"FAIL:shape:{nm}"
         if g.size and not np.allclose(g, e, rtol=rtol, atol=atol, equal_nan=True):
+            if _within_norm_error(g, e, norm_error):
+                continue
             fin = np.isfinite(g) & np.isfinite(e)
             d = float(np.abs(g[fin] - e[fin]).max()) if fin.any() else float("nan")
             return f"FAIL:{nm}:d={d:.2e}"
@@ -784,7 +847,17 @@ def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, norm_
             buf = call.get(nm)
             if buf is None:
                 return f"FAIL:unresolved:{nm}"
-            buf = np.ascontiguousarray(buf)
+            # Marshal to the binding's DECLARED dtype: the C ABI reads e.g.
+            # ``int64_t*``, so an input array of a different width (crc16's
+            # ``data`` is uint8 while the contract per the yaml is int64) must be
+            # value-cast, not byte-reinterpreted (which would read 8 uint8s as
+            # one garbage int64). The ptr kind already tracks the run precision
+            # (ptr_double/ptr_float), so this is a no-op for the float arrays
+            # init produced at the matching width. Write the (possibly new)
+            # buffer back so the post-call comparison reads exactly the storage
+            # the kernel wrote into.
+            buf = np.ascontiguousarray(buf, dtype=_np_dtype_for_kind(kind, buf.dtype))
+            call[nm] = buf
             keep.append(buf)
             cargs.append(buf.ctypes.data_as(ctypes.c_void_p))
         else:

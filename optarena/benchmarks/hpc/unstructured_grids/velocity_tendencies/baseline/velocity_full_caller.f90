@@ -221,6 +221,8 @@ SUBROUTINE run_velocity_flat_c(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 
                                dtime, dt_linintp_ubc, &
                                nrdmax_in, nflatlev_in, &
                                lvert_nest_in, lextra_diffu_in, timers_level_in, &
+                               nshift_in, ddt_vn_adv_assoc_in, ddt_vn_cor_assoc_in, &
+                               max_vcfl_io, &
                                p_patch_cells_area, &
                                p_patch_cells_neighbor_idx, p_patch_cells_neighbor_blk, &
                                p_patch_cells_edge_idx, p_patch_cells_edge_blk, &
@@ -274,6 +276,9 @@ SUBROUTINE run_velocity_flat_c(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 
   INTEGER(c_int),    INTENT(IN)    :: nrdmax_in(10), nflatlev_in(10)
   INTEGER(c_int8_t), VALUE :: lvert_nest_in, lextra_diffu_in
   INTEGER(c_int),    VALUE :: timers_level_in
+  INTEGER(c_int),    VALUE :: nshift_in
+  INTEGER(c_int8_t), VALUE :: ddt_vn_adv_assoc_in, ddt_vn_cor_assoc_in
+  REAL(c_double),    INTENT(INOUT) :: max_vcfl_io
   REAL(c_double),  TARGET, INTENT(IN)    :: p_patch_cells_area(nproma, nblks_c)
   INTEGER(c_int),          INTENT(IN)    :: p_patch_cells_neighbor_idx(nproma, nblks_c, 3)
   INTEGER(c_int),          INTENT(IN)    :: p_patch_cells_neighbor_blk(nproma, nblks_c, 3)
@@ -364,7 +369,7 @@ SUBROUTINE run_velocity_flat_c(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 
   p_patch % nblks_v = nblks_v
   p_patch % nlev    = nlev
   p_patch % nlevp1  = nlevp1
-  p_patch % nshift  = 0
+  p_patch % nshift  = nshift_in
 
   ALLOCATE(p_patch % cells % neighbor_idx(nproma, nblks_c, 3))
   ALLOCATE(p_patch % cells % neighbor_blk(nproma, nblks_c, 3))
@@ -470,6 +475,9 @@ SUBROUTINE run_velocity_flat_c(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 
   p_diag % ddt_vn_apc_pc   => p_diag_ddt_vn_apc_pc
   p_diag % ddt_vn_cor_pc   => p_diag_ddt_vn_cor_pc
   p_diag % ddt_w_adv_pc    => p_diag_ddt_w_adv_pc
+  p_diag % ddt_vn_adv_is_associated = (ddt_vn_adv_assoc_in /= 0_c_int8_t)
+  p_diag % ddt_vn_cor_is_associated = (ddt_vn_cor_assoc_in /= 0_c_int8_t)
+  p_diag % max_vcfl_dyn             = max_vcfl_io
 
   p_metrics % ddxn_z_full        => p_metrics_ddxn_z_full
   p_metrics % ddxt_z_full        => p_metrics_ddxt_z_full
@@ -492,4 +500,5 @@ SUBROUTINE run_velocity_flat_c(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 
                            (lvn_only /= 0_c_int8_t), &
                            dtime, dt_linintp_ubc, &
                            (ldeepatmo /= 0_c_int8_t))
+  max_vcfl_io = p_diag % max_vcfl_dyn
 END SUBROUTINE run_velocity_flat_c

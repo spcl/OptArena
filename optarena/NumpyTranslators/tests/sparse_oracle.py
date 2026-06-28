@@ -149,6 +149,20 @@ def _sell(A, C: int = 4) -> Dict[str, np.ndarray]:
     }
 
 
+def _block_size(dim: int) -> int:
+    """Largest block edge in ``{4, 3, 2}`` that divides ``dim`` (else 1).
+
+    scipy's ``tobsr(blocksize=(R, C))`` requires ``rows % R == 0`` and
+    ``cols % C == 0``; pick a real (>1) block when the dimension permits so
+    the BCSR/BCOO path is exercised with genuine ``R x C`` blocks rather than
+    the degenerate ``(1, 1)`` blocking ``tobsr()`` defaults to (which is just
+    CSR and never tests the block loops)."""
+    for b in (4, 3, 2):
+        if dim % b == 0:
+            return b
+    return 1
+
+
 def materialize(fmt: str, A) -> Dict[str, np.ndarray]:
     """scipy matrix ``A`` -> {role: ndarray} for the given format."""
     if fmt == "csr":
@@ -174,7 +188,8 @@ def materialize(fmt: str, A) -> Dict[str, np.ndarray]:
         A = A.todia()
         return {"data": A.data.astype(np.float64), "offsets": A.offsets.astype(np.int64)}
     if fmt == "bcsr":
-        A = A.tobsr()
+        R, C = _block_size(A.shape[0]), _block_size(A.shape[1])
+        A = A.tobsr(blocksize=(R, C))
         return {
             "indptr": A.indptr.astype(np.int64),
             "indices": A.indices.astype(np.int64),
@@ -183,7 +198,8 @@ def materialize(fmt: str, A) -> Dict[str, np.ndarray]:
     if fmt == "bcoo":
         # block-COO: expand bsr block-row pointers into per-block row
         # coords (scipy has no bcoo type; this is the canonical lower).
-        A = A.tobsr()
+        R, C = _block_size(A.shape[0]), _block_size(A.shape[1])
+        A = A.tobsr(blocksize=(R, C))
         nbrows = A.indptr.shape[0] - 1
         brow = np.repeat(np.arange(nbrows), np.diff(A.indptr))
         return {"row": brow.astype(np.int64), "col": A.indices.astype(np.int64), "data": A.data.astype(np.float64)}

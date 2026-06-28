@@ -277,6 +277,65 @@ def _slice_axes(node: ast.AST) -> List[ast.AST]:
     return [sl]
 
 
+def _contraction_result_extent(expr: ast.Call, shape_table):
+    """Output iter-extent of an ``np.einsum`` / ``tensordot`` / ``inner`` call.
+
+    For einsum the subscript string drives it directly; tensordot / inner are
+    mapped to their equivalent einsum spec first. Returns ``None`` when the
+    operands' shapes aren't resolvable."""
+    attr = expr.func.attr
+    if attr == "einsum":
+        if not (isinstance(expr.args[0], ast.Constant) and isinstance(expr.args[0].value, str)):
+            return None
+        try:
+            inputs, output = _parse_einsum_subscripts(expr.args[0].value)
+        except NotImplementedError:
+            return None
+        operand_nodes = expr.args[1:]
+    else:
+        # tensordot / inner: build the equivalent spec from operand ranks.
+        a, b = expr.args[0], expr.args[1]
+        if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)):
+            return None
+        ra, rb = len(shape_table.get(a.id, ())), len(shape_table.get(b.id, ()))
+        if not ra or not rb:
+            return None
+        letters = "abcdefghijklmnopqrstuvwxyz"
+        if attr == "inner":
+            a_spec, b_spec = list(letters[:ra]), list(letters[ra:ra + rb])
+            b_spec[-1] = a_spec[-1]
+            inputs = ["".join(a_spec), "".join(b_spec)]
+            output = "".join(a_spec[:-1] + b_spec[:-1])
+        else:  # tensordot default axes=2
+            kwargs = expr.keywords
+            axes_node = expr.args[2] if len(expr.args) > 2 else _axes_kwarg(kwargs)
+            a_ax, b_ax = _tensordot_axes(axes_node, ra, rb)
+            a_spec = list(letters[:ra])
+            b_spec = [None] * rb
+            nxt = ra
+            for ca, cb in zip(a_ax, b_ax):
+                b_spec[cb] = a_spec[ca]
+            for i in range(rb):
+                if b_spec[i] is None:
+                    b_spec[i] = letters[nxt]
+                    nxt += 1
+            inputs = ["".join(a_spec), "".join(b_spec)]
+            output = "".join([c for i, c in enumerate(a_spec) if i not in a_ax]
+                             + [c for i, c in enumerate(b_spec) if i not in b_ax])
+        operand_nodes = [a, b]
+    letter_extent: Dict[str, str] = {}
+    for spec, node in zip(inputs, operand_nodes):
+        nm = _name_id(node)
+        shape = shape_table.get(nm) if nm else None
+        if shape is None or len(shape) != len(spec):
+            return None
+        for letter, dim in zip(spec, shape):
+            letter_extent.setdefault(letter, dim)
+    if not output:
+        return None  # scalar
+    return tuple(_const_or_name(letter_extent[c]) for c in output)
+
+
 def _iter_extent_of(expr: ast.expr,
                     shape_table: Dict[str, Tuple[str, ...]]
                     ) -> Optional[Tuple[ast.expr, ...]]:
@@ -411,6 +470,20 @@ def _iter_extent_of(expr: ast.expr,
                 return tuple(reversed(base))
             if attr == "repeat":
                 return None
+            # ``np.einsum(subscripts, *operands)`` -> the OUTPUT extent: one axis
+            # per output index letter, sized from the operand that introduces it.
+            # Treating it elementwise (the fallthrough below) would wrongly take
+            # the first operand's full rank.
+            if attr in ("einsum", "tensordot", "inner") and len(expr.args) >= 2:
+                ext = _contraction_result_extent(expr, shape_table)
+                if ext is not None:
+                    return ext
+                return None
+            if attr in ("trace", "vdot", "median"):
+                return None  # scalar result
+            if attr == "diagonal" and expr.args:
+                base = _iter_extent_of(expr.args[0], shape_table)
+                return (base[0],) if base else None
             # ``np.concatenate((a, b, ...), axis=k)`` -> the operands' common
             # shape with axis ``k`` summed across operands (dwt2d Haar
             # recompose). Other axes are taken from the first operand.
@@ -1794,10 +1867,14 @@ def expand_where(target: ast.expr, args: List[ast.expr],
     idx = (_name(iters[0]) if len(iters) == 1 else
            ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
     m_sub = ast.Subscript(value=_name(mask.id), slice=idx, ctx=ast.Load())
+    # A branch may be a bare array Name OR a whole-array EXPRESSION
+    # (``difcoef * area_c * lap``): scalarise it recursively at the iters so
+    # every array operand inside is subscripted, not just a top-level Name.
+    iter_nodes = [_name(i) for i in iters]
+
     def maybe_sub(arg):
-        if isinstance(arg, ast.Name) and shape_table.get(arg.id):
-            return ast.Subscript(value=_name(arg.id), slice=idx, ctx=ast.Load())
-        return arg
+        return _scalarize_at_iters(arg, iter_nodes, shape_table)
+
     ternary = ast.IfExp(test=m_sub, body=maybe_sub(args[1]), orelse=maybe_sub(args[2]))
     body = [ast.Assign(
         targets=[ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())],
@@ -1998,21 +2075,22 @@ def expand_eye(target: ast.expr, args: List[ast.expr],
         orelse=[])]
 
 
-def expand_triu(target: ast.expr, args: List[ast.expr],
-                shape_table: Dict[str, Tuple[str, ...]],
-                kwargs=None) -> List[ast.stmt]:
-    """``out = np.triu(A [, k])`` -> ``out[i, j] = A[i, j] if j >= i+k else 0``.
+def _expand_triangular(target: ast.expr, args: List[ast.expr],
+                       shape_table: Dict[str, Tuple[str, ...]],
+                       kwargs, lower: bool) -> List[ast.stmt]:
+    """Shared triu / tril lowering: copy ``A[i, j]`` where it is on the kept
+    side of the ``i + k`` diagonal, else 0.
 
-    The optional ``k`` offset (default 0, positional or ``k=`` keyword)
-    selects the diagonal; ``k=1`` skips the main diagonal (strict
-    upper-triangular).
-    """
+    ``lower=False`` keeps ``j >= i + k`` (upper); ``lower=True`` keeps
+    ``j <= i + k`` (lower). The optional ``k`` offset (positional or ``k=``)
+    defaults to 0."""
+    name = "np.tril" if lower else "np.triu"
     if not args or not isinstance(args[0], ast.Name):
-        raise NotImplementedError("np.triu needs Name first arg")
+        raise NotImplementedError(f"{name} needs Name first arg")
     a = args[0]
     shape = shape_table.get(a.id)
     if not shape or len(shape) != 2:
-        raise NotImplementedError("np.triu: only 2-D supported")
+        raise NotImplementedError(f"{name}: only 2-D supported")
     m, n = shape
     k_arg: ast.expr = _const(0)
     _k = _kwarg_or_pos(args, kwargs, 1, "k")
@@ -2022,20 +2100,32 @@ def expand_triu(target: ast.expr, args: List[ast.expr],
         value=_name(a.id),
         slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
         ctx=ast.Load())
-    threshold: ast.expr
     if isinstance(k_arg, ast.Constant) and k_arg.value == 0:
-        threshold = _name("__i")
+        threshold: ast.expr = _name("__i")
     else:
         threshold = ast.BinOp(left=_name("__i"), op=ast.Add(), right=k_arg)
+    cmp_op = ast.LtE() if lower else ast.GtE()
     body = [ast.Assign(
         targets=[ast.Subscript(
             value=_name(target.id),
             slice=ast.Tuple(elts=[_name("__i"), _name("__j")], ctx=ast.Load()),
             ctx=ast.Store())],
         value=ast.IfExp(
-            test=ast.Compare(left=_name("__j"), ops=[ast.GtE()], comparators=[threshold]),
+            test=ast.Compare(left=_name("__j"), ops=[cmp_op], comparators=[threshold]),
             body=a_sub, orelse=_const(0.0)))]
     return _wrap_for_loops(["__i", "__j"], (m, n), body)
+
+
+def expand_triu(target: ast.expr, args: List[ast.expr],
+                shape_table: Dict[str, Tuple[str, ...]],
+                kwargs=None) -> List[ast.stmt]:
+    """``out = np.triu(A [, k])`` -> ``out[i, j] = A[i, j] if j >= i+k else 0``.
+
+    The optional ``k`` offset (default 0, positional or ``k=`` keyword)
+    selects the diagonal; ``k=1`` skips the main diagonal (strict
+    upper-triangular).
+    """
+    return _expand_triangular(target, args, shape_table, kwargs, lower=False)
 
 
 def expand_hstack(target: ast.expr, args: List[ast.expr],
@@ -2461,6 +2551,451 @@ def expand_dot_2d(target: ast.expr, args: List[ast.expr],
     return expand_matmul(target, a, b, shape_table)
 
 
+# ---------------------------------------------------------------------------
+# Einsum / tensor-contraction family.
+# ---------------------------------------------------------------------------
+
+def _parse_einsum_subscripts(spec: str):
+    """Split ``"ij,jk->ik"`` into ``(["ij", "jk"], "ik")``.
+
+    The explicit ``->`` form is required; the implicit-output form (no
+    ``->``) is synthesised as numpy does: every index appearing exactly once
+    across all inputs, in alphabetical order. ``...`` ellipsis is unsupported
+    (raises)."""
+    spec = spec.replace(" ", "")
+    if "..." in spec:
+        raise NotImplementedError("einsum ellipsis unsupported")
+    if "->" in spec:
+        lhs, rhs = spec.split("->")
+    else:
+        lhs = spec
+        counts: Dict[str, int] = {}
+        for ch in lhs.replace(",", ""):
+            counts[ch] = counts.get(ch, 0) + 1
+        rhs = "".join(sorted(c for c, n in counts.items() if n == 1))
+    inputs = lhs.split(",")
+    return inputs, rhs
+
+
+def expand_einsum(target: ast.expr, args: List[ast.expr],
+                  shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
+    """Lower ``np.einsum(subscripts, *operands)`` to a nested loop nest.
+
+    Output indices become nested loops over the result; indices summed away
+    (present in the inputs but not the output) become inner accumulation
+    loops. The body is ``out[out_idx] (+)= prod(operand[its idx letters])``.
+
+    Handles N operands and arbitrary index letters, including a letter
+    repeated within ONE operand (``ii`` -> a diagonal ``A[i, i]``). This one
+    path subsumes matmul ``ij,jk->ik``, transpose ``ij->ji``, trace ``ii->``,
+    diagonal ``ii->i``, outer ``i,j->ij`` and sum ``ij->``.
+    """
+    if not args or not isinstance(args[0], ast.Constant) or not isinstance(args[0].value, str):
+        raise NotImplementedError("einsum needs a literal subscript string")
+    inputs, output = _parse_einsum_subscripts(args[0].value)
+    operands = args[1:]
+    if len(inputs) != len(operands):
+        raise NotImplementedError("einsum operand count mismatches subscripts")
+    operand_names: List[str] = []
+    for op in operands:
+        if not isinstance(op, ast.Name):
+            raise NotImplementedError("einsum operands must be bare Names")
+        operand_names.append(op.id)
+    # Map every index letter to its extent symbol (first operand that uses it).
+    letter_extent: Dict[str, str] = {}
+    for spec, name in zip(inputs, operand_names):
+        shape = shape_table.get(name)
+        if shape is None or len(shape) != len(spec):
+            raise NotImplementedError(f"einsum: shape of {name!r} unknown / rank mismatch")
+        for letter, dim in zip(spec, shape):
+            letter_extent.setdefault(letter, dim)
+    out_letters = list(output)
+    sum_letters = [c for c in letter_extent if c not in out_letters]
+    # Per-letter loop variable.
+    var_of = {c: f"__es_{c}" for c in letter_extent}
+
+    def _subscript(name: str, spec: str) -> ast.expr:
+        idx = [_name(var_of[c]) for c in spec]
+        sl = idx[0] if len(idx) == 1 else ast.Tuple(elts=idx, ctx=ast.Load())
+        return ast.Subscript(value=_name(name), slice=sl, ctx=ast.Load())
+
+    # Product of every operand scalarised at its index letters.
+    product: ast.expr = _subscript(operand_names[0], inputs[0])
+    for name, spec in zip(operand_names[1:], inputs[1:]):
+        product = ast.BinOp(left=product, op=ast.Mult(), right=_subscript(name, spec))
+
+    # Output write target.
+    if out_letters:
+        out_idx = [_name(var_of[c]) for c in out_letters]
+        out_sl = out_idx[0] if len(out_idx) == 1 else ast.Tuple(elts=out_idx, ctx=ast.Load())
+        out_store = ast.Subscript(value=_name(target.id), slice=out_sl, ctx=ast.Store())
+    else:
+        out_store = _store(target.id)   # scalar result (trace / full sum)
+
+    # Inner: accumulate the product over the summed letters.
+    if sum_letters:
+        body: List[ast.stmt] = [ast.AugAssign(target=out_store, op=ast.Add(), value=product)]
+        body = _wrap_for_loops([var_of[c] for c in sum_letters],
+                               [letter_extent[c] for c in sum_letters], body)
+        zero = ast.Assign(targets=[copy.deepcopy(out_store)], value=_const(0.0))
+        inner: List[ast.stmt] = [zero] + body
+    else:
+        inner = [ast.Assign(targets=[copy.deepcopy(out_store)], value=product)]
+
+    if out_letters:
+        return _wrap_for_loops([var_of[c] for c in out_letters],
+                               [letter_extent[c] for c in out_letters], inner)
+    return inner
+
+
+def _einsum_call(spec: str, *operands: ast.expr) -> ast.Call:
+    """Build an ``np.einsum(spec, *operands)`` Call so the wrapper ops
+    (tensordot / inner / vdot) reuse :func:`expand_einsum`."""
+    return _attr_call("np", "einsum", [_const(spec), *operands])
+
+
+def expand_tensordot(target: ast.expr, args: List[ast.expr],
+                     shape_table: Dict[str, Tuple[str, ...]],
+                     kwargs=None) -> List[ast.stmt]:
+    """``np.tensordot(a, b, axes)`` -> an equivalent einsum.
+
+    ``axes`` is an int K (contract the last K axes of ``a`` with the first K
+    of ``b``) or a pair of axis lists. Default ``axes=2``."""
+    if len(args) < 2:
+        raise NotImplementedError("tensordot needs 2 array args")
+    a, b = args[0], args[1]
+    if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)):
+        raise NotImplementedError("tensordot operands must be bare Names")
+    ra = len(shape_table.get(a.id, ()))
+    rb = len(shape_table.get(b.id, ()))
+    if not ra or not rb:
+        raise NotImplementedError("tensordot: operand shapes unknown")
+    axes_node = args[2] if len(args) > 2 else _axes_kwarg(kwargs)
+    a_ax, b_ax = _tensordot_axes(axes_node, ra, rb)
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    a_spec = list(letters[:ra])
+    b_spec = [None] * rb
+    # Shared contraction letters: pair a_ax[i] <-> b_ax[i].
+    nxt = ra
+    for ca, cb in zip(a_ax, b_ax):
+        b_spec[cb] = a_spec[ca]
+    for i in range(rb):
+        if b_spec[i] is None:
+            b_spec[i] = letters[nxt]
+            nxt += 1
+    contracted = {a_spec[ca] for ca in a_ax}
+    out_spec = [c for i, c in enumerate(a_spec) if i not in a_ax] + \
+               [c for i, c in enumerate(b_spec) if i not in b_ax]
+    spec = f"{''.join(a_spec)},{''.join(b_spec)}->{''.join(out_spec)}"
+    return expand_einsum(target, [_const(spec), a, b], shape_table)
+
+
+def _axes_kwarg(kwargs):
+    for kw in kwargs or []:
+        if kw.arg == "axes":
+            return kw.value
+    return _const(2)
+
+
+def _tensordot_axes(node: ast.expr, ra: int, rb: int):
+    """Resolve tensordot ``axes`` into ``(a_axes, b_axes)`` index lists."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        k = node.value
+        return list(range(ra - k, ra)), list(range(k))
+    if isinstance(node, (ast.Tuple, ast.List)) and len(node.elts) == 2:
+        def _axis_list(e):
+            if isinstance(e, ast.Constant):
+                return [e.value]
+            if isinstance(e, (ast.Tuple, ast.List)):
+                return [x.value for x in e.elts]
+            raise NotImplementedError("tensordot axes entries must be literals")
+        return _axis_list(node.elts[0]), _axis_list(node.elts[1])
+    raise NotImplementedError("tensordot axes must be an int or a 2-tuple of axis lists")
+
+
+def expand_inner(target: ast.expr, args: List[ast.expr],
+                 shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
+    """``np.inner(a, b)`` -> contract the LAST axis of each operand.
+
+    Rank-1 x rank-1 is the plain dot product (routes to :func:`expand_dot`)."""
+    if len(args) != 2:
+        raise NotImplementedError("np.inner needs 2 args")
+    a, b = args
+    if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)):
+        raise NotImplementedError("np.inner operands must be bare Names")
+    ra = len(shape_table.get(a.id, ()))
+    rb = len(shape_table.get(b.id, ()))
+    if ra == 1 and rb == 1:
+        return expand_dot(target, args, shape_table)
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    a_spec = list(letters[:ra])
+    b_spec = list(letters[ra:ra + rb])
+    b_spec[-1] = a_spec[-1]   # contract the last axis of each
+    out_spec = a_spec[:-1] + b_spec[:-1]
+    spec = f"{''.join(a_spec)},{''.join(b_spec)}->{''.join(out_spec)}"
+    return expand_einsum(target, [_const(spec), a, b], shape_table)
+
+
+def expand_vdot(target: ast.expr, args: List[ast.expr],
+                shape_table: Dict[str, Tuple[str, ...]],
+                local_dtypes=None) -> List[ast.stmt]:
+    """``np.vdot(a, b)`` -> ``sum(conj(a) * b)`` over the flattened operands.
+
+    The conjugate is emitted ONLY when the first operand is complex (it is a
+    no-op for reals, and the complex-conjugate intrinsic is not valid on a real
+    scalar); real operands reduce to the plain dot product."""
+    if len(args) != 2:
+        raise NotImplementedError("np.vdot needs 2 args")
+    a, b = args
+    if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)):
+        raise NotImplementedError("np.vdot operands must be bare Names")
+    shape = shape_table.get(a.id)
+    if shape is None:
+        raise NotImplementedError("np.vdot: operand shape unknown")
+    if len(shape) != 1:
+        raise NotImplementedError("np.vdot only supports rank-1 operands")
+    is_complex = bool(local_dtypes and str(local_dtypes.get(a.id, "")).startswith("complex"))
+    it = "__vd"
+    a_elem: ast.expr = ast.Subscript(value=_name(a.id), slice=_name(it), ctx=ast.Load())
+    if is_complex:
+        a_elem = _attr_call("np", "conj", [a_elem])
+    prod = ast.BinOp(left=a_elem, op=ast.Mult(),
+                     right=ast.Subscript(value=_name(b.id), slice=_name(it), ctx=ast.Load()))
+    body = [ast.AugAssign(target=_store(target.id), op=ast.Add(), value=prod)]
+    return [ast.Assign(targets=[_store(target.id)], value=_const(0.0)),
+            *_wrap_for_loops([it], [shape[0]], body)]
+
+
+def expand_trace(target: ast.expr, args: List[ast.expr],
+                 shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
+    """``np.trace(A)`` -> ``sum_i A[i, i]`` (the diagonal sum)."""
+    if len(args) != 1 or not isinstance(args[0], ast.Name):
+        raise NotImplementedError("np.trace needs one bare-Name 2-D arg")
+    shape = shape_table.get(args[0].id)
+    if shape is None or len(shape) != 2:
+        raise NotImplementedError("np.trace needs a 2-D array")
+    it = "__tr"
+    diag = ast.Subscript(value=_name(args[0].id),
+                         slice=ast.Tuple(elts=[_name(it), _name(it)], ctx=ast.Load()), ctx=ast.Load())
+    body = [ast.AugAssign(target=_store(target.id), op=ast.Add(), value=diag)]
+    return [ast.Assign(targets=[_store(target.id)], value=_const(0.0)),
+            *_wrap_for_loops([it], [shape[0]], body)]
+
+
+def expand_diagonal(target: ast.expr, args: List[ast.expr],
+                    shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
+    """``np.diagonal(A)`` -> ``out[i] = A[i, i]``."""
+    if len(args) != 1 or not isinstance(args[0], ast.Name):
+        raise NotImplementedError("np.diagonal needs one bare-Name 2-D arg")
+    shape = shape_table.get(args[0].id)
+    if shape is None or len(shape) != 2:
+        raise NotImplementedError("np.diagonal needs a 2-D array")
+    it = "__dg"
+    diag = ast.Subscript(value=_name(args[0].id),
+                         slice=ast.Tuple(elts=[_name(it), _name(it)], ctx=ast.Load()), ctx=ast.Load())
+    body = [ast.Assign(
+        targets=[ast.Subscript(value=_name(target.id), slice=_name(it), ctx=ast.Store())],
+        value=diag)]
+    return _wrap_for_loops([it], [shape[0]], body)
+
+
+def _expand_cumulative(target, args, shape_table, op, kwargs=None):
+    """Shared prefix-scan for ``cumsum`` / ``cumprod``.
+
+    1-D (or ``axis=None`` over a 1-D operand): ``out[0] = a[0]``, then
+    ``out[i] = out[i-1] (op) a[i]``. N-D with ``axis=k``: the same recurrence
+    along axis ``k`` with the other axes as outer loops."""
+    if not args or not isinstance(args[0], ast.Name):
+        raise NotImplementedError("cumulative scan needs a bare-Name array")
+    a = args[0]
+    shape = shape_table.get(a.id)
+    if shape is None:
+        raise NotImplementedError("cumulative scan: operand shape unknown")
+    axes, _ = _read_axis_keepdims(args[1:], kwargs)
+    if axes is None:
+        if len(shape) != 1:
+            raise NotImplementedError("cumulative scan over >1-D needs an explicit axis")
+        axis = 0
+    else:
+        axis = axes[0] % len(shape)
+    n = len(shape)
+    outer = [i for i in range(n) if i != axis]
+    iters = {i: f"__cs{i}" for i in range(n)}
+    sc = iters[axis]
+
+    def _idx(scan_expr):
+        elts = [scan_expr if i == axis else _name(iters[i]) for i in range(n)]
+        return elts[0] if n == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
+
+    out_at = lambda e: ast.Subscript(value=_name(target.id), slice=_idx(e), ctx=ast.Load())
+    a_at = lambda e: ast.Subscript(value=_name(a.id), slice=_idx(e), ctx=ast.Load())
+    sc_prev = ast.BinOp(left=_name(sc), op=ast.Sub(), right=_const(1))
+    # out[..0..] = a[..0..]
+    init = ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_idx(_const(0)), ctx=ast.Store())],
+                      value=a_at(_const(0)))
+    # for sc in 1..N: out[..sc..] = out[..sc-1..] (op) a[..sc..]
+    recur = ast.Assign(
+        targets=[ast.Subscript(value=_name(target.id), slice=_idx(_name(sc)), ctx=ast.Store())],
+        value=ast.BinOp(left=out_at(sc_prev), op=op, right=a_at(_name(sc))))
+    scan_loop = ast.For(target=_store(sc),
+                        iter=ast.Call(func=_name("range"), args=[_const(1), _const_or_name(shape[axis])], keywords=[]),
+                        body=[recur], orelse=[])
+    inner: List[ast.stmt] = [init, scan_loop]
+    return _wrap_for_loops([iters[i] for i in outer], [shape[i] for i in outer], inner)
+
+
+def expand_cumsum(target, args, shape_table, kwargs=None):
+    return _expand_cumulative(target, args, shape_table, ast.Add(), kwargs)
+
+
+def expand_cumprod(target, args, shape_table, kwargs=None):
+    return _expand_cumulative(target, args, shape_table, ast.Mult(), kwargs)
+
+
+def _make_sort_routine(buf: str, n: ast.expr, prefix: str) -> List[ast.stmt]:
+    """In-place ascending insertion sort over ``buf[0:n]`` (rendered as plain
+    loops -- every backend supports them; shared by median / future
+    percentile / quantile). ``prefix`` namespaces the loop / temp vars."""
+    i, j, key = f"{prefix}_i", f"{prefix}_j", f"{prefix}_key"
+    # key = buf[i]; j = i - 1; while j >= 0 and buf[j] > key: buf[j+1]=buf[j]; j-=1; buf[j+1]=key
+    inner = [
+        ast.Assign(targets=[_store(key)], value=ast.Subscript(value=_name(buf), slice=_name(i), ctx=ast.Load())),
+        ast.Assign(targets=[_store(j)], value=ast.BinOp(left=_name(i), op=ast.Sub(), right=_const(1))),
+        ast.While(
+            test=ast.BoolOp(op=ast.And(), values=[
+                ast.Compare(left=_name(j), ops=[ast.GtE()], comparators=[_const(0)]),
+                ast.Compare(left=ast.Subscript(value=_name(buf), slice=_name(j), ctx=ast.Load()),
+                            ops=[ast.Gt()], comparators=[_name(key)])]),
+            body=[
+                ast.Assign(
+                    targets=[ast.Subscript(value=_name(buf),
+                                           slice=ast.BinOp(left=_name(j), op=ast.Add(), right=_const(1)),
+                                           ctx=ast.Store())],
+                    value=ast.Subscript(value=_name(buf), slice=_name(j), ctx=ast.Load())),
+                ast.AugAssign(target=_store(j), op=ast.Sub(), value=_const(1))],
+            orelse=[]),
+        ast.Assign(
+            targets=[ast.Subscript(value=_name(buf),
+                                   slice=ast.BinOp(left=_name(j), op=ast.Add(), right=_const(1)), ctx=ast.Store())],
+            value=_name(key)),
+    ]
+    return [ast.For(target=_store(i),
+                    iter=ast.Call(func=_name("range"), args=[_const(1), n], keywords=[]),
+                    body=inner, orelse=[])]
+
+
+def expand_median(target, args, shape_table, kwargs=None,
+                  local_dtypes=None, fresh_local_allocs=None) -> List[ast.stmt]:
+    """``np.median(a)`` (full, flattened) -> copy + insertion-sort + pick the
+    middle element (mean of the two middles for an even count).
+
+    A scratch buffer ``__md_buf`` of the operand's total size holds the sorted
+    copy so the input is not mutated."""
+    if not args or not isinstance(args[0], ast.Name):
+        raise NotImplementedError("np.median needs a bare-Name array")
+    a = args[0]
+    shape = shape_table.get(a.id)
+    if shape is None:
+        raise NotImplementedError("np.median: operand shape unknown")
+    total = shape[0] if len(shape) == 1 else "(" + ") * (".join(shape) + ")"
+    buf = "__md_buf"
+    if fresh_local_allocs is not None:
+        fresh_local_allocs[buf] = (total,)
+    n_node = _const_or_name(total)
+    # Flat copy a -> buf.
+    cp_iters = [f"__mdc{i}" for i in range(len(shape))]
+    flat = _flat_index(cp_iters, shape)
+    copy_body = [ast.Assign(
+        targets=[ast.Subscript(value=_name(buf), slice=flat, ctx=ast.Store())],
+        value=ast.Subscript(value=_name(a.id),
+                            slice=(_name(cp_iters[0]) if len(shape) == 1
+                                   else ast.Tuple(elts=[_name(c) for c in cp_iters], ctx=ast.Load())),
+                            ctx=ast.Load()))]
+    copy_loops = _wrap_for_loops(cp_iters, list(shape), copy_body)
+    sort = _make_sort_routine(buf, n_node, "__md")
+    half = ast.BinOp(left=copy.deepcopy(n_node), op=ast.FloorDiv(), right=_const(2))
+    mid = ast.Subscript(value=_name(buf), slice=copy.deepcopy(half), ctx=ast.Load())
+    mid_lo = ast.Subscript(value=_name(buf),
+                           slice=ast.BinOp(left=copy.deepcopy(half), op=ast.Sub(), right=_const(1)), ctx=ast.Load())
+    # even count -> mean of the two middles; odd -> the single middle.
+    even = ast.Compare(left=ast.BinOp(left=copy.deepcopy(n_node), op=ast.Mod(), right=_const(2)),
+                       ops=[ast.Eq()], comparators=[_const(0)])
+    pick = ast.IfExp(test=even,
+                     body=ast.BinOp(left=ast.BinOp(left=mid_lo, op=ast.Add(), right=copy.deepcopy(mid)),
+                                    op=ast.Div(), right=_const(2.0)),
+                     orelse=mid)
+    store = ast.Assign(targets=[_store(target.id)], value=pick)
+    return [*copy_loops, *sort, store]
+
+
+def _flat_index(iters: List[str], shape) -> ast.expr:
+    """Row-major flat index ``((i0*d1 + i1)*d2 + i2)...`` for ``iters`` over
+    ``shape``."""
+    idx: ast.expr = _name(iters[0])
+    for k in range(1, len(iters)):
+        idx = ast.BinOp(left=ast.BinOp(left=idx, op=ast.Mult(), right=_const_or_name(shape[k])),
+                        op=ast.Add(), right=_name(iters[k]))
+    return idx
+
+
+def expand_roll(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
+    """``np.roll(a, shift, axis)`` -> ``out[i] = a[(i - shift) % n]`` along the
+    rolled axis (1-D, or N-D with an explicit axis)."""
+    if len(args) < 2 or not isinstance(args[0], ast.Name):
+        raise NotImplementedError("np.roll needs a bare-Name array and a shift")
+    a = args[0]
+    shift = args[1]
+    shape = shape_table.get(a.id)
+    if shape is None:
+        raise NotImplementedError("np.roll: operand shape unknown")
+    axis_node = args[2] if len(args) > 2 else _axis_kwarg(kwargs)
+    n = len(shape)
+    if axis_node is None:
+        if n != 1:
+            raise NotImplementedError("np.roll over >1-D needs an explicit axis")
+        axis = 0
+    elif isinstance(axis_node, ast.Constant) and isinstance(axis_node.value, int):
+        axis = axis_node.value % n
+    else:
+        raise NotImplementedError("np.roll axis must be a literal int")
+    iters = [f"__rl{i}" for i in range(n)]
+    extent = _const_or_name(shape[axis])
+    # roll shifts element i to i+shift, so the source of out[i] is a[i-shift].
+    # The double mod ``((i - shift) % ext + ext) % ext`` keeps the index in
+    # [0, ext) for a NEGATIVE shift too (C/Fortran ``%`` keeps the dividend's
+    # sign, so a bare ``(i - shift) % ext`` could go negative -> OOB read).
+    src_axis = ast.BinOp(
+        left=ast.BinOp(
+            left=ast.BinOp(
+                left=ast.BinOp(left=_name(iters[axis]), op=ast.Sub(), right=shift),
+                op=ast.Mod(), right=copy.deepcopy(extent)),
+            op=ast.Add(), right=copy.deepcopy(extent)),
+        op=ast.Mod(), right=copy.deepcopy(extent))
+    src_elts = [src_axis if i == axis else _name(iters[i]) for i in range(n)]
+    dst_elts = [_name(it) for it in iters]
+    src_sl = src_elts[0] if n == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
+    dst_sl = dst_elts[0] if n == 1 else ast.Tuple(elts=dst_elts, ctx=ast.Load())
+    body = [ast.Assign(
+        targets=[ast.Subscript(value=_name(target.id), slice=dst_sl, ctx=ast.Store())],
+        value=ast.Subscript(value=_name(a.id), slice=src_sl, ctx=ast.Load()))]
+    return _wrap_for_loops(iters, list(shape), body)
+
+
+def _axis_kwarg(kwargs):
+    for kw in kwargs or []:
+        if kw.arg == "axis":
+            return kw.value
+    return None
+
+
+def expand_tril(target: ast.expr, args: List[ast.expr],
+                shape_table: Dict[str, Tuple[str, ...]], kwargs=None) -> List[ast.stmt]:
+    """``np.tril(A, k=0)`` -> lower-triangular copy (zero where ``j > i + k``).
+
+    Mirrors :func:`expand_triu` with the complementary mask."""
+    return _expand_triangular(target, args, shape_table, kwargs, lower=True)
+
+
 def expand_reshape(target: ast.expr, args: List[ast.expr],
                    shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """``out = np.reshape(A, (m, n, ...))`` -> rank-aware loop-nest copy.
@@ -2521,6 +3056,13 @@ def expand_reshape(target: ast.expr, args: List[ast.expr],
     # source shape strides (also row-major).
     src_axes: List[ast.expr] = []
     for i in range(src_rank):
+        # A size-1 source axis indexes to a constant 0; emitting the literal
+        # avoids a degenerate ``flat % 1`` / ``flat / 1`` (always 0 / identity)
+        # whose bare ``1`` literal also clashes with the int64 flat index under
+        # Fortran ``-std=f2018`` (GNU "Different type kinds").
+        if str(a_shape[i]) == "1":
+            src_axes.append(ast.Constant(value=0))
+            continue
         suffix = list(a_shape[i + 1:])
         stride = _mul(*suffix) if suffix else "1"
         # ax_i = (flat / stride) % src_shape[i]  -- the %src_shape[i]
@@ -3713,6 +4255,17 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "std"):       expand_std,
     # Linear algebra
     ("np", "dot"):       expand_dot_2d,
+    ("np", "einsum"):    expand_einsum,
+    ("np", "tensordot"): expand_tensordot,
+    ("np", "inner"):     expand_inner,
+    ("np", "vdot"):      expand_vdot,
+    ("np", "trace"):     expand_trace,
+    ("np", "diagonal"):  expand_diagonal,
+    ("np", "cumsum"):    expand_cumsum,
+    ("np", "cumprod"):   expand_cumprod,
+    ("np", "median"):    expand_median,
+    ("np", "roll"):      expand_roll,
+    ("np", "tril"):      expand_tril,
     ("np", "outer"):     expand_outer,
     ("np", "add.outer"): expand_add_outer,
     ("np", "transpose"): expand_transpose,
@@ -3954,6 +4507,8 @@ def _matmul_result_shape(a_shape: Tuple[str, ...],
       ``len(a_shape) >= 3`` and ``len(b_shape) == 2``.
     * batched: ``(m, k) @ (*batch, k, n) -> (*batch, m, n)`` where
       ``len(a_shape) == 2`` and ``len(b_shape) >= 3``.
+    * both-batched: ``(*batch, m, k) @ (*batch, k, n) -> (*batch, m, n)``
+      where both ranks are >= 3 and share the SAME leading batch dims.
     """
     if len(a_shape) == 2 and len(b_shape) == 2:
         return (a_shape[0], b_shape[1])
@@ -3961,6 +4516,11 @@ def _matmul_result_shape(a_shape: Tuple[str, ...],
         return (a_shape[0],)
     if len(a_shape) == 1 and len(b_shape) == 2:
         return (b_shape[1],)
+    if len(a_shape) >= 3 and len(b_shape) >= 3:
+        # (*batch, m, k) @ (*batch, k, n) -> (*batch, m, n): identical batch.
+        if a_shape[:-2] == b_shape[:-2] and a_shape[-1] == b_shape[-2]:
+            return tuple(a_shape[:-2]) + (a_shape[-2], b_shape[-1])
+        return None
     if len(a_shape) >= 3 and len(b_shape) == 2:
         # (*batch, m, k) @ (k, n) -> (*batch, m, n)
         if a_shape[-1] == b_shape[0]:
@@ -4136,30 +4696,32 @@ def _hoist_matmul(matmul: ast.BinOp, shape_table: Dict[str, Tuple[str, ...]],
     # indexing the LHS by ``[*batch, m, k]`` and writing the temp by
     # ``[*batch, m, n]``. Same shape for ``(m, k) @ (*batch, k, n)``.
     if (len(a_shape) >= 3 and len(b_shape) == 2) or \
-       (len(a_shape) == 2 and len(b_shape) >= 3):
+       (len(a_shape) == 2 and len(b_shape) >= 3) or \
+       (len(a_shape) >= 3 and len(b_shape) >= 3):
         if not (isinstance(matmul.left, ast.Name)
                 and isinstance(matmul.right, ast.Name)):
             return None, []
         a_name_b, b_name_b = matmul.left.id, matmul.right.id
         ctr = temp_counter[0]
-        # Decide which side has the batch dims.
+        # Which side(s) carry the batch dims. Both-batched broadcasts the SAME
+        # batch index into both operands; one-sided indexes only that operand.
         a_batch = len(a_shape) >= 3
+        b_batch = len(b_shape) >= 3
         if a_batch:
             batch_shape = a_shape[:-2]
             m, k = a_shape[-2], a_shape[-1]
-            _, n = b_shape
+            n = b_shape[-1]
         else:
             batch_shape = b_shape[:-2]
             m, k = a_shape
-            _, n = b_shape[-2], b_shape[-1]
+            n = b_shape[-1]
         batch_iters = [f"__mmb{ctr}_{i}" for i in range(len(batch_shape))]
         i_iter, j_iter, l_iter = f"__mmi{ctr}", f"__mmj{ctr}", f"__mml{ctr}"
         batch_names = [_name(b) for b in batch_iters]
-        # LHS subscript: batch dims + (i, l) if a_batch else (i, l).
-        a_sub_elts = (batch_names + [_name(i_iter), _name(l_iter)]
-                       if a_batch else [_name(i_iter), _name(l_iter)])
-        b_sub_elts = ([_name(l_iter), _name(j_iter)] if a_batch else
-                      batch_names + [_name(l_iter), _name(j_iter)])
+        # Each operand's subscript is prefixed with the batch iters iff that
+        # operand is batched; the output is always batched.
+        a_sub_elts = ((batch_names if a_batch else []) + [_name(i_iter), _name(l_iter)])
+        b_sub_elts = ((batch_names if b_batch else []) + [_name(l_iter), _name(j_iter)])
         out_sub_elts = batch_names + [_name(i_iter), _name(j_iter)]
         out_sub = ast.Tuple(elts=out_sub_elts, ctx=ast.Load())
         a_sub = (ast.Tuple(elts=a_sub_elts, ctx=ast.Load())
@@ -4424,6 +4986,20 @@ class _MatmulHoister(ast.NodeTransformer):
         # dense operand into a fresh temp array so the SpMV / SpMM
         # expanders (which require a declared dense array) can consume it.
         pre: List[ast.stmt] = []
+        # Sparse TRANSPOSE matvec ``A.T @ x`` (bicg's ``A.T @ p_tilde``): the
+        # CSR buffers of A are exactly the CSC buffers of A.T (and vice-versa),
+        # and COO transposes by swapping its row/col roles -- so a transpose
+        # reuses the same physical buffers under the dual format, no extra data.
+        td = self._transpose_sparse_desc(node.left)
+        if td is not None and isinstance(node.right, ast.Name) and node.right.id not in self.sparse:
+            dense_shape = self.shape_table.get(node.right.id)
+            if dense_shape and len(dense_shape) == 1:
+                self.temp_counter[0] += 1
+                temp = f"__mm{self.temp_counter[0]}"
+                n_rows = td.logical_shape[0] if td.logical_shape else "0"
+                self.temp_arrays[temp] = (n_rows, )
+                self.shape_table[temp] = (n_rows, )
+                return temp, pre + self._sparse_matvec(td, node.right.id, temp)
         l_sparse = (isinstance(node.left, ast.Name)
                     and node.left.id in self.sparse)
         r_sparse = (isinstance(node.right, ast.Name)
@@ -4549,6 +5125,29 @@ class _MatmulHoister(ast.NodeTransformer):
             orelse=[])]
         return temp, stmts
 
+    def _transpose_sparse_desc(self, operand):
+        """If ``operand`` is ``A.T`` for a sparse ``A``, return a SparseArrayDesc
+        for the transpose -- same physical buffers under the dual format (CSR
+        <-> CSC) or with row/col roles swapped (COO) -- so the matvec dispatcher
+        emits ``A.T @ x`` directly. Returns ``None`` otherwise (incl. dia/bcsr
+        transpose, which is left to fail loudly)."""
+        if not (isinstance(operand, ast.Attribute) and operand.attr == "T"
+                and isinstance(operand.value, ast.Name) and operand.value.id in self.sparse):
+            return None
+        from numpyto_common.ir import SparseArrayDesc
+        d = self.sparse[operand.value.id]
+        ls = list(d.logical_shape) if d.logical_shape else []
+        swapped = tuple(reversed(ls)) if len(ls) >= 2 else tuple(ls)
+        dual = {"csr": "csc", "csc": "csr"}.get(d.format)
+        if dual is not None:
+            return SparseArrayDesc(name=d.name, format=dual, logical_shape=swapped, buffers=dict(d.buffers))
+        if d.format == "coo":
+            b = dict(d.buffers)
+            if "row" in b and "col" in b:
+                b["row"], b["col"] = d.buffers["col"], d.buffers["row"]
+            return SparseArrayDesc(name=d.name, format="coo", logical_shape=swapped, buffers=b)
+        return None
+
     def _sparse_matvec(self, sp_desc, dense_name: str, temp: str):
         """Build the per-format matvec loop nest filling 1-D ``temp``.
 
@@ -4611,7 +5210,7 @@ class _MatmulHoister(ast.NodeTransformer):
             R = _buf_shape("data", 1) or "1"
             C = _buf_shape("data", 2) or "1"
             return _se.expand_matmul_bcsr_dense_vec(
-                tgt, bufs, dense_name, nbr, R, C)
+                tgt, bufs, dense_name, nbr, R, C, n_rows)
         if fmt == "bcoo":
             # block-COO: row[k]/col[k] hold block coords, data is
             # [n_blocks, R, C]; n_blocks = len(row); the total scalar
@@ -4754,10 +5353,17 @@ class _CallHoister(ast.NodeTransformer):
         is_scalar = key[1] in {"sum", "max", "min", "mean", "prod", "std", "var",
                                 "dot", "vdot", "inner", "linalg.norm",
                                 "argmax", "argmin", "any", "all",
-                                "count_nonzero", "median"}
+                                "count_nonzero", "median", "trace"}
+        # ``np.inner`` is scalar ONLY for rank-1 x rank-1; higher ranks
+        # contract the last axes into an array result.
+        if key[1] == "inner":
+            ranks = [len(self.shape_table.get(a.id, ())) for a in node.args
+                     if isinstance(a, ast.Name)]
+            if any(r > 1 for r in ranks):
+                is_scalar = False
         # Axis-aware reductions with axis specified return an array.
         if (is_scalar and key[1] in {"sum", "max", "min", "mean", "prod", "std",
-                                     "argmax", "argmin"}
+                                     "argmax", "argmin", "any", "all", "count_nonzero"}
                 and self._cur_axis is not None):
             is_scalar = False
         if is_scalar and node.args and isinstance(node.args[0], ast.Subscript):
@@ -5051,6 +5657,10 @@ _ELEMENT_WRITE_EXPANDERS = {
     ("np", "abs"), ("np", "absolute"),
     ("np", "histogram"), ("np", "linalg.inv"),
     ("np", "linalg.solve"), ("np", "linalg.lstsq"),
+    # Contraction / scan / indexing ops that write element-wise to a fresh LHS.
+    ("np", "einsum"), ("np", "tensordot"), ("np", "inner"),
+    ("np", "trace"), ("np", "diagonal"),
+    ("np", "cumsum"), ("np", "cumprod"), ("np", "roll"), ("np", "tril"),
 }
 
 

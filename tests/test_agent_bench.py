@@ -553,13 +553,12 @@ def test_cli_residency_rejects_bad_value():
 
 
 def test_score_device_residency_gated():
-    """Device scoring needs cupy + a GPU; absent, it's a clear scored error."""
-    import importlib.util
+    """Device scoring needs cupy + a GPU; absent, it's a clear scored error.
+
+    No GPU is ever touched here regardless of hardware: ``StubAgent`` has no cuda
+    reference, so ``run_task`` returns an ``agent_error`` BEFORE scoring would launch
+    anything -- so the guard is exercised unconditionally (no skip)."""
     from optarena.agent_bench.runner import run_task
-    if importlib.util.find_spec("cupy") is not None:
-        pytest.skip("cupy present -- device path would attempt a real GPU run")
-    # StubAgent has no cuda reference, so this is actually an agent_error first;
-    # assert the loop stays guarded (no raise) for a device task either way.
     row = run_task(StubAgent(), Task("gemm", "restricted", "cuda", residency="device"))
     assert row.status in ("agent_error", "score_error") and row.correct is False
 

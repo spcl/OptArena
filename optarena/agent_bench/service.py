@@ -52,8 +52,8 @@ class ServiceConfig:
     :func:`from_config`, then overridable per-process by the CLI.
     """
     oracle: str = "numpy"
-    baseline: str = "numpy"
-    input_mode: str = "source"   # source | library | either
+    baseline: str = "c"  # speedup denominator: sequential C (numpy fallback per-kernel)
+    input_mode: str = "source"  # source | library | either
     preset: str = "S"
     datatype: str = "float64"
     repeat: int = 5
@@ -71,7 +71,7 @@ def from_config() -> ServiceConfig:
     """Build a :class:`ServiceConfig` from the ``service:`` config block."""
     return ServiceConfig(
         oracle=str(config.get("service.oracle", "numpy")),
-        baseline=str(config.get("service.baseline", "numpy")),
+        baseline=str(config.get("service.baseline", "c")),
         input_mode=str(config.get("service.input_mode", "source")),
         preset=str(config.get("service.preset", "S")),
         datatype=str(config.get("service.datatype", "float64")),
@@ -84,18 +84,30 @@ def _task_spec(kernel: str, language: str, cfg: ServiceConfig) -> dict:
     from optarena.agent_bench.prompts import build_context
     ctx = build_context(Task(kernel, "restricted", language), oracle=cfg.oracle, baseline=cfg.baseline)
     return {
-        "kernel": ctx["kernel"],
-        "language": ctx["language"],
-        "signature": ctx["stub"],
-        "symbol": ctx["symbol"],
-        "reference_numpy": ctx["reference"],
-        "rtol": ctx["rtol"],
-        "atol": ctx["atol"],
-        "preset": cfg.preset,
-        "oracle": cfg.oracle,
-        "baseline": cfg.baseline,
-        "input_mode": cfg.input_mode,
-        "abi_doc": ctx["abi_doc"],
+        "kernel":
+        ctx["kernel"],
+        "language":
+        ctx["language"],
+        "signature":
+        ctx["stub"],
+        "symbol":
+        ctx["symbol"],
+        "reference_numpy":
+        ctx["reference"],
+        "rtol":
+        ctx["rtol"],
+        "atol":
+        ctx["atol"],
+        "preset":
+        cfg.preset,
+        "oracle":
+        cfg.oracle,
+        "baseline":
+        cfg.baseline,
+        "input_mode":
+        cfg.input_mode,
+        "abi_doc":
+        ctx["abi_doc"],
         "goal": ("Return the FASTEST implementation that stays correct. Submit it to "
                  "POST /oracle; maximize the returned 'speedup' while 'correct' is true."),
     }
@@ -161,8 +173,12 @@ class JudgeHandler(BaseHTTPRequestHandler):
         parts = [p for p in urlparse(self.path).path.strip("/").split("/")]
         route = parts[0] if parts else ""
         if route == "health":
-            return self._send(200, {"status": "ok", "oracle": self.cfg.oracle,
-                                    "baseline": self.cfg.baseline, "input_mode": self.cfg.input_mode})
+            return self._send(200, {
+                "status": "ok",
+                "oracle": self.cfg.oracle,
+                "baseline": self.cfg.baseline,
+                "input_mode": self.cfg.input_mode
+            })
         if route == "task":
             kernel, language = self._task(parts)
             if not kernel:
@@ -181,8 +197,11 @@ class JudgeHandler(BaseHTTPRequestHandler):
                 # task.precision is metadata only; score()/measure_baselines use
                 # the datatype STRING ("float64") for data generation.
                 t = Task(kernel, "restricted", language)
-                bl = measure_baselines(t, preset=preset, datatype=self.cfg.datatype,
-                                       repeat=self.cfg.repeat, baseline=self.cfg.baseline)
+                bl = measure_baselines(t,
+                                       preset=preset,
+                                       datatype=self.cfg.datatype,
+                                       repeat=self.cfg.repeat,
+                                       baseline=self.cfg.baseline)
                 return self._send(200, {"kernel": kernel, "preset": preset, "baselines": bl})
             except Exception as exc:  # noqa: BLE001 -- infra failure (e.g. C emit) -> 500
                 return self._send(500, {"error": f"baseline failed: {exc}"})
@@ -211,8 +230,13 @@ class JudgeHandler(BaseHTTPRequestHandler):
             return self._send(400, {"error": str(exc)})
         # A build/numeric failure is a NORMAL scored result (200, correct=false);
         # only malformed requests are 4xx.
-        result = score(submission, task, preset=preset, datatype=self.cfg.datatype,
-                       repeat=self.cfg.repeat, oracle=self.cfg.oracle, baseline=self.cfg.baseline)
+        result = score(submission,
+                       task,
+                       preset=preset,
+                       datatype=self.cfg.datatype,
+                       repeat=self.cfg.repeat,
+                       oracle=self.cfg.oracle,
+                       baseline=self.cfg.baseline)
         payload = dataclasses.asdict(result)
         payload["kernel"] = kernel
         payload["language"] = language
@@ -231,14 +255,22 @@ class JudgeHandler(BaseHTTPRequestHandler):
         try:
             verify = None
             if config.get("record.harden", True) and result.build_ok and result.correct:
-                verify = independent_verify(submission, task, result, preset=preset, datatype=self.cfg.datatype,
+                verify = independent_verify(submission,
+                                            task,
+                                            result,
+                                            preset=preset,
+                                            datatype=self.cfg.datatype,
                                             reverify_seed=int(config.get("seeds.reverify", 777)),
                                             dual_oracle=bool(config.get("record.dual_oracle", True)),
                                             suspect_above=float(config.get("record.speedup_suspect_above", 1000.0)))
-            table, detail = recording.record(result, submission, task, verify=verify,
+            table, detail = recording.record(result,
+                                             submission,
+                                             task,
+                                             verify=verify,
                                              run_id=str(body.get("run_id", "adhoc")),
                                              optimizer=body.get("optimizer"),
-                                             preset=preset, datatype=self.cfg.datatype)
+                                             preset=preset,
+                                             datatype=self.cfg.datatype)
             return {"table": table, "detail": detail}
         except Exception as exc:  # noqa: BLE001 -- persistence must never break scoring
             return {"error": str(exc)}

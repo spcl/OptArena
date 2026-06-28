@@ -148,6 +148,90 @@ shapes and value distributions to catch edge cases. The proposed split:
 A fuzzed shape would never feed a timing number; the same preset anchors both
 modes (its point for performance, an envelope around it for correctness).
 
+### 3.4 Constrained shape-symbol fuzzing for SDFG / struct-flattened ports (PROPOSED)
+
+**Implementation status (today).** Shapes are NOT fuzzed at all. A run takes its
+sizes verbatim from a named preset — `numerical_oracle.run_kernel`:
+`syms = dict(spec.parameters[preset])` (plus a deterministic polybench
+down-scale); `seed` only drives input *data*. `spec.fuzz` / `DEFAULT_FUZZ` cycles
+**data distributions** (uniform/normal/lognormal), never sizes. The sparse path's
+`plan_dims` even assigns dims from a fixed `_DIM_POOL` *by index*. So there is no
+shape-symbol sampler yet — adding one is the work below.
+
+**The combination problem.** We DO want broad size coverage, so a free size
+symbol should be fuzzed over an **interval** (a continuous range). But the shape
+symbols are not independent — they are bound by constraints the DaCe SDFG / numpy
+ABI require, of four kinds:
+
+| kind | example | how to satisfy under interval fuzzing |
+|---|---|---|
+| **algebraic (derived)** | `nnr = n1·n2·n3`; `npw` = #G in the cutoff sphere of `ngrid` | DERIVE — never sample; compute from the free symbols |
+| **divisibility** | BCSR `N % R == 0`, FV3 tile `N % tile == 0` | CONSTRUCT — sample a base from an interval, multiply: `N = R · randint(lo,hi)` |
+| **relational** | `npwx ≥ n`, `ngm ≥ npw`, halo `≥ stencil_reach` | NEST — sample the independent side from its interval, then the dependent side from an interval *floored/capped* by it |
+| **discrete enum** | PPM `iord ∈ {5,6,7,8}`, `grid_type ∈ {0,1,2}`, `nssopt ∈ {0,1,2,3}` | CHOOSE from a **set** (the only place a set is right) |
+
+So the correct rule is: **free size symbols are fuzzed over INTERVALS** (that is
+the point of fuzzing — many sizes); **only genuinely-discrete params are sets**;
+and the constraints are honoured *by how dependent symbols are produced*, not by
+collapsing the free symbols to a set.
+
+**Fixing the combination — the generator.** Partition every symbol into one of
+{free, derived, discrete} and sample in dependency order:
+
+1. Topologically order the symbols by the `derive`/`require` graph.
+2. **Free, unconstrained** → draw uniformly from its `[lo, hi]` interval (optionally
+   snap a fraction of draws to structural edges `pow2`, `pow2±1`, tile-boundary,
+   prime, 1 — §3.2 — to hit strided/tiled edge bugs).
+3. **Free, divisibility-constrained** → draw the *quotient* from an interval and
+   multiply by the divisor: `N = R · U[lo, hi]`, with `R` itself drawn from its set
+   `{2,3,4}` → `N` is still interval-fuzzed but always a valid multiple.
+4. **Free, relationally-constrained** → draw after its bound is known, from the
+   *narrowed* interval (`npwx = U[n, hi]` once `n` is drawn).
+5. **Derived** → evaluate the expression (`nnr = n1·n2·n3`). Never sampled.
+6. **Discrete** → choose from the set.
+7. Assert all `require` predicates (catches a mis-specified space); resample on the
+   rare failure.
+
+This keeps shape fuzzing interval-based while making invalid tuples unreachable —
+the constraints shape *how* each symbol is drawn (derive / construct-as-multiple /
+narrow-the-interval), they do not turn the free symbols into a finite set.
+
+**Single source of truth = the kernel's own `initialize()`.** The flattened SDFG
+ABI exposes dozens of *derived* dimensions (vexx: `exxbuff_d0/d1/d2`, `g_d0=3`,
+`NBR/R/C`, …). Rather than re-encode those, the generator samples only the **free**
+symbols (from intervals) + **discrete** params (from sets), then feeds them
+**through `initialize(...)`**, which already derives every dependent shape
+(`nnr=ngrid³`, `npw` from the cutoff, …). The numpy port, the emitted-C++
+marshalling, and the fuzzer therefore agree by construction. vexx is the template:
+its single free axis is `ngrid` (plus `nbnd`, `m`), and `initialize()` derives the
+rest — so an interval-fuzzed `ngrid ∈ [8, 64]` already yields only valid problems.
+
+**YAML schema (proposed).** Add an optional `shape_fuzz:` block. Free symbols use
+`range:` (interval) — optionally with `divisible_by:` or `>=`; only discrete
+params use `values:` (set):
+
+```yaml
+shape_fuzz:
+  free:
+    ngrid: {range: [8, 64]}                 # INTERVAL — the default for sizes
+    nbnd:  {range: [2, 32]}
+    m:     {range: [2, 32]}
+    # bcsr example of the constrained forms:
+    R:     {values: [2, 3, 4]}              # discrete divisor (a set)
+    N:     {range: [4, 256], divisible_by: R}   # interval, but kept a multiple of R
+    npwx:  {range: [n, 4096]}               # interval lower-bounded by another symbol
+  params:
+    iord:  {values: [5, 6, 7, 8]}           # discrete enum (the ONLY set use)
+  derive: {n1: ngrid, n2: ngrid, n3: ngrid, nnr: n1*n2*n3}
+  require: ["npwx >= n", "N % R == 0"]      # validator; resample on failure
+  via_initialize: true                      # derive concrete shapes by calling initialize()
+  n_cases: 16                               # how many fuzz tuples per kernel
+```
+
+A kernel with no `shape_fuzz` keeps today's behaviour (named presets only). The
+`require` predicates double as a **validator**: a generated tuple that fails one is
+a generator bug, surfaced rather than silently mis-emitted.
+
 ### 3.3 Sparse subkernels
 
 For sparse kernels the *layout* (`csr`/`ell`/`coo`/…) selects which emitted

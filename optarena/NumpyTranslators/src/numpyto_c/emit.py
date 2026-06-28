@@ -575,6 +575,12 @@ class _CBodyEmitter(BaseEmitter):
             if attr in {"conjugate", "conj"} and not node.args:
                 z = self.emit_expr(node.func.value)
                 return f"__npb_conj({z})"
+            # ``np.conj(z)`` / ``np.conjugate(z)`` -- function form (vexx
+            # ``np.conj(exxbuff)``, scalarised to a per-element operand).
+            if (isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in ("np", "numpy")
+                    and attr in {"conj", "conjugate"} and len(node.args) == 1):
+                return f"__npb_conj({self.emit_expr(node.args[0])})"
             # ``z.real`` / ``z.imag`` -- accessor on a complex scalar.
             # (Not reached for an Attribute Load, only Call here, but
             # kept symmetric for an Attribute-call form.)
@@ -596,6 +602,19 @@ class _CBodyEmitter(BaseEmitter):
                     and attr == "sign" and len(node.args) == 1):
                 x = self.emit_expr(node.args[0])
                 return f"((({x}) > 0) - (({x}) < 0))"
+            # ``np.abs(x)`` in scalar context (whole-array ``np.abs(arr)`` is
+            # scalarised to per-element form by lowering): complex -> ``cabs``,
+            # float -> ``fabs`` (plain int ``abs`` would truncate a double),
+            # integer -> ``abs``. Mirrors the builtin ``abs`` handling above.
+            if (isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in ("np", "numpy")
+                    and attr in ("abs", "absolute", "fabs") and len(node.args) == 1):
+                x = node.args[0]
+                if self._is_complex_operand(x):
+                    return f"cabs({self.emit_expr(x)})"
+                if attr == "fabs" or self._is_float_operand(x):
+                    return f"fabs({self.emit_expr(x)})"
+                return f"abs({self.emit_expr(x)})"
         raise NotImplementedError(f"call to {ast.unparse(node.func)} not supported")
 
     def _is_int_operand(self, node: ast.AST) -> bool:

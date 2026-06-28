@@ -23,6 +23,7 @@ keeps the harness and the emitter aligned.
 """
 
 import ast
+import copy
 import json
 import pathlib
 import re
@@ -101,6 +102,14 @@ def parse_kernel(numpy_py: pathlib.Path,
     # ``NAME = <number>`` assignments that the kernel neither takes as a
     # parameter nor reassigns locally are inlined.
     _inline_module_constants(tree, fn, input_args)
+    # Fold kernel params that carry a DEFAULT and are not supplied via
+    # input_args into body constants. The harness calls the numpy kernel with
+    # only its input_args, so such params keep their defaults -- e.g. the sp_*
+    # solvers' ``max_iter=100`` / ``tol=np.float64(1e-6)`` are fixed values,
+    # not runtime parameters. Folding them avoids emitting bogus free scalar
+    # params (a float ``tol`` mis-synthesized as int would never trip the
+    # convergence break, leaving the solver to iterate past convergence -> nan).
+    _fold_default_args(fn, input_args)
     # Drop the scipy-sparse dispatch branch -- the static backends are dense-
     # only, so ``sp.issparse(x)`` is statically False and the guarded sparse
     # path (banded_mmt's ``if sp.issparse(A) and sp.issparse(B): ...``) is dead
@@ -131,6 +140,14 @@ def parse_kernel(numpy_py: pathlib.Path,
     # Normalise ``np.newaxis`` -> ``None`` AFTER inlining so any
     # helper-body references also get caught.
     _NewaxisToNone().visit(fn)
+    ast.fix_missing_locations(fn)
+
+    # Inline tuple-valued shape locals and fold tuple concatenation AFTER
+    # inlining so references inside inlined helper bodies (vexx's invfft/fwfft
+    # use the enclosing ``grid`` tuple in ``reshape(grid + (-1,))``) are caught.
+    _fold_tuples = _FoldTupleLocals(input_args)
+    _fold_tuples.collect(fn)
+    _fold_tuples.visit(fn)
     ast.fix_missing_locations(fn)
 
     # Kernels may declare their outputs through a final ``return X``
@@ -255,8 +272,16 @@ def parse_kernel(numpy_py: pathlib.Path,
             # symbols (``N``/``M`` -> ``int``) and the loop iterators --
             # Fortran's ``-std=f2018`` rejects mixed-kind integer
             # arithmetic such as ``int32_iter * int64_scalar``.
+            # An array DIMENSION symbol is always integral, even when the kernel
+            # body never references it (vexx's ``npw`` is only ``psi``/``nl``'s
+            # leading extent). Without this it defaults to a real scalar and the
+            # Fortran emit declares it ``real(c_double)`` while the array decl
+            # forces ``integer`` -- a basic-type clash.
+            is_array_dim = any(
+                re.search(rf"\b{re.escape(arg)}\b", str(tok))
+                for a in arrays for tok in a.shape)
             if inferred_dt in {"float64", "double", "float32"} \
-                    and arg in _names_used_as_int(fn):
+                    and (arg in _names_used_as_int(fn) or is_array_dim):
                 inferred_dt = "int"
             scalars.append(ScalarDesc(
                 name=arg,
@@ -324,6 +349,150 @@ def _choose_sparse_config(info: Dict, config: Optional[str] = None) -> Optional[
     return next(iter(configs))
 
 
+def _default_const(node: ast.expr) -> ast.expr:
+    """Unwrap a dtype-cast default (``np.float64(1e-6)``, ``int(8)``) to its
+    inner literal so it folds as a plain numeric constant; otherwise return the
+    default expression unchanged."""
+    if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
+        return ast.copy_location(ast.Constant(value=node.args[0].value), node)
+    return node
+
+
+def _fold_default_args(fn: ast.FunctionDef, input_args: List[str]) -> None:
+    """Substitute kernel params that have a default AND are not in ``input_args``
+    with that default value, folding them into body constants and dropping them
+    from the signature."""
+    args = fn.args.args
+    defaults = fn.args.defaults
+    if not defaults:
+        return
+    defaulted = list(zip(args[len(args) - len(defaults):], defaults))
+    subst: Dict[str, ast.expr] = {}
+    for a, d in defaulted:
+        if a.arg not in input_args:
+            subst[a.arg] = _default_const(d)
+    if not subst:
+        return
+
+    class _Sub(ast.NodeTransformer):
+        def visit_Name(self, node: ast.Name):
+            if isinstance(node.ctx, ast.Load) and node.id in subst:
+                return ast.copy_location(copy.deepcopy(subst[node.id]), node)
+            return node
+
+    _Sub().visit(fn)
+    fn.args.args = [a for a in args if a.arg not in subst]
+    fn.args.defaults = [d for a, d in defaulted if a.arg not in subst]
+    ast.fix_missing_locations(fn)
+
+
+#: Standard physical-buffer layout per sparse format, mirroring the explicit
+#: ``sparse_layouts`` blocks of the new-model kernels (see spmv.yaml). Shapes
+#: are symbolic: ``D`` is the (square) matrix dimension and ``nnz`` its nonzero
+#: count; the derived counts (``ND`` diagonals, ``NBR``/``nnz_blk``/``R``/``C``
+#: blocking, ``MAXNZ``/``NBLK``) are bare identifiers the harness resolves from
+#: the materialized buffers' actual shapes -- exactly as for declared layouts.
+def _standard_sparse_buffers(matrix: str, fmt: str, dim: str, nnz: str):
+    intk, fltk = "int64", "float64"
+
+    def buf(role, suffix, shape, dtype):
+        return {"role": role, "name": f"{matrix}_{suffix}", "shape": shape, "dtype": dtype}
+
+    if fmt in ("csr", "csc"):
+        return [buf("indptr", "indptr", [f"{dim} + 1"], intk),
+                buf("indices", "indices", [nnz], intk),
+                buf("data", "data", [nnz], fltk)]
+    if fmt == "coo":
+        return [buf("row", "row", [nnz], intk),
+                buf("col", "col", [nnz], intk),
+                buf("data", "data", [nnz], fltk)]
+    if fmt == "dia":
+        return [buf("data", "data", ["ND", dim], fltk),
+                buf("offsets", "offsets", ["ND"], intk)]
+    if fmt == "bcsr":
+        return [buf("indptr", "indptr", ["NBR + 1"], intk),
+                buf("indices", "indices", ["nnz_blk"], intk),
+                buf("data", "data", ["nnz_blk", "R", "C"], fltk)]
+    if fmt == "ell":
+        return [buf("indices", "indices", [dim, "MAXNZ"], intk),
+                buf("data", "data", [dim, "MAXNZ"], fltk)]
+    if fmt == "bcoo":
+        return [buf("row", "row", ["NBLK"], intk),
+                buf("col", "col", ["NBLK"], intk),
+                buf("data", "data", ["NBLK", "R", "C"], fltk)]
+    return None
+
+
+def _legacy_sparse_dims(info: Dict) -> Tuple[str, str]:
+    """``(dim_sym, nnz_sym)`` for a legacy sparse kernel. The variants-only
+    sparse kernels are the square Krylov solvers (A is N x N), so the dimension
+    is the lone size parameter and ``nnz`` the nonzero-count parameter."""
+    names: Set[str] = set()
+    for preset in (info.get("parameters") or {}).values():
+        if isinstance(preset, dict):
+            names.update(preset)
+    nnz = "nnz" if "nnz" in names else next((n for n in sorted(names) if "nnz" in n.lower() or n.lower() == "nz"), "nnz")
+    if "N" in names:
+        dim = "N"
+    else:
+        dim = next((n for n in sorted(names) if n != nnz and "iter" not in n.lower() and "tol" not in n.lower()), "N")
+    return dim, nnz
+
+
+def _legacy_sparse_matrix_name(info: Dict) -> Optional[str]:
+    """The conventional sparse-matrix operand ``A`` of a legacy variants-only
+    sparse kernel (every sp_* solver names it ``A``)."""
+    return "A" if "A" in (info.get("input_args") or []) else None
+
+
+def _synthesize_legacy_sparse_layouts(info: Dict) -> Dict:
+    """Build a ``sparse_layouts``-equivalent for a LEGACY variants-only sparse
+    kernel (``variants: {csr_uniform: {format: csr}, ...}`` with no explicit
+    ``sparse_layouts``/``configurations`` block). The emitter's sparse path
+    needs the per-format physical buffer roles, which the new-model kernels
+    declare explicitly; synthesize them from each format's standard layout so
+    legacy sparse kernels emit correct SpMV without a spec migration. Returns
+    ``{}`` when the kernel is not a legacy sparse kernel."""
+    variants = info.get("variants") or {}
+    formats = {v.get("format") for v in variants.values() if isinstance(v, dict) and v.get("format")}
+    matrix = _legacy_sparse_matrix_name(info)
+    if not formats or matrix is None:
+        return {}
+    dim, nnz = _legacy_sparse_dims(info)
+    layout_variants: Dict[str, Dict] = {}
+    for fmt in formats:
+        bufs = _standard_sparse_buffers(matrix, fmt, dim, nnz)
+        if bufs is not None:
+            layout_variants[fmt] = {"buffers": bufs}
+    if not layout_variants:
+        return {}
+    return {matrix: {"logical_shape": [dim, dim], "default_dtype": "float64", "variants": layout_variants}}
+
+
+def _legacy_chosen_formats(info: Dict, config: Optional[str]) -> Dict[str, str]:
+    """``{matrix: format}`` for a legacy sparse kernel: resolve the requested
+    ``--config`` (a variant name like ``csr_uniform``) to its declared
+    ``format``, defaulting to the FIRST declared variant when unspecified.
+
+    The first variant is the kernel's canonical default -- the one its body is
+    written for. For the Krylov solvers that is ``csr_uniform`` (their ``A @ x``
+    routes through the sparse-matvec dispatch); for banded_mmt it is
+    ``packed_banded`` (a DENSE packed-band storage the body unpacks inline, NOT
+    a sparse format), so A must stay a dense 2-D array rather than being CSR-
+    expanded into buffers the body never references."""
+    variants = info.get("variants") or {}
+    matrix = _legacy_sparse_matrix_name(info)
+    if matrix is None:
+        return {}
+    fmt = None
+    if config and isinstance(variants.get(config), dict):
+        fmt = variants[config].get("format")
+    if fmt is None:
+        first = next((v for v in variants.values() if isinstance(v, dict) and v.get("format")), None)
+        fmt = first.get("format") if first else None
+    return {matrix: fmt} if fmt else {}
+
+
 def _expand_sparse_arrays(info: Dict, config: Optional[str] = None):
     """Expand logical sparse arrays into physical buffer ArrayDescs.
 
@@ -342,17 +511,26 @@ def _expand_sparse_arrays(info: Dict, config: Optional[str] = None):
     """
     from numpyto_common.ir import ArrayDesc, SparseArrayDesc
     sparse_layouts = info.get("sparse_layouts") or {}
+    legacy_cfg: Optional[Dict[str, str]] = None
     if not sparse_layouts:
-        return {}, [], {}
-    config_key = _choose_sparse_config(info, config)
-    configs = info.get("configurations") or {}
-    cfg = configs.get(config_key, {}).get("arrays", {}) if config_key else {}
-    # configurations may be stored as {key: {array: fmt}} (raw JSON) --
-    # handle both the BenchSpec-parsed and raw-dict shapes.
-    if config_key and config_key in configs and not cfg:
-        raw_cfg = configs[config_key]
-        if isinstance(raw_cfg, dict):
-            cfg = raw_cfg
+        # No explicit layout block: a legacy variants-only sparse kernel (sp_*
+        # Krylov solvers) gets its layout synthesized from the variant formats.
+        sparse_layouts = _synthesize_legacy_sparse_layouts(info)
+        if not sparse_layouts:
+            return {}, [], {}
+        legacy_cfg = _legacy_chosen_formats(info, config)
+    if legacy_cfg is not None:
+        cfg = legacy_cfg
+    else:
+        config_key = _choose_sparse_config(info, config)
+        configs = info.get("configurations") or {}
+        cfg = configs.get(config_key, {}).get("arrays", {}) if config_key else {}
+        # configurations may be stored as {key: {array: fmt}} (raw JSON) --
+        # handle both the BenchSpec-parsed and raw-dict shapes.
+        if config_key and config_key in configs and not cfg:
+            raw_cfg = configs[config_key]
+            if isinstance(raw_cfg, dict):
+                cfg = raw_cfg
 
     sparse_descs: Dict[str, "SparseArrayDesc"] = {}
     buffer_arrays: List[ArrayDesc] = []
@@ -407,18 +585,42 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef,
     in the kernel is a compile-time constant, not an input. Inline it so
     it does not surface as a bogus kernel parameter. Skips names the
     kernel takes as a parameter or reassigns locally (those shadow the
-    module value). Handles a plain number or a unary-signed number.
+    module value). Handles a plain number, a unary-signed number, OR a
+    constant numeric EXPRESSION (PPM coefficients like ``C1 = -2.0 / 14.0``).
     """
     def _const_value(v: ast.AST):
+        """Fold ``v`` to a Python number if it is a constant numeric
+        literal / unary / binary expression over such; else ``None``."""
         if isinstance(v, ast.Constant) and isinstance(
                 v.value, (int, float, complex)) and not isinstance(
                     v.value, bool):
             return v.value
-        if (isinstance(v, ast.UnaryOp) and isinstance(v.op, (ast.USub, ast.UAdd))
-                and isinstance(v.operand, ast.Constant)
-                and isinstance(v.operand.value, (int, float))):
-            return -v.operand.value if isinstance(v.op, ast.USub) \
-                else v.operand.value
+        if isinstance(v, ast.UnaryOp) and isinstance(v.op, (ast.USub, ast.UAdd)):
+            x = _const_value(v.operand)
+            if x is None:
+                return None
+            return -x if isinstance(v.op, ast.USub) else +x
+        if isinstance(v, ast.BinOp):
+            a, b = _const_value(v.left), _const_value(v.right)
+            if a is None or b is None:
+                return None
+            try:
+                if isinstance(v.op, ast.Add):
+                    return a + b
+                if isinstance(v.op, ast.Sub):
+                    return a - b
+                if isinstance(v.op, ast.Mult):
+                    return a * b
+                if isinstance(v.op, ast.Div):
+                    return a / b
+                if isinstance(v.op, ast.FloorDiv):
+                    return a // b
+                if isinstance(v.op, ast.Mod):
+                    return a % b
+                if isinstance(v.op, ast.Pow):
+                    return a ** b
+            except (ZeroDivisionError, ValueError, TypeError):
+                return None
         return None
 
     shadowed = {a.arg for a in fn.args.args} | set(input_args)
@@ -585,6 +787,54 @@ class _NewaxisToNone(ast.NodeTransformer):
                 and node.value.id == "np"
                 and node.attr == "newaxis"):
             return ast.Constant(value=None)
+        return node
+
+
+class _FoldTupleLocals(ast.NodeTransformer):
+    """Inline tuple-valued local bindings and fold tuple concatenation.
+
+    QE vexx builds an FFT grid shape as ``grid = (n1, n2, n3)`` and reshapes
+    with ``cg.reshape(grid + (-1,))``. A backend has no runtime tuple type, but
+    these tuples are pure compile-time SHAPE values: substitute the tuple-valued
+    local into its uses and fold ``(a, b) + (c,)`` concatenation to a single
+    literal ``(a, b, c)`` so ``reshape`` sees an ordinary shape tuple.
+
+    Conservative: only a top-level ``name = <Tuple>`` bound exactly once and not
+    a parameter is inlined.
+    """
+
+    def __init__(self, params) -> None:
+        self.params = set(params)
+        self.subst: Dict[str, ast.Tuple] = {}
+
+    def collect(self, fn: ast.FunctionDef) -> None:
+        binds: Dict[str, int] = {}
+        for s in fn.body:
+            if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
+                binds[s.targets[0].id] = binds.get(s.targets[0].id, 0) + 1
+        for s in fn.body:
+            if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+                    and isinstance(s.value, ast.Tuple) and s.targets[0].id not in self.params
+                    and binds.get(s.targets[0].id) == 1):
+                self.subst[s.targets[0].id] = s.value
+
+    def visit_Assign(self, node: ast.Assign):
+        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in self.subst and isinstance(node.value, ast.Tuple)):
+            return None
+        self.generic_visit(node)
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        repl = self.subst.get(node.id)
+        if repl is not None and isinstance(node.ctx, ast.Load):
+            return ast.copy_location(copy.deepcopy(repl), node)
+        return node
+
+    def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        self.generic_visit(node)
+        if isinstance(node.op, ast.Add) and isinstance(node.left, ast.Tuple) and isinstance(node.right, ast.Tuple):
+            return ast.copy_location(ast.Tuple(elts=[*node.left.elts, *node.right.elts], ctx=ast.Load()), node)
         return node
 
 

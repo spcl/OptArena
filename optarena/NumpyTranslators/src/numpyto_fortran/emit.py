@@ -290,13 +290,24 @@ class _FortranBodyEmitter(BaseEmitter):
         return False
 
     def _is_int_flag_scalar(self, node: ast.AST) -> bool:
-        """``arr[i]`` where ``arr`` is an int PARAMETER array used as a 0/1 flag.
+        """``arr[i]`` (int PARAMETER array) OR a bare integer SCALAR parameter
+        used as a 0/1 flag (ICON ``lextra_diffu`` / ``ldeepatmo``).
 
         Such a parameter cannot be re-typed to ``logical`` (it crosses the C
-        ABI), so a boolean use must be wrapped ``/= 0`` (truthy) at the site."""
+        ABI), so a boolean use must be wrapped ``/= 0`` (truthy) at the site. A
+        bare flag never appears in int arithmetic, so ``_names_used_as_int``
+        misses it -- recognise it from the scalar's declared integer dtype."""
         ints = vars(self).get("_int_array_names", set())
-        return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
-                and node.value.id in ints)
+        if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                and node.value.id in ints):
+            return True
+        int_scalars = vars(self).get("_int_scalar_names")
+        if int_scalars is None:
+            int_scalars = {s.name for s in self.kir.scalars
+                           if s.dtype in ("int", "int64", "int32", "int16", "int8",
+                                          "uint64", "uint32", "uint16", "uint8")}
+            self._int_scalar_names = int_scalars
+        return isinstance(node, ast.Name) and node.id in int_scalars
 
     def _as_logical_operand(self, node: ast.AST) -> str:
         """Emit ``node`` as a Fortran LOGICAL operand for ``.and.`` / ``.or.``.
@@ -431,10 +442,13 @@ class _FortranBodyEmitter(BaseEmitter):
                 # whole-array ``= 0`` / ``= 1`` converts to the local's
                 # numeric kind (incl. complex).
                 kind = vars(self.kir.tree).get("zeros_fills", {}).get(target.id)
+                # A LOGICAL array (cfl_clip / levmask, np.bool_) fills with
+                # ``.false.`` / ``.true.`` -- Fortran rejects int 0/1 there.
+                is_logical = target.id in vars(self).get("_logical_array_locals", set())
                 if kind in ("zeros", "zeros_like"):
-                    return f"{indent}{target.id} = 0"
+                    return f"{indent}{target.id} = {'.false.' if is_logical else '0'}"
                 if kind in ("ones", "ones_like"):
-                    return f"{indent}{target.id} = 1"
+                    return f"{indent}{target.id} = {'.true.' if is_logical else '1'}"
             return ""  # local declared in prelude (empty / scratch)
         # Skip tautological self-assigns ``I = I`` that the shape-
         # resolution pass leaves behind when ``utens_stage.shape[0]``
@@ -443,6 +457,13 @@ class _FortranBodyEmitter(BaseEmitter):
         # RHS is the same Name.
         if (isinstance(target, ast.Name) and isinstance(node.value, ast.Name) and target.id == node.value.id):
             return ""
+        # Storing a numeric 0/1 into a LOGICAL array element -- the ``.any`` /
+        # ``.all`` reduction accumulator zero-init (``levelmask[i] = 0``) -- must
+        # be a logical literal in Fortran, not an integer.
+        if (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+                and target.value.id in vars(self).get("_logical_array_locals", set())
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, (int, bool))):
+            return f"{indent}{self.emit_expr(target)} = {'.true.' if node.value.value else '.false.'}"
         rhs = self.emit_expr(node.value)
         lhs = self.emit_expr(target)
         return f"{indent}{lhs} = {rhs}"
@@ -509,7 +530,9 @@ class _FortranBodyEmitter(BaseEmitter):
             if isinstance(node.op, ast.UAdd):
                 return f"(+({self.emit_expr(node.operand)}))"
             if isinstance(node.op, ast.Not):
-                return f"(.not. {self.emit_expr(node.operand)})"
+                # ``.not.`` needs a LOGICAL operand: an int flag (``not lvn_only``)
+                # must become ``.not. ((lvn_only) /= 0)``, not ``.not. <int>``.
+                return f"(.not. {self._as_logical_operand(node.operand)})"
             raise NotImplementedError(f"unary {type(node.op).__name__}")
         if isinstance(node, ast.BinOp):
             # Pow: Fortran has ``**`` for both integer and real exponents.
@@ -632,8 +655,14 @@ class _FortranBodyEmitter(BaseEmitter):
                 if (_is_scalar_name(node.left) and _is_scalar_name(node.right)):
                     return (f"({self.emit_expr(node.left)} * "
                             f"{self.emit_expr(node.right)})")
-                return (f"MATMUL({self.emit_expr(node.left)}, "
-                        f"{self.emit_expr(node.right)})")
+                # Arrays are declared with REVERSED dims (col-major over the
+                # row-major C buffers), so each stored array is the transpose of
+                # its numpy view. numpy ``C = A @ B`` -> stored ``C^T = B^T @ A^T``
+                # = ``MATMUL(B_stored, A_stored)``: emit the operands SWAPPED.
+                # (Reached only for unresolved-shape matmuls the loop hoister
+                # could not lower; the swap keeps it numerically correct.)
+                return (f"MATMUL({self.emit_expr(node.right)}, "
+                        f"{self.emit_expr(node.left)})")
             op = _BINOP.get(type(node.op))
             if op is None:
                 raise NotImplementedError(f"binop {type(node.op).__name__}")
@@ -1057,6 +1086,9 @@ class _FortranBodyEmitter(BaseEmitter):
                 return f"{attr.upper()}({args_e[0]})"
             if attr in {"absolute", "fabs"} and args_e:
                 return f"ABS({args_e[0]})"
+            # np.conj / np.conjugate (vexx) -> Fortran CONJG intrinsic.
+            if attr in {"conj", "conjugate"} and len(args_e) == 1:
+                return f"CONJG({args_e[0]})"
             # ``np.sign(x)`` in scalar context -> -1 / 0 / +1 (numpy: sign(0)==0,
             # unlike Fortran SIGN which gives +1 at 0). Built from MERGE, same as
             # the array ``__npb_sign`` marker. cloudsc scalar np.sign.
@@ -1593,6 +1625,11 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
     # Pre-compute logical_array_locals so _emit_subscript can detect
     # ``arr[mask]`` boolean-indexing and emit PACK(arr, mask).
     _pre_logical_arr_locals: Set[str] = set(_assigned_bool_literal(kir.tree))
+    # Array locals the lowering typed boolean (``owner = mask != 0``,
+    # ``mask = cfl_clip & owner``) -- their dtype is recorded in local_dtypes
+    # rather than via a bare True/False literal assignment.
+    _ld_pre = getattr(kir.tree, "local_dtypes", {}) or {}
+    _pre_logical_arr_locals |= {nm for nm, dt in _ld_pre.items() if dt in ("bool", "bool_")}
     for node in ast.walk(kir.tree):
         if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Subscript)
                 and isinstance(node.targets[0].value, ast.Name)):
@@ -1652,6 +1689,10 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
     # element assignments -- those must be Fortran ``logical`` arrays.
     # Walks every Subscript(Name) = Compare/BoolOp/Not assignment.
     logical_array_locals: Set[str] = set(_assigned_bool_literal(kir.tree))
+    # Array locals the lowering typed boolean via local_dtypes (whole-array
+    # Compare / BoolOp / bitwise-of-bools) are logical too -- declare them so.
+    _ld_decl = getattr(kir.tree, "local_dtypes", {}) or {}
+    logical_array_locals |= {nm for nm, dt in _ld_decl.items() if dt in ("bool", "bool_")}
     # Track inferred dtype for array locals via per-element assigns.
     # ``cols[si0] = A_col[expr]`` -> cols inherits A_col''s dtype.
     inferred_local_dtypes: Dict[str, str] = {}

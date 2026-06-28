@@ -700,10 +700,11 @@ def expand_matmul_bcsr_dense_vec(
     n_block_rows_sym: str,
     block_r_sym: str,               # R: rows per block
     block_c_sym: str,               # C: cols per block
+    n_rows_sym: str,                # total scalar rows = n_block_rows * R
 ) -> List[ast.stmt]:
     """``y = A @ x`` for BCSR-A (block R x C) and dense-x -> dense-y::
 
-        for i in range(nbrows * R): y[i] = 0
+        for i in range(NR): y[i] = 0
         for bi in range(nbrows):
             for k in range(A_indptr[bi], A_indptr[bi + 1]):
                 bj = A_indices[k]
@@ -713,7 +714,12 @@ def expand_matmul_bcsr_dense_vec(
 
     BCSR is CSR over a grid of dense ``R x C`` blocks; ``indptr`` /
     ``indices`` index *block*-rows/columns, ``data`` is 3-D
-    ``[nnz_blocks, R, C]``. ``y`` is zero-initialized first.
+    ``[nnz_blocks, R, C]``. ``y`` (length ``NR = n_block_rows * R``, the
+    matrix's logical row count) is zero-initialized first. ``NR`` is passed
+    as its own symbol -- it equals ``nbrows * R`` for any valid BCSR, but
+    ``n_block_rows_sym`` may be a derived compound expression (``len(indptr)
+    - 1``) that cannot be safely multiplied, whereas the logical row count is
+    an atomic dimension symbol.
 
     Reference: `scipy.sparse.bsr_matrix
     <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.bsr_matrix.html>`_.
@@ -721,10 +727,9 @@ def expand_matmul_bcsr_dense_vec(
     indptr = lhs_buffers["indptr"]
     indices = lhs_buffers["indices"]
     data = lhs_buffers["data"]
-    n_rows_expr = _mul(_name(n_block_rows_sym), _name(block_r_sym))
     init_loop = ast.For(
         target=_store("__i"),
-        iter=_range_call(None, n_rows_expr),
+        iter=_range_call(None, _name(n_rows_sym)),
         body=[ast.Assign(
             targets=[_subscript(target.id, _name("__i"), ctx=ast.Store())],
             value=_const(0.0))],

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
+from setuptools import find_packages, setup
 
-from distutils.core import setup
-
-
+# The numpyto_* translators are a SEPARATE distribution (optarena/NumpyTranslators
+# has its own pyproject); install it alongside: `pip install ./optarena/NumpyTranslators`.
 setup(name='optarena',
       version='0.1',
       url='https://github.com/spcl/OptArena',
@@ -15,5 +15,9 @@ setup(name='optarena',
           "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
           "Operating System :: OS Independent",
       ],
-      packages=['optarena', 'optarena.infrastructure'],
-      python_requires='>=3.6')
+      packages=find_packages(include=['optarena', 'optarena.*'], exclude=['optarena.NumpyTranslators*']),
+      include_package_data=True,
+      entry_points={'console_scripts': [
+          'optarena-install-apptainer=optarena.containers:install_apptainer_main',
+      ]},
+      python_requires='>=3.10')

@@ -1,0 +1,32 @@
+# OptArena VERIFIER image (the judge / grader) -- the self-contained harness.
+# Hardware: cpu   network(runtime): allowed
+#
+# Layers the full OptArena harness on the agent image (optarena-cpu.sif: toolchain +
+# deps). It pip-installs optarena INCLUDING agent_bench (scoring + hidden tests + the
+# judge) and the numpyto_* translators, so the verifier grades standalone.
+#
+# Used ONLY as Harbor's SEPARATE verifier environment. The AGENT runs in
+# optarena-cpu.sif, which has no harness -- so the agent can never read the answers.
+#
+# Build:  apptainer build optarena-cpu.sif containers/cpu.def
+#         apptainer build optarena-judge.sif containers/judge.def
+# NOTE: not build-verified in this dev environment -- build on real infra.
+
+Bootstrap: localimage
+From: optarena-cpu.sif
+
+%files
+    optarena /opt/optarena/optarena
+    setup.py /opt/optarena/setup.py
+
+%post
+    # Editable installs of both distributions: pip-managed, no hand-set PYTHONPATH,
+    # and the benchmark/config data tree stays readable from the source layout.
+    pip install --break-system-packages -e /opt/optarena
+    pip install --break-system-packages -e /opt/optarena/optarena/NumpyTranslators
+
+%environment
+    export LC_ALL=C
+
+%runscript
+    exec "$@"

@@ -1,60 +1,202 @@
 # Co-located benchmark manifest (Quantum ESPRESSO exact-exchange operator,
 # exx_bp::vexx_bp_k_gpu). The band-parallel Fock exchange applied to trial
-# wavefunctions via FFT band-pair convolution. Ported from dace-fortran's
-# tests/qe/exx_bp. Validated by Fock-operator Hermiticity (machine precision) +
-# the QE no-op identity path. NOTE: a generated-C++ reference is pending an
-# upstream dace-fortran SDFG->C++ fix (MatMul lib-node API); once it lands the
-# active path will additionally validate bit-for-bit against the DaCe C++.
+# wavefunctions via FFT band-pair convolution -- ALL config paths ported
+# (collinear/noncollinear, norm-conserving/ultrasoft/PAW, real-space-aug,
+# gamma_only/k-point, single/multi band-group). Ported from dace-fortran's
+# tests/qe/exx_bp.
+#
+# Config flags are DISCRETE SETS (the fuzzer chooses one element per iteration);
+# size symbols (ngrid/nbnd/m) are INTERVALS. The free size axis is ngrid; npw/nnr/
+# nkb are DERIVED inside initialize() (DESIGN_input_configs_and_fuzzing.md §3.4),
+# so any interval-fuzzed ngrid yields a valid problem.
+#
+# Valid-combination notes (mutually-exclusive / implied):
+#   * okpaw is physically meaningful only WITH okvan (PAW pseudopotentials are
+#     ultrasoft-like; the deexx non-local potential is projected back into hpsi
+#     only on the okvan path -- exactly as the Fortran's add_nlxx_pot guard).
+#     okpaw alone computes deexx but never applies it (a no-op, matching QE).
+#   * tqr (real-space augmentation) only acts when okvan|okpaw; on the
+#     norm-conserving path it is inert.
+# These are honoured by the kernel's branch guards, so any flag product is a
+# runnable problem (degenerate combos reduce to a covered active path).
+#
 # Schema: optarena/schemas/bench_spec.schema.json
 # Sizes: ngrid = cubic FFT grid edge, nbnd = occupied orbitals, m = trial bands.
 name: QE Exact Exchange (vexx)
 short_name: vexx
 module_name: vexx
-func_name: vexx
+# vexx_all_paths is the FULL multi-config numpy correctness reference (it uses
+# np.roll and ragged per-atom box lists, which the dense C/C++/Fortran translator
+# does not yet lower). The translatable / emittable active path is the collinear
+# norm-conserving SoA vexx_bp_k_gpu (see baseline/); the oracle drives the numpy
+# reference here. See test_reference.py for the C++ cross-check status.
+func_name: vexx_all_paths
 kind: microapp
+# Each size preset carries a VALID config tuple (the baseline collinear-NC
+# regime) so the oracle, which binds init args positionally from the preset,
+# passes real flags rather than None. The config sweep is in fuzz.configs.valid.
 parameters:
   S:
     ngrid: 16
     nbnd: 8
     m: 8
+    okvan: false
+    okpaw: false
+    noncolin: false
+    tqr: false
+    gamma_only: false
+    negrp: 1
   M:
     ngrid: 24
     nbnd: 16
     m: 16
+    okvan: false
+    okpaw: false
+    noncolin: false
+    tqr: false
+    gamma_only: false
+    negrp: 1
   L:
     ngrid: 32
     nbnd: 32
     m: 32
+    okvan: false
+    okpaw: false
+    noncolin: false
+    tqr: false
+    gamma_only: false
+    negrp: 1
+  fuzzed:
+    ngrid: [8, 48]
+    nbnd: [2, 32]
+    m: [2, 32]
+    okvan: {set: [false, true]}
+    okpaw: {set: [false, true]}
+    noncolin: {set: [false, true]}
+    tqr: {set: [false, true]}
+    gamma_only: {set: [false, true]}
+    negrp: {set: [1, 2, 4]}
+# Valid config tuples extracted from QE setup logic (NOT the raw flag product):
+#   * okpaw => okvan: PAW pseudos set tvanp AND tpawp; PAW runs the ultrasoft
+#     augmentation machinery. provenance: q-e/upflib/read_upf_v1.f90:268-269,
+#     q-e/PW/src/setup.f90:119-120.
+#   * noncolin => npol=2. provenance: q-e/PW/src/set_spin_vars.f90:29-34.
+#   * gamma_only and k-point are exclusive runtime dispatch (vexx_*_gamma vs
+#     vexx_*_k). provenance: q-e/PW/src/exx.f90:427-431, q-e/PW/src/exx_bp.f90:574,1336.
+#   * tqr (real-space aug) only acts with okvan|okpaw (addusxx_r/newdxx_r RETURN
+#     if .not. okvan). provenance: q-e/PW/src/us_exx.f90:215,395,637.
+#   * negrp divides the parent process count (MOD(parent_nproc, negrp)==0); it is
+#     a band-group COUNT, not an nbnd divisor (uneven bands handled explicitly).
+#     provenance: q-e/Modules/mp_exx.f90:116-118,200-212.
+#   * US/PAW + EXX + noncolin is NOT implemented in QE (rotate_becxx).
+#     provenance: q-e/PW/src/us_exx.f90:825.
+# Degenerate combos (e.g. tqr without okvan) reduce to a covered active path via
+# the kernel's branch guards, so the tuples below span the distinct regimes.
+fuzz:
+  configs:
+    valid:
+    - {okvan: false, okpaw: false, noncolin: false, tqr: false, gamma_only: false, negrp: 1}
+    - {okvan: false, okpaw: false, noncolin: true,  tqr: false, gamma_only: false, negrp: 1}
+    - {okvan: false, okpaw: false, noncolin: false, tqr: false, gamma_only: true,  negrp: 1}
+    - {okvan: false, okpaw: false, noncolin: false, tqr: false, gamma_only: false, negrp: 2}
+    - {okvan: false, okpaw: false, noncolin: false, tqr: false, gamma_only: false, negrp: 4}
+    - {okvan: true,  okpaw: false, noncolin: false, tqr: false, gamma_only: false, negrp: 1}
+    - {okvan: true,  okpaw: false, noncolin: false, tqr: true,  gamma_only: false, negrp: 1}
+    - {okvan: true,  okpaw: true,  noncolin: false, tqr: false, gamma_only: false, negrp: 1}
+    - {okvan: true,  okpaw: true,  noncolin: false, tqr: true,  gamma_only: false, negrp: 1}
+    - {okvan: true,  okpaw: false, noncolin: false, tqr: false, gamma_only: true,  negrp: 1}
 init:
   func_name: initialize
   input_args:
   - ngrid
   - nbnd
   - m
+  - okvan
+  - okpaw
+  - noncolin
+  - tqr
+  - gamma_only
+  - negrp
   output_args:
   - psi
   - hpsi
   - exxbuff
   - x_occupation
-  - coulomb_fac
+  - g
   - nl
+  - nlm
+  - igk_exx
+  - index_xk
+  - index_xkq
+  - xk
+  - xkq_collect
+  - ibands
+  - nibands
+  - egrp_pairs
+  - all_start
+  - all_end
+  - iexx_istart
+  - iexx_iend
+  - becpsi
+  - becxx
+  - qgm
+  - ijtoh
+  - ofsbeta
+  - eigqts
+  - sfac
+  - vkb
+  - tabxx_box
+  - tabxx_qr
+  - ke
   - exxalfa
   - omega
+  - tpiba2
+  - exxdiv
+  - eps_qdiv
+  - gau_scrlen
+  - erf_scrlen
+  - erfc_scrlen
+  - yukawa
+  - eps_occ
   - nqs
-  - npw
+  - n
   - m
-  - nbnd
-  - nnr
+  - npwx
+  - npol
+  - nrxxs
+  - ngm
   - n1
   - n2
   - n3
+  - nbnd
+  - nat
+  - nh
+  - nkb
+  - max_pairs
+  - jblock
+  - negrp
+  - iexx_start
+  - my_egrp_id
+  - current_k
+  - current_ik
+  - okvan
+  - okpaw
+  - noncolin
+  - tqr
+  - gamma_only
   shapes:
-    psi: (npw, m)
-    hpsi: (npw, m)
-    exxbuff: (nnr, nbnd)
-    x_occupation: (nbnd,)
-    coulomb_fac: (npw,)
-    nl: (npw,)
+    psi: (npwx * npol, m)
+    hpsi: (npwx * npol, m)
+    exxbuff: (nrxxs * npol, nbnd, 1)
+    x_occupation: (nbnd, 1)
+    g: (3, ngm)
+    nl: (ngm,)
+    nlm: (ngm,)
+    igk_exx: (npwx, 1)
+    qgm: (ngm, 3)
+    becpsi: (nkb, m)
+    becxx: (nkb, nbnd, 1)
+    vkb: (npwx, nkb)
   scalars:
     exxalfa: 0.25
     omega: 1.0
@@ -64,30 +206,103 @@ init:
     hpsi: complex128
     exxbuff: complex128
     nl: int32
+    nlm: int32
 input_args:
 - psi
 - hpsi
 - exxbuff
 - x_occupation
-- coulomb_fac
+- g
 - nl
+- nlm
+- igk_exx
+- index_xk
+- index_xkq
+- xk
+- xkq_collect
+- ibands
+- nibands
+- egrp_pairs
+- all_start
+- all_end
+- iexx_istart
+- iexx_iend
+- becpsi
+- becxx
+- qgm
+- ijtoh
+- ofsbeta
+- eigqts
+- sfac
+- vkb
+- tabxx_box
+- tabxx_qr
+- ke
 - exxalfa
 - omega
+- tpiba2
+- exxdiv
+- eps_qdiv
+- gau_scrlen
+- erf_scrlen
+- erfc_scrlen
+- yukawa
+- eps_occ
 - nqs
-- npw
+- n
 - m
-- nbnd
-- nnr
+- npwx
+- npol
+- nrxxs
+- ngm
 - n1
 - n2
 - n3
+- nbnd
+- nat
+- nh
+- nkb
+- max_pairs
+- jblock
+- negrp
+- iexx_start
+- my_egrp_id
+- current_k
+- current_ik
+- okvan
+- okpaw
+- noncolin
+- tqr
+- gamma_only
 array_args:
 - psi
 - hpsi
 - exxbuff
 - x_occupation
-- coulomb_fac
+- g
 - nl
+- nlm
+- igk_exx
+- index_xk
+- index_xkq
+- xk
+- xkq_collect
+- ibands
+- nibands
+- egrp_pairs
+- all_start
+- all_end
+- iexx_istart
+- iexx_iend
+- becpsi
+- becxx
+- qgm
+- ijtoh
+- ofsbeta
+- eigqts
+- sfac
+- vkb
+- ke
 output_args:
 - hpsi
 taxonomy:
@@ -100,3 +315,6 @@ taxonomy:
   - exact_exchange
   - fft
   - fock
+  - ultrasoft
+  - paw
+  - noncollinear

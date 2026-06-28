@@ -5,11 +5,10 @@ name: agentbench-gpu
 # self-hosted runner labelled [self-hosted, gpu] with the CUDA toolkit/nvcc and
 # a recent driver). Adjust the `runs-on` labels to match your runner.
 
+# Disabled as an automatic job: a self-hosted GPU runner is not guaranteed to be
+# attached, so it only runs when triggered by hand from the Actions tab.
 on:
-  push:
-    branches: [ extended, main ]
-  pull_request:
-    branches: [ extended, main ]
+  workflow_dispatch:
 
 jobs:
   gpu-agentbench:

@@ -151,6 +151,16 @@ optarena/benchmarks/**/cpp_backend/build-clang/
 # INPUTS and stay; .pluto.cloog is a generated artifact -- never commit it).
 *.pluto.cloog
 
+# HuggingFace dataset export (optarena export-hf). The dataset is a pure
+# regenerator over the manifest tree -- never cached in the repo (the CI workflow
+# rebuilds + publishes it). The default local output stays out of git.
+optarena_hf.parquet
+optarena_hf.jsonl
+
+# Harbor adapter: generated task directories (regenerated from the kernel suite by
+# adapters/optarena/run_adapter.py -- never committed).
+adapters/optarena/tasks/
+
 # --- Local run scratch (machine-specific; never committed) --------------------
 # Hardware/CPU dumps, agent run outputs, and SDFG/visualization scratch left by
 # local runs. A fresh clone should not carry any of these.
@@ -162,3 +172,9 @@ _session_scratch/
 # Local-only dev tools (kept on disk, not published)
 scripts/infer_output_args.py
 scripts/verify_tvm.py
+
+# --- Build / cache artifacts (machine-generated; never committed) -------------
+# GT4Py kernel cache, compiled Fortran modules, ruff cache.
+.gt_cache/
+*.mod
+.ruff_cache/

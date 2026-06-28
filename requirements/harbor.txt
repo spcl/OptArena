@@ -1,0 +1,10 @@
+# Harbor integration (adapters/optarena). Only needed to RUN the benchmark under
+# Harbor (`harbor run`) or to validate generated task.toml against Harbor's schema
+# (tests/test_harbor_adapter.py::test_task_toml_validates_against_real_harbor_model,
+# which self-skips when harbor is absent). The task GENERATOR + in-container grader
+# carry no harbor dependency.
+harbor
+# Local, sudoless container runtime (runtime.backend = udocker) for running the
+# OptArena images without Harbor / Docker / root. Apptainer is not pip-installable
+# (Go binary) -- install it sudoless with `optarena-install-apptainer`.
+udocker

@@ -133,6 +133,7 @@ def independent_verify(submission: Submission,
                        reverify_seed: int = 777,
                        dual_oracle: bool = True,
                        suspect_above: float = 1000.0,
+                       fuzz_iteration: Optional[int] = None,
                        rtol: float = 1.0e-6,
                        atol: float = 1.0e-9) -> VerifyResult:
     """Re-verify ``submission`` from scratch before its result is persisted.
@@ -146,8 +147,10 @@ def independent_verify(submission: Submission,
     spec = BenchSpec.load(task.kernel)
     binding = binding_from_spec(spec)
     public_seed = int(config.get("seeds.public_tests", 42))
-    data = _data_seeded(task.kernel, preset, datatype, public_seed)
-    redata = _data_seeded(task.kernel, preset, datatype, int(reverify_seed))
+    data = _data_seeded(task.kernel, preset, datatype, public_seed, fuzz_iteration=fuzz_iteration)
+    # Same fuzz_iteration -> same sampled SIZE, different value seed -> new VALUES:
+    # keeps the fresh-seed reverify's overfit-catching meaning under the sweep.
+    redata = _data_seeded(task.kernel, preset, datatype, int(reverify_seed), fuzz_iteration=fuzz_iteration)
     device = task.residency == "device"
     timeout = float(config.get("timeouts.kernel_s", 300))
     memory_gb = float(config.get("limits.kernel_memory_gb", 10))
@@ -163,16 +166,31 @@ def independent_verify(submission: Submission,
             built = sb.build(submission, mode=Mode.SINGLE_CORE)
             if not built.ok:
                 return VerifyResult(False, False, False, False, False, suspect, "harden: rebuild failed")
-            o1, _ = _call_isolated(built.lib, binding, data, submission.language,
-                                   device=device, timeout=timeout, memory_gb=memory_gb)
-            o2, _ = _call_isolated(built.lib, binding, data, submission.language,
-                                   device=device, timeout=timeout, memory_gb=memory_gb)
+            o1, _ = _call_isolated(built.lib,
+                                   binding,
+                                   data,
+                                   submission.language,
+                                   device=device,
+                                   timeout=timeout,
+                                   memory_gb=memory_gb)
+            o2, _ = _call_isolated(built.lib,
+                                   binding,
+                                   data,
+                                   submission.language,
+                                   device=device,
+                                   timeout=timeout,
+                                   memory_gb=memory_gb)
             identical = all(np.array_equal(np.asarray(o1[k]), np.asarray(o2[k])) for k in spec.output_args)
             pub_ok, _, _ = _grade(spec, np_public, o1, rtol, atol)
             determinism_ok = identical and pub_ok
 
-            ro, _ = _call_isolated(built.lib, binding, redata, submission.language,
-                                   device=device, timeout=timeout, memory_gb=memory_gb)
+            ro, _ = _call_isolated(built.lib,
+                                   binding,
+                                   redata,
+                                   submission.language,
+                                   device=device,
+                                   timeout=timeout,
+                                   memory_gb=memory_gb)
             reverify_ok, _, _ = _grade(spec, np_re, ro, rtol, atol)
 
             if dual_oracle:
@@ -213,7 +231,7 @@ def _arg_residence(binding: Binding, residency: str) -> Dict[str, str]:
     return {a.name: (residency if a.kind == "ptr" else "host") for a in binding.args}
 
 
-def _data_seeded(kernel: str, preset: str, datatype: str, seed: int) -> Dict:
+def _data_seeded(kernel: str, preset: str, datatype: str, seed: int, fuzz_iteration: Optional[int] = None) -> Dict:
     """``Benchmark.get_data`` for ``kernel`` with a specific input seed.
 
     The seed is applied via the ``OPTARENA_SEEDS_INPUT_DIST`` config override; a
@@ -221,13 +239,19 @@ def _data_seeded(kernel: str, preset: str, datatype: str, seed: int) -> Dict:
     (keyed by preset, not seed) does not return stale data. This is how the
     public (``seeds.public_tests``) and hidden (``seeds.hidden_tests``) runs draw
     different inputs at the same size.
+
+    ``fuzz_iteration`` only bites with ``preset="fuzzed"``: it selects the seeded
+    sample of the size/flag distribution (``seeds.fuzz + iteration``) so the same
+    submission can be scored across a deterministic sweep of sizes -- the basis of
+    the OptArena Score. ``None`` (the default) keeps today's single-instance
+    behaviour.
     """
     from optarena.infrastructure.benchmark import Benchmark
     key = "OPTARENA_SEEDS_INPUT_DIST"
     prev = os.environ.get(key)
     os.environ[key] = str(seed)
     try:
-        return Benchmark(kernel).get_data(preset=preset, datatype=datatype)
+        return Benchmark(kernel).get_data(preset=preset, datatype=datatype, fuzz_iteration=fuzz_iteration)
     finally:
         if prev is None:
             os.environ.pop(key, None)
@@ -342,6 +366,18 @@ def _c_reference_submission(spec: BenchSpec, task: Task) -> Submission:
     from optarena.agent_bench.agent import reference_source
     ctask = replace(task, language="c", source_mode="restricted", residency="host")
     return Submission(language="c", source=reference_source(ctask))
+
+
+def c_reference_available(task: Task) -> bool:
+    """Whether the sequential-C reference can be EMITTED for ``task``'s kernel -- the
+    precondition for using C as the speedup baseline. Cheap (NumpyToX emit only, no
+    build). A recursive / argmax / not-yet-translatable kernel returns ``False`` so
+    callers can fall back to the numpy baseline instead of erroring."""
+    try:
+        _c_reference_submission(BenchSpec.load(task.kernel), task)
+        return True
+    except Exception:  # noqa: BLE001 -- any emit failure means "no C baseline here"
+        return False
 
 
 def _grade_against(spec: BenchSpec, references: Dict[str, Dict], actual: Dict, rtol: float,
@@ -635,9 +671,10 @@ def measure_baselines(task: Task,
     aims to beat, computed IN THIS PROCESS (so, run inside the services container,
     they are measured on the same toolchain/CPU as the submissions it scores).
 
-    Returns ``{name: ns}`` for each selected reference (``numpy`` and/or ``c``);
-    used by the judge service's ``/baseline`` endpoint. Raises on a C-reference
-    build/emit failure (the opt-in C baseline never silently degrades to numpy).
+    Returns ``{name: ns}`` for each selected reference (``numpy`` and/or ``c``).
+    Used by the judge service's ``/baseline`` endpoint. A C-reference build/emit
+    failure falls back to the numpy baseline (``out`` then carries ``numpy`` instead
+    of ``c``) so "speedup over C" degrades gracefully on kernels that don't emit C.
     """
     if baseline not in BASELINE_CHOICES:
         raise ValueError(f"baseline must be one of {BASELINE_CHOICES}; got {baseline!r}")
@@ -650,8 +687,12 @@ def measure_baselines(task: Task,
     if _wants(baseline, "c"):
         timeout = float(config.get("timeouts.kernel_s", 300))
         memory_gb = float(config.get("limits.kernel_memory_gb", 10))
-        _, c_ns, _ = _run_c_reference(spec, task, binding, data, [], repeat, timeout, memory_gb)
-        out["c"] = c_ns
+        try:
+            _, c_ns, _ = _run_c_reference(spec, task, binding, data, [], repeat, timeout, memory_gb)
+            out["c"] = c_ns
+        except RuntimeError:  # this kernel doesn't emit to C -> fall back to numpy
+            if "numpy" not in out:
+                out["numpy"] = _time_numpy(spec, data, repeat)
     return out
 
 
@@ -667,7 +708,8 @@ def score(submission: Submission,
           hidden_cases: Optional[List] = None,
           mode: Mode = Mode.SINGLE_CORE,
           oracle: str = "numpy",
-          baseline: str = "numpy") -> Score:
+          baseline: str = "numpy",
+          fuzz_iteration: Optional[int] = None) -> Score:
     """Build, run, and grade ``submission`` for ``task``.
 
     Two correctness gates (Workstream G): the PUBLIC run (the visible preset,
@@ -696,7 +738,10 @@ def score(submission: Submission,
     spec = BenchSpec.load(task.kernel)
     binding = binding_from_spec(spec)
     public_seed = int(config.get("seeds.public_tests", 42))
-    data = _data_seeded(task.kernel, preset, datatype, public_seed)
+    # ``fuzz_iteration`` selects the seeded size/flag sample for preset="fuzzed"
+    # (the per-iteration draw of the OptArena Score sweep); hidden cases keep their
+    # own preset/seed below and are correctness-only, so they are left unfuzzed.
+    data = _data_seeded(task.kernel, preset, datatype, public_seed, fuzz_iteration=fuzz_iteration)
     cases = [] if not hidden else (
         hidden_cases if hidden_cases is not None else hidden_tests.hidden_cases(spec, preset))
     hidden_data = [(case.label, _data_seeded(task.kernel, case.preset, datatype, case.seed)) for case in cases]
@@ -724,14 +769,22 @@ def score(submission: Submission,
         try:
             c_public, c_ns, c_hidden = _run_c_reference(spec, task, binding, data, hidden_data, repeat, timeout,
                                                         memory_gb)
-        except RuntimeError as exc:  # opt-in C reference unavailable -> scored error
-            return Score(False, float("inf"), 0, False, str(exc), oracle=oracle)
-        if _wants(oracle, "c"):
-            expected_public["c"] = c_public
-            for label in expected_hidden if expected_hidden else (lbl for lbl, _ in hidden_data):
-                expected_hidden.setdefault(label, {})["c"] = c_hidden[label]
-        if _wants(baseline, "c"):
-            baselines["c"] = c_ns
+        except RuntimeError as exc:
+            # The C reference could not be emitted/built for this kernel.
+            if _wants(oracle, "c"):
+                return Score(False, float("inf"), 0, False, str(exc), oracle=oracle)  # required as a correctness oracle
+            # Baseline-only C request: fall back to the numpy baseline (recorded
+            # honestly via the ``baseline`` label) rather than erroring the score --
+            # so "speedup over C" degrades gracefully on kernels that don't emit C.
+            if "numpy" not in baselines:
+                baselines["numpy"] = _time_numpy(spec, data, repeat)
+        else:
+            if _wants(oracle, "c"):
+                expected_public["c"] = c_public
+                for label in expected_hidden if expected_hidden else (lbl for lbl, _ in hidden_data):
+                    expected_hidden.setdefault(label, {})["c"] = c_hidden[label]
+            if _wants(baseline, "c"):
+                baselines["c"] = c_ns
 
     # Primary baseline for the scalar speedup row: numpy if timed, else C.
     primary = "numpy" if "numpy" in baselines else ("c" if "c" in baselines else "")

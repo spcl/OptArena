@@ -1,0 +1,6 @@
+# HuggingFace Dataset export (optarena export-hf).
+# Optional: the row builder + jsonl writer are pure-stdlib; these add the
+# parquet writer (pyarrow) and the Hub push (datasets/huggingface_hub).
+pyarrow
+datasets>=2.17  # config_name= on push_to_hub (multi-config datasets)
+huggingface_hub

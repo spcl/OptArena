@@ -62,6 +62,10 @@ class Submission:
     source: Optional[str] = None  # restricted mode: the source text
     library: Optional[str] = None  # any mode: path to a prebuilt .so
     build: List[str] = field(default_factory=list)
+    #: Cumulative tokens the agent had spent when it submitted this attempt -- the
+    #: "tokens so far" snapshot the runner stamps at the score call (``0`` for a
+    #: non-LLM agent). ``None`` until stamped / when usage is not tracked.
+    tokens: Optional[int] = None
 
     def __post_init__(self):
         if self.language not in LANGS:
@@ -79,6 +83,8 @@ class Submission:
             out["source"] = self.source
         else:
             out["library"] = self.library
+        if self.tokens is not None:
+            out["tokens"] = self.tokens
         return out
 
     @classmethod
@@ -91,7 +97,8 @@ class Submission:
         return cls(language=obj["language"],
                    source=obj.get("source"),
                    library=obj.get("library"),
-                   build=list(obj.get("build", [])))
+                   build=list(obj.get("build", [])),
+                   tokens=obj.get("tokens"))
 
     @classmethod
     def from_response(cls, text: str, default_language: Optional[str] = None) -> "Submission":

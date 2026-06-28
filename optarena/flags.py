@@ -76,13 +76,18 @@ FLANG_BASELINE = "-O3 -march=native -ffast-math -fPIC"
 # ---------------------------------------------------------------------------
 
 #: LLVM Polly + OpenMP -- ``clang -mllvm -polly -mllvm -polly-parallel``.
-POLLY_PAR = "-mllvm -polly -mllvm -polly-parallel -fopenmp -lgomp"
+#: ``-fopenmp=libgomp`` pins clang to GNU's OpenMP runtime (shipped with gcc)
+#: instead of its default ``libomp`` -- the latter is a separate package that is
+#: frequently absent (``cannot find -lomp``), while ``libgomp`` is ubiquitous.
+POLLY_PAR = "-mllvm -polly -mllvm -polly-parallel -fopenmp=libgomp"
 
 #: GCC ``-ftree-parallelize-loops=N -floop-parallelize-all``.
 GCC_AUTOPAR = "-ftree-parallelize-loops={n} -floop-parallelize-all -fopenmp"
 
-#: Pluto pre-processes the source; only ``-fopenmp`` is added at compile time.
-PLUTO_PAR = "-fopenmp"
+#: Pluto pre-processes the source; only OpenMP is added at compile time.
+#: ``-fopenmp=libgomp`` for the same reason as ``POLLY_PAR`` -- both build with
+#: clang, whose default ``libomp`` is often missing on CI; GNU ``libgomp`` is not.
+PLUTO_PAR = "-fopenmp=libgomp"
 
 #: NVHPC pure-source CPU auto-parallelization (analogue of GCC ``-ftree-parallelize-loops``).
 NVHPC_CONCUR = "-Mconcur"

@@ -932,10 +932,12 @@ class KernelRegistry:
         """Parse every manifest into a :class:`BenchSpec`, keyed by path-key."""
         return {k: BenchSpec.from_yaml(yaml.safe_load(p.read_text()), str(p)) for k, p in _scan_kernels().items()}
 
-    def select(self, selector: str) -> List[str]:
-        """Resolve a selection token into a sorted list of kernel short-names.
+    def select_keys(self, selector: str) -> List[str]:
+        """Resolve a selection token into a sorted list of canonical PATH-KEYS.
 
-        Granularity (the benchmark tree is ``<track>/<dwarf?>/<kernel>/``):
+        The collision-proof core of :meth:`select`: it returns the full path-keys
+        (e.g. ``hpc/dense_linear_algebra/gemm/gemm``), so a stem shared by more than
+        one manifest is never collapsed. Same granularity as :meth:`select`:
 
         * ``"all"`` -- every kernel.
         * a **track** (``ml`` / ``hpc`` / ``foundation``) -- every kernel in it.
@@ -948,20 +950,26 @@ class KernelRegistry:
         """
         scan = _scan_kernels()
         if selector == "all":
-            return sorted({k.rsplit("/", 1)[-1] for k in scan})
+            return sorted(scan)
         s = selector.strip("/")
         # Group selection: the token names a directory (track / dwarf / subdir).
         # Try the bare token and an ``hpc/<token>`` shorthand so a dwarf name
         # alone resolves without the ``hpc/`` prefix.
         for prefix in (s, f"hpc/{s}"):
-            group = sorted({k.rsplit("/", 1)[-1] for k in scan if k.startswith(prefix + "/")})
+            group = sorted(k for k in scan if k.startswith(prefix + "/"))
             if group:
                 return group
         # Single kernel (stem alias / dir-with-one-manifest / full path-key).
         key = self.path_key(selector)
         if key is not None:
-            return [key.rsplit("/", 1)[-1]]
+            return [key]
         raise KeyError(f"no benchmark, track, or dwarf matches {selector!r}")
+
+    def select(self, selector: str) -> List[str]:
+        """Resolve a selection token into a sorted list of kernel short-names
+        (bare stems). See :meth:`select_keys` for the collision-proof path-keys and
+        for the selector granularity. Raises ``KeyError`` when nothing matches."""
+        return sorted({k.rsplit("/", 1)[-1] for k in self.select_keys(selector)})
 
     def resolved(self) -> List["ResolvedBench"]:
         """Every sub-benchmark across the corpus -- one :class:`ResolvedBench`

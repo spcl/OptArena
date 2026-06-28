@@ -1,5 +1,10 @@
 # optarena container image (hand-maintained).
 # Hardware: cpu   network(runtime): allowed
+#
+# This is the AGENT image: a compiler toolchain + numeric libs, but NOT the optarena
+# package or harness. The agent only writes/compiles code here; grading happens in
+# the separate judge image (judge.def). Keeping the package out is the firewall --
+# the agent cannot read the hidden tests or the reference emitter.
 Bootstrap: docker
 From: ubuntu:26.04
 

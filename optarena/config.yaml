@@ -35,11 +35,46 @@ fuzz:
 # either.
 service:
   oracle: numpy            # correctness reference: numpy | c | both
-  baseline: numpy          # speedup denominator: numpy | c | both
+  baseline: c              # speedup denominator: c (sequential C, the serial start) | numpy | both;
+                           # c falls back to numpy per-kernel when C cannot be emitted
   input_mode: source       # POST /oracle accepts: source | library | either
   preset: S                # data-size preset the judge scores at
   datatype: float64
   repeat: 5                # timed reps; best (min) kept
+
+# Measurement rigor for the speedup score -- how a single timing is taken, so a
+# native run and a Harbor run measure IDENTICALLY (parity). The ranked metric is a
+# speedup over `baseline`. The Harbor grader reads these directly; the judge's
+# timing core (scoring.py / metric.py, owned separately) should read the SAME keys
+# so the two measurement paths cannot drift -- see docs/HANDOFF_measurement_rigor.md.
+measurement:
+  metric: speedup          # the ranked quantity: speedup over the baseline below
+  baseline: c              # speedup denominator (mirrors service.baseline): sequential C, numpy fallback
+  warmup_runs: 3           # untimed runs before timing (warm caches / JIT); discarded
+  repeat: 100              # timed reps kept per measurement (>= 20; 100 for a stable mean)
+  aggregation: mean        # reduce the kept reps to one time: mean (default) | median | min
+  pin_threads: true        # pin the process to its CPU cores (affinity + OMP) while timing
+  n_concurrent_trials: 1   # no co-located trials during authoritative timing (HW contention)
+  gsd_z: 1.0               # dispersion gate: keep a speedup only if geomean / gsd^z > 1
+  c_max: 100.0             # clamp ceiling on S_i (speedups above are flagged suspect)
+  timing_lock: ""          # if set to a (shared) path, the grader flocks it around the
+                           # timing section -- lets many agents solve in parallel while
+                           # only ONE performance measurement runs at a time. Empty = off
+                           # (rely on n_concurrent_trials). See docs/RUNTIME.md.
+
+# Container images per hardware target (agent = toolchain only, NO harness;
+# verifier = the full harness). The Harbor adapter derives each task's images from
+# here, so a hardware change is one edit, not a tag scattered across files.
+images:
+  cpu:
+    agent: optarena:cpu
+    verifier: optarena:judge
+  nvidia:
+    agent: optarena:nvidia
+    verifier: optarena:judge-nvidia
+  amd:
+    agent: optarena:amd
+    verifier: optarena:judge-amd
 
 # Verify-gated persistence of scored submissions (optarena/agent_bench/recording.py).
 # The JUDGE writes rows, never the agent; a leaderboard row lands only after an
@@ -61,6 +96,13 @@ limits:
                            # (RLIMIT_AS = baseline + this; host kernels only)
 
 runtime:
+  # Container backend for running the OptArena images.
+  #   OFFLINE (default; HPC / air-gapped): run a prebuilt LOCAL image, sudoless, no
+  #     daemon, no registry -- `apptainer` (preferred) or `udocker` (pip, pure user space).
+  #   ONLINE: orchestrate with Harbor (its --env) -- `docker` (daemon) or `singularity`.
+  # Harbor can also run offline if the images are local and the agent is local (see
+  # docs/RUNTIME.md). Defaults to sudoless local apptainer.
+  backend: apptainer       # apptainer | udocker (local/offline) | singularity | docker (Harbor)
   # multiprocessing start method for the scorer's isolated native call (host
   # path). "fork" is cheap (inputs inherited) and right for the single-threaded
   # CLI sweep; the THREADED judge service overrides this to "forkserver" via
