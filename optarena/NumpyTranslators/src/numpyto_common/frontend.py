@@ -1794,7 +1794,22 @@ def _dtypes_from_initialize(numpy_py: pathlib.Path,
         dt = _dtype_from_constructor(stmt.value)
         if dt is not None:
             dtypes[name] = dt
-    # Apply positional return-target mapping.
+    # Map the harness's per-local dtypes onto the kernel's parameters when the
+    # two names DIFFER (a kernel whose signature renames the harness locals).
+    #
+    # ``dtypes`` is already keyed by the ``initialize`` LOCAL name (= return-tuple
+    # name); a kernel arg with that SAME name is resolved by the caller's by-name
+    # lookup, so the only thing left to do here is the renamed case via the
+    # positional correspondence ``kernel arg i <- return target i``.
+    #
+    # That zip is ONLY sound when the two lists describe the same arrays in the
+    # same order -- i.e. their LENGTHS are equal. cloudsc's ``initialize`` returns
+    # 58 values while the kernel takes 53 array args in a DIFFERENT order, so an
+    # unconditional zip mis-assigned ``ktype``/``ldcum``'s int32 onto unrelated
+    # float arrays (``pfsqrf``/``pfsqltur``/``pvfi``), truncating their tiny flux
+    # values to 0 via a spurious ``(int64_t)`` cast. Gating on equal lengths keeps
+    # the mapping for genuine 1:1-renamed harnesses while skipping the misaligned
+    # case (the explicit ``init.dtypes`` block remains the authoritative source).
     return_targets: List[str] = []
     for stmt in reversed(init_fn.body):
         if isinstance(stmt, ast.Return) and stmt.value is not None:
@@ -1807,9 +1822,10 @@ def _dtypes_from_initialize(numpy_py: pathlib.Path,
         kernel_args = info.get("input_args") or []
         array_args = set(info.get("array_args") or [])
         kernel_array_args = [a for a in kernel_args if a in array_args]
-        for kernel_name, ret_name in zip(kernel_array_args, return_targets):
-            if ret_name in dtypes and kernel_name not in dtypes:
-                dtypes[kernel_name] = dtypes[ret_name]
+        if len(kernel_array_args) == len(return_targets):
+            for kernel_name, ret_name in zip(kernel_array_args, return_targets):
+                if ret_name in dtypes and kernel_name not in dtypes:
+                    dtypes[kernel_name] = dtypes[ret_name]
     return dtypes
 
 
