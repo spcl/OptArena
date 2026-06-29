@@ -164,12 +164,37 @@ def static_checks(root: Path) -> list[str]:
     return violations
 
 
+def _config_ships_secret(config_path: Path) -> bool:
+    """True if a shipped ``config.yaml`` carries a populated ``seeds.secret_shape``
+    (the judge-only timed-shape seed of ``perf.mode=secret_1shape``). A cheap line
+    scan -- no yaml dependency -- treating ``null``/``~``/empty as redacted."""
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0]
+        if "secret_shape" in line and ":" in line:
+            value = line.split(":", 1)[1].strip()
+            if value and value.lower() not in ("null", "~", "''", '""'):
+                return True
+    return False
+
+
 def check_built_dir(target: Path, violations: list[str]) -> None:
-    """(c) No hidden_tests path may exist under an exported image filesystem."""
+    """(c) No hidden_tests path -- and no populated judge-only ``seeds.secret_shape``
+    -- may exist under an exported AGENT image filesystem. The secret timed-shape
+    seed is judge-only (the agent must not be able to special-case the shape it is
+    timed on); an agent image that ships it is a firewall violation, exactly as the
+    hidden tests are."""
     for dirpath, dirnames, filenames in os.walk(target):
         for name in list(dirnames) + list(filenames):
             if name == HIDDEN_DIRNAME:
                 violations.append(f"built image contains hidden tests: {Path(dirpath) / name}")
+        for name in filenames:
+            if name == "config.yaml" and _config_ships_secret(Path(dirpath) / name):
+                violations.append(f"built agent image ships a populated seeds.secret_shape "
+                                  f"(judge-only): {Path(dirpath) / name}")
 
 
 def check_built_image(image: str, violations: list[str]) -> None:

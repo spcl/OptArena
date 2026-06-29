@@ -155,3 +155,30 @@ def test_built_dir_mode_clean_when_no_hidden_tests():
         (clean_fs / "run_benchmark.py").write_text("# app\n", encoding="utf-8")
         rc = guard.main(["--root", str(root), "--built", str(root / "image_fs")])
         assert rc == 0
+
+
+def test_built_dir_mode_flags_populated_secret_shape():
+    guard = load_guard()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".dockerignore").write_text(f"{HIDDEN_REL_PATH}/\n", encoding="utf-8")
+        # An exported AGENT image filesystem that baked a config.yaml carrying the
+        # judge-only secret timed-shape seed -> firewall violation.
+        app = root / "image_fs" / "opt" / "optarena" / "optarena"
+        app.mkdir(parents=True)
+        (app / "config.yaml").write_text("seeds:\n  secret_shape: 31337\n", encoding="utf-8")
+        rc = guard.main(["--root", str(root), "--built", str(root / "image_fs")])
+        assert rc == 1
+
+
+def test_built_dir_mode_allows_redacted_secret_shape():
+    guard = load_guard()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".dockerignore").write_text(f"{HIDDEN_REL_PATH}/\n", encoding="utf-8")
+        app = root / "image_fs" / "opt" / "optarena" / "optarena"
+        app.mkdir(parents=True)
+        # A null/redacted secret in the agent image is fine.
+        (app / "config.yaml").write_text("seeds:\n  secret_shape: null\n", encoding="utf-8")
+        rc = guard.main(["--root", str(root), "--built", str(root / "image_fs")])
+        assert rc == 0

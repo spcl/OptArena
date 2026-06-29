@@ -35,7 +35,8 @@ class Benchmark(object):
                  datatype: Optional[str] = None,
                  variant: Optional[str] = None,
                  fuzz_iteration: Optional[int] = None,
-                 input_seed: Optional[int] = None) -> Dict[str, Any]:
+                 input_seed: Optional[int] = None,
+                 params_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """ Initializes the benchmark data.
 
         :param preset: The data-size preset (S, M, L, XL, fuzzed).
@@ -56,16 +57,28 @@ class Benchmark(object):
             racing on a process-global env override).
         """
 
-        cache_key = (preset, variant, fuzz_iteration, input_seed)
+        cache_key = (preset, variant, fuzz_iteration, input_seed,
+                     repr(sorted(params_override.items())) if params_override else None)
         if cache_key in self.bdata.keys():
             return self.bdata[cache_key]
 
         # 1. Create data dictionary
         data = dict()
-        # 2. Add parameters. The ``fuzzed`` preset samples concrete sizes from
-        #    per-param ranges; every other preset reads its fixed scalars.
-        if preset == fuzz.FUZZED_PRESET:
-            parameters = fuzz.sample_params(self.info["parameters"], fuzz_iteration or 0)
+        # 2. Add parameters. An explicit ``params_override`` (a pre-resolved
+        #    config x shape sample from the perf protocol) is used verbatim;
+        #    else the ``fuzzed`` preset samples concrete sizes from per-param
+        #    ranges; every other preset reads its fixed scalars.
+        if params_override is not None:
+            parameters = dict(params_override)
+        elif preset == fuzz.FUZZED_PRESET:
+            # A micro-app declares its config space + residual constraints under the
+            # manifest ``fuzz`` block; thread them so the draw spans configs x shapes
+            # (a micro-kernel omits both and resolves shapes only, exactly as before).
+            fz = self.info.get("fuzz") or {}
+            parameters = fuzz.sample_params(self.info["parameters"],
+                                            fuzz_iteration or 0,
+                                            configs=fz.get("configs"),
+                                            constraints=fz.get("constraints"))
         else:
             if preset not in self.info["parameters"].keys():
                 raise NotImplementedError("{b} doesn't have a {p} preset.".format(b=self.bname, p=preset))

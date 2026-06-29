@@ -26,14 +26,24 @@ import ctypes
 import json
 import os
 import pathlib
+import select
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Dict, List
 
 import numpy as np
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
+
+#: Hard wall-clock cap (seconds) on the forked jax child. JAX traces Python loops,
+#: so a kernel with a data-dependent / unbounded loop can hang tracing forever; the
+#: parent kills the child past this deadline and records ``FAIL:timeout:jax`` for the
+#: jax backend ONLY -- so one un-traceable kernel cannot stall the whole e2e sweep
+#: (the run is serial + un-timed in CI). Env-overridable for slow machines.
+JAX_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_JAX_FORK_TIMEOUT_S", "180"))
 # All translators live under one unified src tree (numpyto_c / numpyto_fortran /
 # numpyto_common / ...). SRC and FSRC are kept as aliases of it.
 SRC = FSRC = REPO / "optarena" / "NumpyTranslators" / "src"
@@ -716,8 +726,23 @@ def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_
         finally:
             os._exit(0)
     os.close(w)  # parent (stays jax-free)
+    # Bound the wait: a kernel JAX cannot trace (data-dependent / unbounded loop) hangs
+    # the child forever, so poll the pipe against a deadline and SIGKILL on timeout --
+    # otherwise an un-timed CI run would stall the whole e2e job on one kernel.
+    deadline = time.monotonic() + JAX_FORK_TIMEOUT_S
     chunks = []
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            os.close(r)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(pid, 0)
+            return "FAIL:timeout:jax"
+        if not select.select([r], [], [], remaining)[0]:
+            continue  # nothing yet -> re-check the deadline
         b = os.read(r, 4096)
         if not b:
             break

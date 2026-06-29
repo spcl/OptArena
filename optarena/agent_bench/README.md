@@ -31,7 +31,13 @@ Task ──▶ build_prompt ──▶ Agent.solve ──▶ Submission ──▶
   Compile/link commands come only from the flag matrix (`compilers.yaml` → `flags.py`); an
   agent can never smuggle its own `-O3`.
 - **Scoring** (`scoring.py`) — build → run → compare to NumPy (rtol/atol) → time vs baseline.
-  A build/run failure is a zero-score row, never a silent skip.
+  A build/run failure is a zero-score row, never a silent skip. `score_cells` evaluates many
+  `(config, shape)` cells on a **single** build (the configs×shapes protocol).
+- **Metric** (`metric.py`) — the suite-level **OptArena Score**: a two-level geomean over each
+  kernel's configurations × shapes (correctness over configs × edge∪fuzzed shapes graded vs
+  NumPy; performance over configs × *large* shapes graded vs the fast compiled C reference).
+  Per task `S_i = clamp(geomean speed-up, 1, c_max)` if solved else `1.0`; OptArena Score =
+  `geomean_i S_i`. `timing.py` is the pluggable timing backend (`min_of_k` / `mannwhitney_delta`).
 
 ## Benchmark categories
 

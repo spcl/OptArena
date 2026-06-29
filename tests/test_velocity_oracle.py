@@ -20,7 +20,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import macrokernel_oracle as mo
+from tests import macrokernel_oracle as mo
 
 _HERE = pathlib.Path(__file__).resolve().parent
 _BENCH = _HERE.parent / "optarena" / "benchmarks" / "hpc" / "unstructured_grids" / "velocity_tendencies"
