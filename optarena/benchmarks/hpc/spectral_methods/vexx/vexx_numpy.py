@@ -62,40 +62,6 @@ def _coulomb_fac(g, xk, xkq, ngm, tpiba2, exxdiv, eps_qdiv,
     return fac
 
 
-def vexx(psi, hpsi, exxbuff, x_occupation, coulomb_fac, nl,
-         exxalfa, omega, nqs, npw, m, nbnd, nnr, n1, n2, n3):
-    """Compact (grouped-argument) reference of the collinear Fock exchange --
-    physically-correct FFT convention, validated by Hermiticity + the no-op
-    identity (``test_reference.py``). Kept as the concise self-contained form for
-    the property tests; :func:`vexx_all_paths` is the full multi-config port."""
-    grid = (n1, n2, n3)
-    omega_inv = 1.0 / omega
-    nqs_inv = 1.0 / nqs
-
-    def invfft(cg):
-        return np.fft.ifftn(cg.reshape(grid + (-1,)), axes=(0, 1, 2)).reshape(nnr, -1)
-
-    def fwfft(fr):
-        return np.fft.fftn(fr.reshape(grid + (-1,)), axes=(0, 1, 2)).reshape(nnr, -1)
-
-    facb = np.zeros(nnr)
-    facb[nl] = coulomb_fac
-
-    # hpsi accumulates in place == the Fortran's ``hpsi_d = SOURCE=hpsi`` buffer.
-    for i in range(m):
-        tg = np.zeros((nnr, 1), dtype=np.complex128)
-        tg[nl, 0] = psi[:, i]
-        pr = invfft(tg)[:, 0]
-        rhoc = np.conj(exxbuff) * pr[:, None] * omega_inv
-        rhoc = fwfft(rhoc)
-        vc = facb[:, None] * rhoc * (x_occupation * nqs_inv)[None, :]
-        vc = invfft(vc)
-        result = np.sum(vc * exxbuff, axis=1)
-        rg = fwfft(result[:, None])[:, 0]
-        hpsi[:, i] += -exxalfa * rg[nl]
-    return hpsi
-
-
 # ----------------------------------------------------------------------------
 # US / PAW augmentation helpers (faithful ports of the Fortran subroutines).
 # All operate on a flat (nrxxs,) ``rhoc`` / ``vc`` and the per-atom beta-pair
@@ -378,7 +344,7 @@ def vexx_all_paths(
     return hpsi
 
 
-def vexx_bp_k_gpu(
+def vexx(
         psi, hpsi, exxbuff, x_occupation, coulomb_fac, dfftt_nl, igk_exx,
         index_xk, index_xkq, xk, xkq_collect, g, ibands, nibands, all_start,
         all_end, egrp_pairs, iexx_istart, exxalfa, omega, tpiba2, exxdiv,

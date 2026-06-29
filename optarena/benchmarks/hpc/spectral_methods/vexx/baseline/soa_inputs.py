@@ -128,7 +128,7 @@ if __name__ == "__main__":
     kw, compact = build_soa()
     hpsi0 = kw["hpsi"].copy()
     # numpy SoA reference run
-    out = ref_mod.vexx_bp_k_gpu(**kw)
+    out = ref_mod.vexx(**kw)
     dV = out - hpsi0
     print("SoA: ||hpsi change|| =", float(np.linalg.norm(dV)))
     print("SoA: any nan?", bool(np.isnan(dV).any()))
@@ -136,7 +136,7 @@ if __name__ == "__main__":
     # Hermiticity of the SoA Vx (apply to zero accumulator).
     kw2, _ = build_soa()
     kw2["hpsi"] = np.zeros_like(kw2["psi"])
-    Vx = ref_mod.vexx_bp_k_gpu(**kw2)
+    Vx = ref_mod.vexx(**kw2)
     mtx = kw2["psi"].conj().T @ Vx
     herm = np.abs(mtx - mtx.conj().T).max() / (np.abs(mtx).max() + 1e-300)
     print("SoA: ||Vx|| =", float(np.linalg.norm(Vx)), " Hermiticity =", herm)

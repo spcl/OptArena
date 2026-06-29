@@ -178,7 +178,7 @@ def test_soa_cpp_active_path_reported():
     kw, _ = scc.SI.build_soa(ngrid=8, nbnd=3, m=5)
     hpsi0 = kw["hpsi"].copy()
     kw_np = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in kw.items()}
-    hpsi_np = scc.SI.ref_mod.vexx_bp_k_gpu(**kw_np)
+    hpsi_np = scc.SI.ref_mod.vexx(**kw_np)
     kw_cpp = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in kw.items()}
     kw_cpp["hpsi"] = hpsi0.copy()
     hpsi_cpp = scc.run_cpp(kw_cpp)
