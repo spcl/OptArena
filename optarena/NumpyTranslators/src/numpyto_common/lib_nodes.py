@@ -687,6 +687,15 @@ def _is_integer_expr(node: ast.AST, local_dtypes: Dict[str, str],
         if dt is not None:
             return dt.startswith(("int", "uint"))
         return node.id not in array_names      # untagged array -> float default
+    if isinstance(node, ast.Subscript):
+        # An element / gather of an integer-typed array is itself integer
+        # (``dfftt_nl[gki]``, ``igk_exx[:n, k]`` -- the QE index tables). The
+        # base's tag decides; an untagged base is the float default.
+        base = node.value
+        if isinstance(base, ast.Name):
+            dt = local_dtypes.get(base.id)
+            return dt is not None and dt.startswith(("int", "uint"))
+        return _is_integer_expr(base, local_dtypes, array_names)
     if isinstance(node, ast.BinOp):
         if not isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Mod,
                                     ast.FloorDiv)):

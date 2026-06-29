@@ -434,6 +434,16 @@ class _FortranBodyEmitter(BaseEmitter):
                             f"{indent}    deallocate({t})\n"
                             f"{indent}    allocate({t}({dims}))\n"
                             f"{indent}end if")
+                # A ``__reassign__`` marker -- the lowering's no-op sentinel for a
+                # whole-array reassignment ``X = f(...)`` immediately followed by a
+                # per-element loop that FULLY overwrites X -- must NOT be re-zeroed:
+                # the loop may READ the old X (self-referential ``qq = qq + qd*qd``,
+                # bicgstab ``p = r + beta*(p - omega*v)``), and re-zeroing here
+                # corrupts it. (The C emitter already treats it as a no-op; only a
+                # GENUINE ``X = np.zeros(...)`` reset -- no sentinel -- zero-fills.)
+                if any(isinstance(a, ast.Constant) and a.value == "__reassign__"
+                       for a in node.value.args):
+                    return ""
                 # A fixed-bound zeros/ones local (declared in the prelude)
                 # re-constructed here must be re-filled: Fortran does NOT
                 # zero arrays at declaration, and an in-loop ``X =
@@ -694,10 +704,30 @@ class _FortranBodyEmitter(BaseEmitter):
         if isinstance(node, ast.Call):
             return self._emit_call(node)
         if isinstance(node, ast.IfExp):
-            return (f"merge({self.emit_expr(node.body)}, "
-                    f"{self.emit_expr(node.orelse)}, "
+            # merge() is strict on TYPE *and* KIND: an integer-literal branch
+            # defaults to int32 while a paired int64 symbol/var is int64
+            # (``ending = m if negrp == 1 else 0``). Suffix a literal branch with
+            # its integer partner's kind so the two branches kind-match.
+            return (f"merge({self._emit_merge_branch(node.body, node.orelse)}, "
+                    f"{self._emit_merge_branch(node.orelse, node.body)}, "
                     f"{self.emit_expr(node.test)})")
         raise NotImplementedError(f"expression {type(node).__name__} (line {getattr(node, 'lineno', '?')})")
+
+    def _emit_merge_branch(self, branch: ast.AST, partner: ast.AST) -> str:
+        """Emit one ``merge`` branch, suffixing an integer literal with its
+        integer partner's KIND (so ``merge(m, 0, ...)`` becomes
+        ``merge(m, 0_c_int64_t, ...)`` and gfortran's same-kind rule holds)."""
+        if isinstance(branch, ast.Constant) and isinstance(branch.value, int) and not isinstance(branch.value, bool):
+            ktag = None
+            if isinstance(partner, ast.Name):
+                ktag = self._name_int_kind(partner.id)
+            elif (isinstance(partner, ast.Constant) and isinstance(partner.value, int)
+                  and not isinstance(partner.value, bool)):
+                ktag = "int64"
+            if ktag:
+                lit = f"{branch.value}_{self._int_kind_selector(ktag)}"
+                return f"({lit})" if branch.value < 0 else lit
+        return self.emit_expr(branch)
 
     def _emit_subscript(self, node: ast.Subscript) -> str:
         # Boolean-mask indexing ``arr[mask]`` -> Fortran ``PACK(arr,

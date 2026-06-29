@@ -614,6 +614,14 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
         literal / unary / binary expression over such; else ``None``."""
         if isinstance(v, ast.Constant) and isinstance(v.value, (int, float, complex)) and not isinstance(v.value, bool):
             return v.value
+        # ``np.pi`` / ``math.pi`` / ``np.e`` -- numeric module constants that a
+        # kernel folds into a derived module constant (vexx ``_FPI = 4.0*np.pi``).
+        # _MathRewriter only lowers these inside the kernel BODY (np.pi -> M_PI);
+        # at module-constant time they must fold to their value or the derived
+        # constant leaks as a bogus free scalar parameter.
+        if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name)
+                and v.value.id in ("np", "numpy", "math")):
+            return {"pi": 3.141592653589793, "e": 2.718281828459045, "tau": 6.283185307179586}.get(v.attr)
         if isinstance(v, ast.UnaryOp) and isinstance(v.op, (ast.USub, ast.UAdd)):
             x = _const_value(v.operand)
             if x is None:
@@ -2205,4 +2213,42 @@ def _names_used_as_int(tree: ast.AST) -> Set[str]:
             if isinstance(node.target, ast.Name):
                 int_uses.add(node.target.id)
             collect(node.value)
+        # Floor-division / modulo operands are integer (``njt = (... + jblock) //
+        # jblock`` -- jblock is the band-pair tile size, an int symbol).
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.FloorDiv, ast.Mod)):
+            collect(node.left)
+            collect(node.right)
+
+    # Transitive closure: a Name feeding an int-used local through PURE integer
+    # arithmetic is itself integer. ``buf = jbnd - all_start_tmp + iexx_start - 1``
+    # (buf later indexes ``exxbuff``) promotes its additive index offsets; the
+    # propagation is bounded to +/-/*///% / min / max / abs / int over Names and
+    # int literals so it never crosses a float divide or a transcendental call.
+    def _pure_int_arith(n: ast.AST) -> bool:
+        if isinstance(n, ast.Name):
+            return True
+        if isinstance(n, ast.Constant):
+            return isinstance(n.value, int) and not isinstance(n.value, bool)
+        if isinstance(n, ast.BinOp):
+            return (isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod))
+                    and _pure_int_arith(n.left) and _pure_int_arith(n.right))
+        if isinstance(n, ast.UnaryOp):
+            return isinstance(n.op, (ast.USub, ast.UAdd)) and _pure_int_arith(n.operand)
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id in ("min", "max", "abs", "int")):
+            return all(_pure_int_arith(a) for a in n.args)
+        return False
+
+    assigns = [(node.targets[0].id, node.value) for node in ast.walk(tree)
+               if isinstance(node, ast.Assign) and len(node.targets) == 1
+               and isinstance(node.targets[0], ast.Name)]
+    changed = True
+    while changed:
+        changed = False
+        for name, rhs in assigns:
+            if name in int_uses and _pure_int_arith(rhs):
+                before = len(int_uses)
+                collect(rhs)
+                if len(int_uses) > before:
+                    changed = True
     return int_uses

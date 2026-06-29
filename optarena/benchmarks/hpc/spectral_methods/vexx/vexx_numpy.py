@@ -360,13 +360,19 @@ def vexx(
     nqs_inv = 1.0 / nqs
     eg = my_egrp_id
 
-    grid = (n1, n2, n3)
-
+    # FFT helpers use the translator's flat-grid idiom: a 1-D (nrxxs,) buffer is
+    # reshaped to the (n1, n2, n3) FFT grid (the trailing ``-1`` batch column is
+    # 1 here), transformed over the three grid axes, then flattened back. The
+    # flat<->grid mapping is C-order, MATCHING the C-order ``ravel_multi_index``
+    # the index tables (``dfftt_nl``/``igk_exx``) are built with -- so the whole
+    # kernel is C-order self-consistent (the asserted physics property,
+    # Hermiticity of the Fock operator, is grid-order agnostic) and the
+    # reshape->fftn->reshape chain lowers via ``_FftGridReshapeRewriter``.
     def invfft(col):                       # G/recip -> real space (normalised)
-        return np.fft.ifftn(col.reshape(grid, order="F"), axes=(0, 1, 2)).reshape(nrxxs, order="F")
+        return np.fft.ifftn(col.reshape((n1, n2, n3, -1)), axes=(0, 1, 2)).reshape(nrxxs, -1)[:, 0]
 
     def fwfft(col):                        # real -> G/recip space (unnormalised)
-        return np.fft.fftn(col.reshape(grid, order="F"), axes=(0, 1, 2)).reshape(nrxxs, order="F")
+        return np.fft.fftn(col.reshape((n1, n2, n3, -1)), axes=(0, 1, 2)).reshape(nrxxs, -1)[:, 0]
 
     nl = dfftt_nl[:ngm] - 1                 # G-sphere -> FFT grid (0-based)
     gki = igk_exx[:n, current_k - 1] - 1    # wavefunction G-index -> G-sphere
@@ -399,10 +405,21 @@ def vexx(
         ikq = int(index_xkq[current_ik - 1, iq - 1])
         ik = int(index_xk[ikq - 1])
         xkq = xkq_collect[:, ikq - 1]
-        fac = _coulomb_fac(g, xk[:, current_k - 1], xkq, ngm, tpiba2, exxdiv,
-                           eps_qdiv, gau_scrlen, erf_scrlen, erfc_scrlen, yukawa)
+        # Bare Coulomb factor v(G) = e^2 * 4pi / |q + G|^2 scattered onto the FFT
+        # grid (``g2_convolution``, collinear NC bare-Coulomb path: the Gaussian/
+        # erf/erfc screening regimes are ``vexx_all_paths``). The G -> 0 singular
+        # term is ``-exxdiv``. Vectorised over the G-sphere (the parallel axis) --
+        # only the 3 spatial components loop, mirroring the QE q-vector sum -- so
+        # jax lowers it parallel while C/Fortran/numba sequentialise it.
+        qq = np.zeros(ngm)
+        for d in range(3):
+            qd = xk[d, current_k - 1] - xkq[d] + g[d, :ngm]
+            qq = qq + qd * qd
+        qq = qq * tpiba2
+        qqn = np.where(qq > eps_qdiv, qq, 1.0)               # guard the divide
+        fac = np.where(qq > eps_qdiv, _E2 * _FPI / qqn, -exxdiv)
         facb = np.zeros(nrxxs)
-        facb[nl] = fac                      # Coulomb factor on the FFT grid
+        facb[nl] = fac                                       # scatter onto the grid
 
         njt = (all_end_tmp - all_start_tmp + jblock) // jblock
         for ijt in range(1, njt + 1):
@@ -445,7 +462,8 @@ def vexx(
         ibnd = int(ibands[ii, eg])
         if ibnd == 0 or ibnd > m:
             continue
-        rg = fwfft(result[:, ii])
+        rcol = result[:, ii]                 # bare 1-D buffer for the FFT idiom
+        rg = fwfft(rcol)
         big_result[:n, ibnd - 1] -= exxalfa * rg[nlg]
 
     istart = int(iexx_istart[eg])

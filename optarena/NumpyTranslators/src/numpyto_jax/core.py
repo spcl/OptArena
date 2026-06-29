@@ -126,6 +126,14 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
 
         def visit_Call(self, node):
             self.generic_visit(node)
+            # jnp array constructors don't accept numpy's ``order=`` (C/F memory
+            # layout) -- jax arrays have no user-facing layout distinction. Drop
+            # it from constructors only (jnp.reshape DOES honour ``order=``, so it
+            # is left intact). ``np.zeros(s, dtype=.., order='F')`` -> ``jnp.zeros(s, dtype=..)``.
+            if (isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("zeros", "ones", "empty", "full", "zeros_like",
+                                           "ones_like", "empty_like", "full_like")):
+                node.keywords = [k for k in node.keywords if k.arg != "order"]
             # Python builtins ``max``/``min`` over two (traced) arrays must use
             # the elementwise jnp ufuncs.
             if isinstance(node.func, ast.Name) and node.func.id in ("max", "min") and len(node.args) == 2:
@@ -802,7 +810,37 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == func_name), None)
     if fn is None:
         raise EmitError(f"function {func_name!r} not found")
-    helpers = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name not in (func_name, "initialize")]
+    # Substitute whole-array ``local = param`` aliases with the param itself
+    # (ICON velocity_tendencies aliases ~40 params: ``vt = p_diag_vt``). In
+    # functional jax an in-place write through the alias rebinds the LOCAL, so
+    # the param's output would never be returned; folding the alias makes the
+    # mutation land on the param so it is recognised as an in-place output --
+    # mirroring the C/Fortran frontend's _SubstituteParamAliases.
+    from numpyto_common.frontend import _SubstituteParamAliases
+    _alias = _SubstituteParamAliases([a.arg for a in fn.args.args])
+    _alias.collect(fn)
+    _alias.visit(fn)
+    ast.fix_missing_locations(fn)
+    # Emit ONLY the helpers REACHABLE (transitively called) from the target --
+    # not every module-level function. A module may co-locate sibling kernels the
+    # target never calls (vexx's full-config ``vexx_all_paths`` + its in-place US/
+    # PAW helpers); emitting those would choke on constructs jax can't express
+    # even though they are irrelevant to ``func_name``.
+    _defined = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+    def _called_names(node: ast.AST) -> set:
+        return {c.func.id for c in ast.walk(node)
+                if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in _defined}
+
+    _reachable: set = set()
+    _frontier = _called_names(fn)
+    while _frontier:
+        nm = _frontier.pop()
+        if nm in _reachable or nm in (func_name, "initialize"):
+            continue
+        _reachable.add(nm)
+        _frontier |= _called_names(_defined[nm])
+    helpers = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in _reachable]
     helper_mut = _helper_mutation_map(helpers)
 
     head = [
@@ -899,7 +937,7 @@ def _emit_function(fn: ast.FunctionDef,
     _dynamic_window_slices(fn)
     _reject_dynamic_slices(fn)
 
-    returns = [s for s in ast.walk(fn) if isinstance(s, ast.Return) and s.value]
+    returns = _own_returns(fn)
     mutated = _mutated_params(fn, params)
     live_out: Set[str] = set(params)
 
@@ -925,7 +963,7 @@ def _emit_function_eager(fn: ast.FunctionDef, decorate: Optional[str]) -> List[s
     _expand_tuple_targets(fn)
     _expand_chained_assigns(fn)
     params = [a.arg for a in fn.args.args]
-    returns = [s for s in ast.walk(fn) if isinstance(s, ast.Return) and s.value]
+    returns = _own_returns(fn)
     mutated = _mutated_params(fn, params)
     if returns and mutated:
         _augment_returns(fn, mutated)
@@ -1644,6 +1682,26 @@ def _augment_returns(fn: ast.FunctionDef, mutated: List[str]) -> None:
             stmt.value = ast.Tuple(
                 elts=cur + [ast.Name(id=m, ctx=ast.Load()) for m in extra],
                 ctx=ast.Load())
+
+
+def _own_returns(fn: ast.FunctionDef) -> List[ast.Return]:
+    """``Return`` statements belonging to ``fn`` itself -- NOT to a nested helper
+    def (a plain ``ast.walk`` descends into nested ``def gat(...): return ...``
+    helpers, e.g. velocity_tendencies' gather shorthand, so the kernel would look
+    like it already returns and the in-place output augmentation would be skipped,
+    leaving the mutated outputs unreturned)."""
+    out: List[ast.Return] = []
+
+    def _visit(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue  # a nested scope -- its returns are its own
+            if isinstance(child, ast.Return) and child.value:
+                out.append(child)
+            _visit(child)
+
+    _visit(fn)
+    return out
 
 
 def _mutated_params(fn: ast.FunctionDef, params) -> List[str]:

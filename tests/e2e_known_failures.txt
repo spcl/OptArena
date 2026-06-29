@@ -4,9 +4,11 @@
 #
 # Remaining gaps (deep, in-progress): fv3_dycore (emits after the None-fold but
 # the dycore lowering is numerically off on c/cpp and the fortran variant fails
-# to compile), vexx (FFT + runtime-optional-None + slice-to-scalar), lulesh
-# (N-D partial-slice stores + np.add.at scatter). The stencils + both seissol
-# batched-GEMM/tensor-contraction kernels now pass all backends (pruned).
+# to compile), lulesh (N-D partial-slice stores + np.add.at scatter). The
+# stencils, both seissol batched-GEMM/tensor-contraction kernels, and vexx (the
+# SoA collinear-NC Fock-exchange path: 3-D FFT via the flat-grid reshape idiom)
+# now pass c/cpp/fortran/numba/jax (pythran skips: its FFT template instantiation
+# times out -- an accepted compile limit, not a translation bug) -- pruned.
 fv3_dycore::c
 fv3_dycore::cpp
 fv3_dycore::fortran
@@ -15,6 +17,3 @@ lulesh::cpp
 lulesh::fortran
 lulesh::numba
 lulesh::pythran
-vexx::c
-vexx::cpp
-vexx::fortran
