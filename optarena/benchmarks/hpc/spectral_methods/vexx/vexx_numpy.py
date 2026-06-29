@@ -402,12 +402,6 @@ def vexx_bp_k_gpu(
     def fwfft(col):                        # real -> G/recip space (unnormalised)
         return np.fft.fftn(col.reshape(grid, order="F"), axes=(0, 1, 2)).reshape(nrxxs, order="F")
 
-    def fwfft2(arr):                       # column-wise forward (per occupied orbital)
-        return np.stack([fwfft(arr[:, j]) for j in range(arr.shape[1])], axis=1)
-
-    def invfft2(arr):
-        return np.stack([invfft(arr[:, j]) for j in range(arr.shape[1])], axis=1)
-
     nl = dfftt_nl[:ngm] - 1                 # G-sphere -> FFT grid (0-based)
     gki = igk_exx[:n, current_k - 1] - 1    # wavefunction G-index -> G-sphere
     nlg = dfftt_nl[gki] - 1                 # wavefunction G -> FFT grid
@@ -427,6 +421,11 @@ def vexx_bp_k_gpu(
     big_result = np.zeros((n * npol, m), dtype=np.complex128, order="F")
 
     # ---- main loop over q-points ------------------------------------------
+    # Dense SoA form: one occupied orbital per inner iteration (matching the
+    # dace-fortran-generated C++ loop nest), so there are no ragged Python lists
+    # / dynamic ``np.arange`` slices / ``np.stack`` for the translator -- the
+    # occupied-orbital range [jmin, jmax] paired with ``ibnd`` is found by a
+    # fixed ``max_pairs`` scan (min/max accumulation) instead of a list-comp.
     wegrp = (1 + eg - 1) % negrp + 1        # negrp==1 -> 1
     all_start_tmp = int(all_start[wegrp - 1])
     all_end_tmp = int(all_end[wegrp - 1])
@@ -447,23 +446,33 @@ def vexx_bp_k_gpu(
                 ibnd = int(ibands[ii, eg])
                 if ibnd == 0 or ibnd > m:
                     continue
-                # occupied-orbital range paired with this band (egrp_pairs)
-                js = [int(egrp_pairs[1, ip, eg]) for ip in range(max_pairs)
-                      if int(egrp_pairs[0, ip, eg]) == ibnd]
-                if not js:
+                # occupied-orbital range paired with this band: min/max over the
+                # fixed egrp_pairs table (replaces the dynamic ``js`` list-comp).
+                jmin = 0
+                jmax = -1
+                for ip in range(max_pairs):
+                    if int(egrp_pairs[0, ip, eg]) == ibnd:
+                        jv = int(egrp_pairs[1, ip, eg])
+                        if jmax < 0 or jv < jmin:
+                            jmin = jv
+                        if jv > jmax:
+                            jmax = jv
+                if jmax < 0:
                     continue
-                jstart = max(min(js), jblock_start)
-                jend = min(max(js), jblock_end)
+                jstart = max(jmin, jblock_start)
+                jend = min(jmax, jblock_end)
                 if jend < jstart:
                     continue
-                jb = np.arange(jstart, jend + 1)
-                buf = jb - all_start_tmp + iexx_start - 1          # exxbuff col (0-based)
-                phi = exxbuff[:, buf, ikq - 1]                      # (nrxxs, jcount)
-                rhoc = np.conj(phi) * temppsic[:, ii][:, None] * omega_inv
-                rhoc = fwfft2(rhoc)
-                vc = facb[:, None] * rhoc * (x_occupation[jb - 1, ik - 1] * nqs_inv)[None, :]
-                vc = invfft2(vc)
-                result[:, ii] += np.sum(vc * phi, axis=1)
+                for jbnd in range(jstart, jend + 1):
+                    buf = jbnd - all_start_tmp + iexx_start - 1     # exxbuff col (0-based)
+                    phi = exxbuff[:, buf, ikq - 1]                  # (nrxxs,)
+                    # rhoc = conj(phi) * psi_i / omega ; -> G-space
+                    rhoc = np.conj(phi) * temppsic[:, ii] * omega_inv
+                    rhocg = fwfft(rhoc)
+                    # vc = facb * rhocg * occ / nqs ; -> real space
+                    vc = facb * rhocg * (x_occupation[jbnd - 1, ik - 1] * nqs_inv)
+                    vcr = invfft(vc)
+                    result[:, ii] += vcr * phi
 
     # ---- finalize: result(r) -> G-sphere, accumulate onto hpsi ------------
     for ii in range(my_n):
