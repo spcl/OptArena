@@ -11,8 +11,8 @@ import pytest
 
 from numpyto_common.lib_nodes import (NP_CALL_EXPANDERS, _matmul_result_shape, _parse_einsum_subscripts, expand_cumprod,
                                       expand_cumsum, expand_diagonal, expand_einsum, expand_inner, expand_median,
-                                      expand_roll, expand_tensordot, expand_trace, expand_tril, expand_triu,
-                                      expand_vdot)
+                                      expand_reshape, expand_roll, expand_tensordot, expand_trace, expand_tril,
+                                      expand_triu, expand_vdot)
 from numpyto_common.lowering import (_EllipsisExpander, _MatmulCallRewriter, _ReshapeMethodRewriter)
 
 
@@ -531,3 +531,42 @@ def test_contraction_indexing_ops_e2e(label, src, func, ins, out_shape, syms, sh
             inputs[nm] = rng.random(sh)
     status = no.run_op(src, func, inputs, {"out": out_shape}, syms, shapes=shapes, backends=_NATIVE)
     _assert_native_ok(status, label)
+
+
+# --------------------------------------------------------------------------- #
+# Reshape order= (C vs F): expand_reshape must honour column-major reshape so   #
+# QE vexx_k's order="F" FFT band-pair reshapes lower correctly.                #
+# --------------------------------------------------------------------------- #
+
+
+def _reshape_src_index(order):
+    """Lower ``out = np.reshape(A, (P, Q), order=order)`` for A:(N,), out:(P,Q)
+    and return the unparsed source subscript expression A[...]."""
+    target = ast.Name(id="out", ctx=ast.Store())
+    args = [_name("A")]
+    shape_table = {"A": ("N",), "out": ("P", "Q")}
+    kwargs = ([ast.keyword(arg="order", value=ast.Constant(value=order))]
+              if order else None)
+    stmts = expand_reshape(target, args, shape_table, kwargs=kwargs)
+    txt = _unparse(stmts)
+    # The source read is ``A[<expr>]``; grab <expr>.
+    return txt.split("A[", 1)[1].split("]", 1)[0]
+
+
+def test_reshape_c_order_row_major_index():
+    # C order: flat = r0 * Q + r1 -> A[(__r0) * Q + __r1]; Q scales the row.
+    idx = _reshape_src_index("C")
+    assert "* Q" in idx or ") * (Q)" in idx
+    assert "* P" not in idx
+
+
+def test_reshape_f_order_column_major_index():
+    # F order: flat = r0 + r1 * P -> A[__r0 + (__r1) * P]; P scales the column.
+    idx = _reshape_src_index("F")
+    assert "* P" in idx or ") * (P)" in idx
+    assert "* Q" not in idx
+
+
+def test_reshape_default_is_c_order():
+    # No order= kwarg defaults to C (matches numpy + prior behaviour).
+    assert _reshape_src_index(None) == _reshape_src_index("C")

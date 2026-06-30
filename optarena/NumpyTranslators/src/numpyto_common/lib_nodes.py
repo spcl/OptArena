@@ -3181,7 +3181,7 @@ def expand_tril(target: ast.expr, args: List[ast.expr],
 
 
 def expand_reshape(target: ast.expr, args: List[ast.expr],
-                   shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
+                   shape_table: Dict[str, Tuple[str, ...]], kwargs=None) -> List[ast.stmt]:
     """``out = np.reshape(A, (m, n, ...))`` -> rank-aware loop-nest copy.
 
     Emits a loop nest over the **target** shape and computes the matching
@@ -3189,6 +3189,11 @@ def expand_reshape(target: ast.expr, args: List[ast.expr],
     both C (which flat-indexes anyway) and Fortran (which type-checks
     rank). For the common case where source and target share rank, the
     loop nest degenerates to a per-axis copy with identical indices.
+
+    ``order="F"`` (numpy column-major ravel/fill) is honoured: the target flat
+    index and the source multi-index are both computed column-major, so a
+    Fortran-order reshape lowers to the correct permutation (QE vexx_k uses
+    ``order="F"`` reshapes throughout its FFT band-pair convolution).
     """
     if not args or not isinstance(args[0], ast.Name):
         raise NotImplementedError("np.reshape needs Name first arg")
@@ -3215,6 +3220,16 @@ def expand_reshape(target: ast.expr, args: List[ast.expr],
     src_rank = len(a_shape)
     tgt_iters = [f"__r{i}" for i in range(tgt_rank)]
 
+    # Memory order: numpy default is C (row-major); ``order="F"`` ravels the
+    # source AND fills the target column-major. The element at flat position k of
+    # one maps to flat position k of the other in the SAME order, so the target
+    # flat index and the source multi-index are both computed in ``order``.
+    order = "C"
+    for kw in (kwargs or []):
+        if getattr(kw, "arg", None) == "order" and isinstance(kw.value, ast.Constant):
+            order = str(kw.value.value).upper()
+    fortran = order == "F"
+
     def _mul(*toks: str) -> str:
         toks = [t for t in toks if t and t != "1"]
         if not toks:
@@ -3223,21 +3238,23 @@ def expand_reshape(target: ast.expr, args: List[ast.expr],
             return toks[0]
         return "(" + " * ".join(f"({t})" for t in toks) + ")"
 
-    # Flat index of the CURRENT target iteration (row-major / C order).
-    # flat = sum(tgt_iters[i] * prod(tgt_shape[i+1:]))
+    def _stride(shape, i: int) -> str:
+        # Stride of axis ``i`` = product of the FASTER-varying axes: the trailing
+        # axes in C order, the leading axes in F order.
+        faster = list(shape[:i]) if fortran else list(shape[i + 1:])
+        return _mul(*faster) if faster else "1"
+
+    # Flat index of the current target iteration in ``order``.
     flat_parts: List[str] = []
     for i, it in enumerate(tgt_iters):
-        suffix = list(tgt_shape[i + 1:])
-        stride = _mul(*suffix) if suffix else "1"
-        if stride == "1":
-            flat_parts.append(it)
-        else:
-            flat_parts.append(f"({it}) * {stride}")
+        stride = _stride(tgt_shape, i)
+        flat_parts.append(it if stride == "1" else f"({it}) * {stride}")
     flat_expr = " + ".join(flat_parts) if flat_parts else "0"
     flat_name_node = ast.parse(flat_expr, mode="eval").body
 
-    # Build source multi-index from the flat index via div/mod on
-    # source shape strides (also row-major).
+    # Decode the source multi-index from the flat index via div/mod on the source
+    # strides (same ``order``). The MOST-major axis (largest stride: ``i == 0`` in
+    # C, ``i == src_rank - 1`` in F) needs no modulo.
     src_axes: List[ast.expr] = []
     for i in range(src_rank):
         # A size-1 source axis indexes to a constant 0; emitting the literal
@@ -3247,16 +3264,10 @@ def expand_reshape(target: ast.expr, args: List[ast.expr],
         if str(a_shape[i]) == "1":
             src_axes.append(ast.Constant(value=0))
             continue
-        suffix = list(a_shape[i + 1:])
-        stride = _mul(*suffix) if suffix else "1"
-        # ax_i = (flat / stride) % src_shape[i]  -- the %src_shape[i]
-        # is omitted on the outermost axis (i == 0) where it's a no-op
-        # and would re-trigger the div-by-zero corner cases.
-        if stride == "1":
-            ax_expr = flat_expr
-        else:
-            ax_expr = f"(({flat_expr}) / ({stride}))"
-        if i > 0:
+        stride = _stride(a_shape, i)
+        ax_expr = flat_expr if stride == "1" else f"(({flat_expr}) / ({stride}))"
+        is_major = (i == src_rank - 1) if fortran else (i == 0)
+        if not is_major:
             ax_expr = f"(({ax_expr}) % ({a_shape[i]}))"
         src_axes.append(ast.parse(ax_expr, mode="eval").body)
 

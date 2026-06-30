@@ -250,9 +250,12 @@ class _ReshapeMethodRewriter(ast.NodeTransformer):
         if matched is None:
             return node
         base, elts = matched
+        # Preserve ``order=`` (C/F) so expand_reshape can honour a column-major
+        # reshape; every other kwarg is dropped (the method form has none else).
+        keep = [kw for kw in node.keywords if kw.arg == "order"]
         return ast.copy_location(ast.Call(
             func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
-            args=[base, ast.Tuple(elts=elts, ctx=ast.Load())], keywords=[]), node)
+            args=[base, ast.Tuple(elts=elts, ctx=ast.Load())], keywords=keep), node)
 
 
 _FFT_FNS = {"fftn": (False, True), "ifftn": (True, True),
