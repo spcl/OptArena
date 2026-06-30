@@ -749,7 +749,30 @@ class _FortranBodyEmitter(BaseEmitter):
             if ktag:
                 lit = f"{branch.value}_{self._int_kind_selector(ktag)}"
                 return f"({lit})" if branch.value < 0 else lit
+            # The partner branch is REAL: merge() is strict on TYPE, so an integer
+            # literal beside a real branch must be emitted as a real of the kernel
+            # float kind -- ``np.where(cond, 0, real_arr)`` -> ``merge(0.0_c_double,
+            # real_arr, ..)`` (hdiff). C's ternary promotes silently; Fortran does not.
+            if not self._expr_is_integer(partner):
+                lit = f"{branch.value}.0_{self._rk}"
+                return f"({lit})" if branch.value < 0 else lit
         return self.emit_expr(branch)
+
+    def _expr_is_integer(self, e: ast.AST) -> bool:
+        """True if ``e`` is an integer-typed Fortran expression (so a merge()
+        partner literal should be int-kinded, not real-promoted)."""
+        if isinstance(e, ast.Constant):
+            return isinstance(e.value, int) and not isinstance(e.value, bool)
+        if isinstance(e, ast.Name):
+            return self._name_int_kind(e.id) is not None
+        if isinstance(e, ast.Subscript):
+            base = e.value
+            return isinstance(base, ast.Name) and self._name_int_kind(base.id) is not None
+        if isinstance(e, ast.UnaryOp):
+            return self._expr_is_integer(e.operand)
+        if isinstance(e, ast.BinOp) and not isinstance(e.op, ast.Div):
+            return self._expr_is_integer(e.left) and self._expr_is_integer(e.right)
+        return False
 
     def _emit_subscript(self, node: ast.Subscript) -> str:
         # Boolean-mask indexing ``arr[mask]`` -> Fortran ``PACK(arr,
