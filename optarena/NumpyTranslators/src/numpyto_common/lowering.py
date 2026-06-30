@@ -2030,10 +2030,13 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         # 2-slice-axis LHS ``A[k+1:, k:]`` reads from the COLUMN iter ``si1``,
         # not the row iter ``si0`` (gaussian's rank-1 update). ``align`` shifts
         # the per-axis consumption by the rank difference.
+        # A Slice / newaxis contributes one result axis; an ADVANCED index (a Name
+        # whose own shape is in the table, e.g. lulesh ``x1[:, _VOLU_PERM]`` with
+        # _VOLU_PERM (8,6)) contributes its RANK; a scalar index contributes none.
         rhs_result_axes = sum(
-            1 for d in dims
-            if isinstance(d, ast.Slice)
-            or (isinstance(d, ast.Constant) and d.value is None))
+            (len(self.array_shapes[d.id]) if isinstance(d, ast.Name) and self.array_shapes.get(d.id) else
+             1 if (isinstance(d, ast.Slice) or (isinstance(d, ast.Constant) and d.value is None)) else 0)
+            for d in dims)
         align = max(0, len(lhs_slice_iters) - rhs_result_axes)
         idx_nodes: List[ast.AST] = []
         rhs_slice_idx = 0
@@ -2044,6 +2047,19 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 # broadcast pulls the source through the size-1 axis.
                 rhs_slice_idx += 1
                 continue
+            # Advanced index mixed with slices: a rank-r index array consumes r
+            # result axes and reads ``IDX[(those iters)]`` along this source axis
+            # (``x1[:, _VOLU_PERM]`` -> ``x1[w0, _VOLU_PERM[w1, w2]]``).
+            if isinstance(d, ast.Name) and self.array_shapes.get(d.id):
+                r = len(self.array_shapes[d.id])
+                if align + rhs_slice_idx + r <= len(lhs_slice_iters):
+                    giters = [ast.Name(id=lhs_slice_iters[align + rhs_slice_idx + k][0].id, ctx=ast.Load())
+                              for k in range(r)]
+                    rhs_slice_idx += r
+                    gslot = giters[0] if r == 1 else ast.Tuple(elts=giters, ctx=ast.Load())
+                    idx_nodes.append(ast.Subscript(value=ast.Name(id=d.id, ctx=ast.Load()),
+                                                   slice=gslot, ctx=ast.Load()))
+                    continue
             if not isinstance(d, ast.Slice):
                 idx_nodes.append(self._resolve_scalar_index(d, rhs_name, axis))
                 continue
@@ -3967,20 +3983,26 @@ class _SubscriptifyNames(ast.NodeTransformer):
                 # (full ``:`` OR bounded ``:-1`` / ``a:b``) or a
                 # non-Slice concrete index. Substitute each Slice with
                 # the next iter (in axis order, right-aligned).
-                # Mixed slice + rank-1 index-array form ``xe[:, idx]`` (lulesh):
-                # each ``:`` axis and each index-array axis consumes one result
-                # axis (right-aligned); a sliced axis subscripts its iter, an
-                # index-array axis becomes ``idx[that_iter]``, concrete indices
-                # stay. Handles the index array on ANY axis, not just leading.
+                # Mixed slice + index-array form ``xe[:, idx]`` (lulesh): a ``:``
+                # axis consumes one result axis (subscripts its iter); an index
+                # array of rank r consumes r result axes and becomes
+                # ``idx[(those r iters)]``; concrete indices stay. Right-aligned.
+                # Handles a rank>1 index array (lulesh ``x1[:, _VOLU_PERM]`` with
+                # _VOLU_PERM (8,6) -> ``x1[w0, _VOLU_PERM[w1, w2]]``) and the index
+                # array on any axis, not just leading.
+                def _idx_rank(e):
+                    return (len(self.shape_table[e.id])
+                            if isinstance(e, ast.Name) and self.shape_table.get(e.id) else 0)
+
                 def _is_index_array(e):
-                    return (isinstance(e, ast.Name)
-                            and len(self.shape_table.get(e.id, ())) == 1)
+                    return _idx_rank(e) >= 1
                 if (any(isinstance(e, ast.Slice) for e in sl.elts)
                         and any(_is_index_array(e) for e in sl.elts)):
-                    result_axes = [k for k, e in enumerate(sl.elts)
-                                   if isinstance(e, ast.Slice) or _is_index_array(e)]
-                    if len(result_axes) <= len(self.iters):
-                        offset = len(self.iters) - len(result_axes)
+                    result_axis_count = sum(
+                        1 if isinstance(e, ast.Slice) else (_idx_rank(e) if _is_index_array(e) else 0)
+                        for e in sl.elts)
+                    if result_axis_count <= len(self.iters):
+                        offset = len(self.iters) - result_axis_count
                         pos = 0
                         new_elts = []
                         for e in sl.elts:
@@ -3992,9 +4014,12 @@ class _SubscriptifyNames(ast.NodeTransformer):
                                     it = ast.BinOp(left=it, op=ast.Add(), right=e.lower)
                                 new_elts.append(it)
                             elif _is_index_array(e):
-                                it = ast.Name(id=self.iters[offset + pos], ctx=ast.Load())
-                                pos += 1
-                                new_elts.append(ast.Subscript(value=e, slice=it, ctx=ast.Load()))
+                                r = _idx_rank(e)
+                                giters = [ast.Name(id=self.iters[offset + pos + k], ctx=ast.Load())
+                                          for k in range(r)]
+                                pos += r
+                                gslot = (giters[0] if r == 1 else ast.Tuple(elts=giters, ctx=ast.Load()))
+                                new_elts.append(ast.Subscript(value=e, slice=gslot, ctx=ast.Load()))
                             else:
                                 new_elts.append(e)
                         slot = (new_elts[0] if len(new_elts) == 1

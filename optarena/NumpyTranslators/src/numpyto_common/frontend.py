@@ -137,6 +137,11 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # round re-collects (so a helper-local ``def c`` exposed by inlining its
     # parent becomes collectable) and re-inlines module constants (their
     # references now living in the spliced-in helper bodies).
+    # Counters shared across all fixpoint iterations so the ``__inl<N>_`` /
+    # ``__hcall<N>`` prefixes stay globally unique (a per-iteration reset would
+    # let a nested helper inlined later collide with an outer one inlined earlier).
+    inl_counter: List[int] = [0]
+    hcall_counter: List[int] = [0]
     for _ in range(64):
         helpers = _collect_inlinable_helpers(tree, fn)
         if not helpers:
@@ -151,8 +156,8 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
         # BEFORE inlining so the per-iteration void-helper calls (``_sum_face_normal
         # (.., *f)``) become concrete statements the inliner can splice.
         _unroll_const_list_loops(fn)
-        _HoistMultiStmtHelpers(helpers).visit(fn)
-        _InlineHelpers(helpers).visit(fn)
+        _HoistMultiStmtHelpers(helpers, hcall_counter).visit(fn)
+        _InlineHelpers(helpers, inl_counter).visit(fn)
         ast.fix_missing_locations(fn)
         _inline_module_constants(tree, fn, input_args)
         # Done when no call to a (still-inlinable) helper survives in the body.
@@ -680,10 +685,22 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
 
     consts: Dict[str, Any] = {}
     for stmt in tree.body:
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            continue
+        tgt = stmt.targets[0]
+        if isinstance(tgt, ast.Name):
             val = _const_value(stmt.value)
-            if val is not None and stmt.targets[0].id not in shadowed:
-                consts[stmt.targets[0].id] = val
+            if val is not None and tgt.id not in shadowed:
+                consts[tgt.id] = val
+        # Tuple-unpacking of constants ``A, B, C = c1, c2, c3`` -- lulesh's BC
+        # mask flags (``XI_M, XI_M_SYMM, XI_M_FREE = 0x003, 0x001, 0x002``).
+        elif (isinstance(tgt, ast.Tuple) and isinstance(stmt.value, ast.Tuple)
+              and len(tgt.elts) == len(stmt.value.elts)):
+            for sub, v in zip(tgt.elts, stmt.value.elts):
+                if isinstance(sub, ast.Name):
+                    val = _const_value(v)
+                    if val is not None and sub.id not in shadowed:
+                        consts[sub.id] = val
     if not consts:
         return
 
@@ -1664,10 +1681,11 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
     Assigns are prepended.
     """
 
-    def __init__(self, helpers: Dict[str, ast.FunctionDef]) -> None:
+    def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None) -> None:
         self.helpers = helpers
         self.multi_stmt = {name: fn for name, fn in helpers.items() if _is_multi_stmt_return_form(fn)}
-        self._counter = [0]
+        # Shared across the inline fixpoint -- see _InlineHelpers re: prefix reuse.
+        self._counter = counter if counter is not None else [0]
         self._pending: List[ast.stmt] = []
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
@@ -1763,9 +1781,15 @@ class _InlineHelpers(ast.NodeTransformer):
       return forms remains in visit_Call.
     """
 
-    def __init__(self, helpers: Dict[str, ast.FunctionDef]):
+    def __init__(self, helpers: Dict[str, ast.FunctionDef], counter: Optional[List[int]] = None):
         self.helpers = helpers
-        self._counter = [0]
+        # The ``__inl<N>_`` prefix counter MUST persist across the parse_kernel
+        # inline fixpoint -- a nested helper exposed in a later iteration would
+        # otherwise reuse a prefix already taken by an outer helper inlined in an
+        # earlier iteration (lulesh ``_integrate_stress``'s local ``b`` colliding
+        # with the nested ``_calc_shape_fn_derivatives``'s ``b`` -> ``__inl1_b``
+        # for both, crossing their shapes). A shared counter keeps prefixes unique.
+        self._counter = counter if counter is not None else [0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
