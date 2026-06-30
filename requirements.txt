@@ -8,3 +8,8 @@ pygount
 pyyaml
 jsonschema
 setuptools
+# formatting / lint -- the CI `format-check` job and `scripts/check_format.py`
+# (column limit 120): yapf for Python, fprettify for Fortran, clang-format for C/C++.
+yapf
+fprettify
+clang-format

@@ -26,6 +26,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  format-check:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: format-check (changed files @ 120 cols -- yapf / clang-format / fprettify)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the merge-base diff against the target branch resolves.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install formatters
+        run: |
+          # All three formatters are pip-installable (the clang-format wheel ships
+          # the binary), so no apt is needed for this job.
+          python -m pip install --upgrade pip
+          python -m pip install yapf fprettify clang-format
+
+      - name: Determine base ref
+        id: base
+        run: |
+          # PRs diff against the target branch; pushes (and merge_group) against
+          # main. Fetch it so origin/<base> exists for the merge-base diff.
+          base="${{ github.event.pull_request.base.ref || 'main' }}"
+          git fetch --no-tags origin "$base"
+          echo "ref=origin/$base" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting of changed source files
+        run: python scripts/check_format.py --base "${{ steps.base.outputs.ref }}"
+
   unit-tests:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: unit tests (yaml + tree + translations + agent-bench + container)
