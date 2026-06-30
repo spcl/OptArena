@@ -428,12 +428,30 @@ class _FortranBodyEmitter(BaseEmitter):
                         f"size({t}, {i + 1}) /= ({d})"
                         for i, d in enumerate(rev_shape))
                         if rev_shape else f"size({t}) /= 1")
-                    return (f"{indent}if (.not. allocated({t})) then\n"
-                            f"{indent}    allocate({t}({dims}))\n"
-                            f"{indent}else if ({realloc}) then\n"
-                            f"{indent}    deallocate({t})\n"
-                            f"{indent}    allocate({t}({dims}))\n"
-                            f"{indent}end if")
+                    alloc = (f"{indent}if (.not. allocated({t})) then\n"
+                             f"{indent}    allocate({t}({dims}))\n"
+                             f"{indent}else if ({realloc}) then\n"
+                             f"{indent}    deallocate({t})\n"
+                             f"{indent}    allocate({t}({dims}))\n"
+                             f"{indent}end if")
+                    # An ALLOCATABLE ``np.zeros`` / ``np.ones`` must ALSO be filled
+                    # after allocation -- Fortran ``allocate`` does NOT initialise
+                    # the memory (the C path memsets), so without this the array is
+                    # read as heap garbage (lulesh's node-normal accumulator ``pf =
+                    # np.zeros((n,8,3))`` then ``pf[:,k,:] += ..``). The fixed-bound
+                    # path below already fills; the inline-allocate path skipped it.
+                    # The ``__reassign__`` sentinel (a self-referential reset the
+                    # following loop overwrites/reads) must NOT be re-filled.
+                    is_reassign = any(isinstance(a, ast.Constant) and a.value == "__reassign__"
+                                      for a in node.value.args)
+                    if not is_reassign:
+                        kind = vars(self.kir.tree).get("zeros_fills", {}).get(target.id)
+                        is_logical = target.id in vars(self).get("_logical_array_locals", set())
+                        if kind in ("zeros", "zeros_like"):
+                            alloc += f"\n{indent}{t} = {'.false.' if is_logical else '0'}"
+                        elif kind in ("ones", "ones_like"):
+                            alloc += f"\n{indent}{t} = {'.true.' if is_logical else '1'}"
+                    return alloc
                 # A ``__reassign__`` marker -- the lowering's no-op sentinel for a
                 # whole-array reassignment ``X = f(...)`` immediately followed by a
                 # per-element loop that FULLY overwrites X -- must NOT be re-zeroed:

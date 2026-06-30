@@ -1809,13 +1809,29 @@ class _InlineHelpers(ast.NodeTransformer):
                 # Map params to call args; locals (assigned in body) get
                 # the prefix so multiple inlines don't collide.
                 local_names = _collect_assigned_names(body[:-1])
-                rename: Dict[str, ast.AST] = dict(zip(param_names, node.value.args))
+                arg_map = dict(zip(param_names, node.value.args))
+                rename: Dict[str, ast.AST] = dict(arg_map)
+                # A parameter that is REASSIGNED in the body (lulesh _phi's
+                # ``delvm = delvm * normd``) becomes a fresh prefixed local. It
+                # MUST be initialised from the call argument first, otherwise the
+                # first read is of the uninitialised local -- a heap-garbage read
+                # the native backends inherit (numba/cupy use a real Python var
+                # and are unaffected). Value semantics: a fresh local copy, so the
+                # caller's argument array is never mutated by the rebind.
+                reassigned_params: List[str] = []
                 for ln in local_names:
                     rename[ln] = ast.Name(id=f"{prefix}{ln}", ctx=ast.Load())
+                    if ln in arg_map:
+                        reassigned_params.append(ln)
                 # Substitute throughout the helper body and the return
                 # expression.
                 renamer = _SubstNames(rename)
                 new_body: List[ast.stmt] = []
+                for _pn in reassigned_params:
+                    _init = ast.Assign(targets=[ast.Name(id=f"{prefix}{_pn}", ctx=ast.Store())],
+                                       value=ast.parse(ast.unparse(arg_map[_pn]), mode="eval").body)
+                    ast.fix_missing_locations(_init)
+                    new_body.append(_init)
                 for stmt in body[:-1]:
                     cloned = ast.parse(ast.unparse(stmt)).body[0]
                     cloned = renamer.visit(cloned)
