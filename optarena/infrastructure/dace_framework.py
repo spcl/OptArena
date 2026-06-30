@@ -193,7 +193,7 @@ class DaceFramework(Framework):
         """Import the kernel module and return the ``@dace.program``."""
         self.ensure_impls(bench)
         module_pypath = "optarena.benchmarks.{r}.{m}".format(r=bench.info["relative_path"].replace('/', '.'),
-                                                            m=bench.info["module_name"])
+                                                             m=bench.info["module_name"])
         postfix = self.info.get("postfix", self.fname)
         module_str = "{m}_{p}".format(m=module_pypath, p=postfix)
         module = importlib.import_module(module_str)

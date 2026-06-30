@@ -234,8 +234,7 @@ def mangle(src: str, lang: str, name_map: Dict[str, str]) -> str:
     """
     norm = _normalize_lang(lang)
     if norm not in TS_GRAMMAR:
-        raise ValueError(
-            f"mangle: unsupported lang {lang!r}; supported = {sorted(TS_GRAMMAR)}")
+        raise ValueError(f"mangle: unsupported lang {lang!r}; supported = {sorted(TS_GRAMMAR)}")
     if not name_map:
         return src
 

@@ -26,7 +26,9 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Generate OptArena Harbor tasks")
     p.add_argument("--output-dir", required=True, help="directory to write the task dirs into")
     p.add_argument("--selector", default="all", help="track / dwarf / kernel or 'all' (default all)")
-    p.add_argument("--group", default="kernel", choices=["kernel", "dir"],
+    p.add_argument("--group",
+                   default="kernel",
+                   choices=["kernel", "dir"],
                    help="granularity: 'kernel' = one task per kernel (default); "
                    "'dir' = microkernels bundled per directory (microapps stay per-app)")
     p.add_argument("--language", default="c", choices=sorted(LANG_EXT), help="implementation language")
@@ -37,8 +39,13 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     agent_image, judge_image = images_for(args.hardware)
-    dirs = generate(args.output_dir, selector=args.selector, language=args.language, group=args.group,
-                    hardware=args.hardware, agent_image=args.agent_image, judge_image=args.judge_image,
+    dirs = generate(args.output_dir,
+                    selector=args.selector,
+                    language=args.language,
+                    group=args.group,
+                    hardware=args.hardware,
+                    agent_image=args.agent_image,
+                    judge_image=args.judge_image,
                     timeout_sec=args.timeout_sec)
     print(f"generated {len(dirs)} OptArena tasks (group={args.group}, hardware={args.hardware}) -> {args.output_dir} "
           f"(agent={args.agent_image or agent_image}, verifier={args.judge_image or judge_image})")

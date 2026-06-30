@@ -29,10 +29,8 @@ _HPL_SHA256 = "32c5c17d22330e6f2337b681aded51637fb6008d3f0eb7c277b163fadd612830"
 # stream.c. We use jeffhammond/STREAM (the de-facto mirror) pinned to a
 # specific commit because cs.virginia.edu blocks remote downloads with 403.
 _STREAM_COMMIT = "6703f7504a38a8da96b353cadafa64d3c2d7a2d3"
-_STREAM_URL = (
-    f"https://raw.githubusercontent.com/jeffhammond/STREAM/"
-    f"{_STREAM_COMMIT}/stream.c"
-)
+_STREAM_URL = (f"https://raw.githubusercontent.com/jeffhammond/STREAM/"
+               f"{_STREAM_COMMIT}/stream.c")
 _STREAM_SHA256 = "c388924eb140fda95f534cdb808ae7f1f8ebb18da41d8aec1b512a3c8d303c9b"
 
 
@@ -67,9 +65,7 @@ def _fetch(url: str, dest: Path, expected_sha256: str):
     digest = _sha256(tmp)
     if digest != expected_sha256:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"SHA-256 mismatch for {url}: got {digest}, expected {expected_sha256}"
-        )
+        raise RuntimeError(f"SHA-256 mismatch for {url}: got {digest}, expected {expected_sha256}")
     tmp.replace(dest)
 
 

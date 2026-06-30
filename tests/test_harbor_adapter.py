@@ -152,8 +152,10 @@ def test_group_dir_keeps_microapps_per_app(tmp_path):
 
 def test_timeout_scales_with_kernel_count(tmp_path):
     harbor_cfg = pytest.importorskip("harbor.models.task.config")
-    td = [d for d in A.generate(str(tmp_path), selector="dense_linear_algebra", group="dir", max_bundle=64)
-          if d.name == "optarena-hpc-dense_linear_algebra"][0]
+    td = [
+        d for d in A.generate(str(tmp_path), selector="dense_linear_algebra", group="dir", max_bundle=64)
+        if d.name == "optarena-hpc-dense_linear_algebra"
+    ][0]
     cfg = harbor_cfg.TaskConfig.model_validate_toml((td / "task.toml").read_text())
     n = len(cfg.metadata["kernels"].split(","))
     assert cfg.verifier.timeout_sec == A._PER_KERNEL_TIMEOUT_S * n
@@ -206,14 +208,29 @@ def test_gsd_of_stable_speedups_is_one():
 def test_combine_geomean_gated_unless_all_solved():
     from optarena.agent_bench import harbor_grade
     combined = harbor_grade.combine([
-        {"reward": 4.0, "solved": True, "kernel": "a"},
-        {"reward": 1.0, "solved": False, "kernel": "b"},
+        {
+            "reward": 4.0,
+            "solved": True,
+            "kernel": "a"
+        },
+        {
+            "reward": 1.0,
+            "solved": False,
+            "kernel": "b"
+        },
     ])
     assert combined["geomean"] == pytest.approx(2.0)  # geomean(4, 1)
     assert combined["reward"] == 1.0  # gated: not all solved
     assert combined["solved"] is False and combined["kernels"] == ["a", "b"]
-    all_solved = harbor_grade.combine([{"reward": 4.0, "solved": True, "kernel": "a"},
-                                       {"reward": 9.0, "solved": True, "kernel": "b"}])
+    all_solved = harbor_grade.combine([{
+        "reward": 4.0,
+        "solved": True,
+        "kernel": "a"
+    }, {
+        "reward": 9.0,
+        "solved": True,
+        "kernel": "b"
+    }])
     assert all_solved["reward"] == pytest.approx(6.0)  # geomean(4, 9), ungated
 
 
@@ -240,8 +257,11 @@ def test_harbor_grade_cli_writes_reward_json(tmp_path, monkeypatch):
     src_file = tmp_path / "submission.c"
     src_file.write_text(reference_source(Task("tsvc_2_s212", "restricted", "c")))
     reward_file = tmp_path / "reward.json"
-    rc = harbor_grade.main(["--kernel", "tsvc_2_s212", "--language", "c", "--source",
-                            str(src_file), "--reward", str(reward_file), "--k", "1"])
+    rc = harbor_grade.main([
+        "--kernel", "tsvc_2_s212", "--language", "c", "--source",
+        str(src_file), "--reward",
+        str(reward_file), "--k", "1"
+    ])
     assert rc == 0
     reward = json.loads(reward_file.read_text())
     assert reward["reward"] >= 1.0 and reward["solved"] is True
@@ -258,8 +278,12 @@ def test_harbor_grade_cli_multi_kernel_combines(tmp_path, monkeypatch):
     for f in (f1, f2):
         f.write_text(reference_source(Task("tsvc_2_s212", "restricted", "c")))
     reward_file = tmp_path / "reward.json"
-    rc = harbor_grade.main(["--language", "c", "--reward", str(reward_file), "--k", "1", "--kernel", "tsvc_2_s212",
-                            "--source", str(f1), "--kernel", "tsvc_2_s212", "--source", str(f2)])
+    rc = harbor_grade.main([
+        "--language", "c", "--reward",
+        str(reward_file), "--k", "1", "--kernel", "tsvc_2_s212", "--source",
+        str(f1), "--kernel", "tsvc_2_s212", "--source",
+        str(f2)
+    ])
     assert rc == 0
     reward = json.loads(reward_file.read_text())
     assert reward["n_kernels"] == 2 and reward["solved"] is True and reward["reward"] >= 1.0

@@ -11,5 +11,8 @@ class CupyFramework(Framework):
     postfix = "cupy_auto"
     arch = "gpu"
     SUPPORTED_PRECISIONS = frozenset({
-        Precision.FP64, Precision.FP32, Precision.FP16, Precision.BF16,
+        Precision.FP64,
+        Precision.FP32,
+        Precision.FP16,
+        Precision.BF16,
     })

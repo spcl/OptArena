@@ -89,7 +89,7 @@ class JaxFramework(Framework):
         # missing (no-op when a hand override or a prior autogen already exists).
         self.ensure_impls(bench)
         module_pypath = "optarena.benchmarks.{r}.{m}".format(r=bench.info["relative_path"].replace('/', '.'),
-                                                            m=bench.info["module_name"])
+                                                             m=bench.info["module_name"])
         if "postfix" in self.info.keys():
             postfix = self.info["postfix"]
         else:

@@ -62,9 +62,9 @@ def _ts_get_parser(grammar: str):
 
 def _ts_parse(parser, src: str):
     try:
-        return parser.parse(src)                       # language-pack: str
+        return parser.parse(src)  # language-pack: str
     except TypeError:
-        return parser.parse(src.encode("utf-8"))       # official: bytes
+        return parser.parse(src.encode("utf-8"))  # official: bytes
 
 
 def _ts_root(tree):
@@ -72,7 +72,7 @@ def _ts_root(tree):
 
 
 def _ts_type(node) -> str:
-    t = _ts_attr(node, "type")               # official binding
+    t = _ts_attr(node, "type")  # official binding
     return t if isinstance(t, str) else _ts_attr(node, "kind")  # language-pack
 
 
@@ -81,7 +81,7 @@ def _ts_span(node):
 
 
 def _ts_children(node):
-    ch = _ts_attr(node, "children")          # official: list property
+    ch = _ts_attr(node, "children")  # official: list property
     if ch is not None:
         return ch
     return [node.child(i) for i in range(_ts_attr(node, "child_count"))]

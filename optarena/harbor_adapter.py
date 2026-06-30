@@ -147,8 +147,10 @@ def _plan_tasks(pairs: List[Tuple[BenchSpec, hf_export.ExportRow]], group: str,
     for d in sorted(buckets):
         kts = buckets[d]
         if len(kts) > max_bundle:
-            print(f"optarena: directory {d!r} has {len(kts)} microkernels (> max_bundle={max_bundle}); "
-                  f"emitting them per-kernel instead of one bundle", file=sys.stderr)
+            print(
+                f"optarena: directory {d!r} has {len(kts)} microkernels (> max_bundle={max_bundle}); "
+                f"emitting them per-kernel instead of one bundle",
+                file=sys.stderr)
             tasks.extend((kt.row.id, [kt]) for kt in kts)
         else:
             tasks.append((d, kts))

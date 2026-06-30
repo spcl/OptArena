@@ -55,8 +55,7 @@ def compile_emitted_so(cpp_path: str, out_so: str, *, extra_flags: List[str] = (
     if inc is None:
         raise RuntimeError("dace headers not found; install dace (pip install dace)")
     cc = shutil.which("c++") or shutil.which("g++")
-    cmd = [cc, "-std=c++17", "-O2", "-fPIC", "-shared", f"-I{inc}",
-           cpp_path, "-o", out_so, *extra_flags]
+    cmd = [cc, "-std=c++17", "-O2", "-fPIC", "-shared", f"-I{inc}", cpp_path, "-o", out_so, *extra_flags]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError("emitted-C++ build failed:\n" + " ".join(cmd) + "\n" + proc.stderr[:4000])
@@ -70,8 +69,13 @@ def compile_emitted_so(cpp_path: str, out_so: str, *, extra_flags: List[str] = (
 # ``__dace_exit_<name>``. The flat-SoA arg list is huge but mechanical, so we
 # parse it straight out of the emitted .cpp instead of hand-transcribing it.
 
-_VALUE_CTYPE = {"int": ctypes.c_int, "int64_t": ctypes.c_int64, "double": ctypes.c_double,
-                "bool": ctypes.c_bool, "float": ctypes.c_float}
+_VALUE_CTYPE = {
+    "int": ctypes.c_int,
+    "int64_t": ctypes.c_int64,
+    "double": ctypes.c_double,
+    "bool": ctypes.c_bool,
+    "float": ctypes.c_float
+}
 
 
 def _parse_args(cpp_text: str, fn: str):
@@ -91,8 +95,7 @@ def _parse_args(cpp_text: str, fn: str):
     return out
 
 
-def call_emitted(cpp_path: str, so_path: str, kernel: str, *,
-                 buffers: Dict, scalars: Dict) -> None:
+def call_emitted(cpp_path: str, so_path: str, kernel: str, *, buffers: Dict, scalars: Dict) -> None:
     """Run a DaCe-emitted kernel on caller-provided flat-SoA inputs (in place).
 
     ``buffers`` maps every pointer arg name -> an F-contiguous numpy array (the

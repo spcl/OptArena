@@ -5,7 +5,6 @@ autotuning and ``tvm.compile`` for code generation. Built against
 Apache TVM 0.20+; the old ``tvm.auto_scheduler`` path is unsupported.
 """
 
-
 from optarena.infrastructure import Benchmark, Framework
 from typing import Any, Callable, Dict
 

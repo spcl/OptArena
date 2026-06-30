@@ -55,8 +55,7 @@ def test_edge_shapes_are_small_absolute_independent_of_range():
     # is the central anti-special-casing guarantee.
     params = {"fuzzed": {"N": [4096, 8192]}}
     shapes = dict(fuzz.edge_shapes(params))
-    assert {lbl: s["N"] for lbl, s in shapes.items()} == {
-        "one": 1, "odd": 3, "prime": 7, "nonpow2": 6, "nonaligned": 5}
+    assert {lbl: s["N"] for lbl, s in shapes.items()} == {"one": 1, "odd": 3, "prime": 7, "nonpow2": 6, "nonaligned": 5}
 
 
 def test_edge_shapes_capped_at_declared_maximum():
@@ -71,7 +70,7 @@ def test_edge_shapes_merges_config_and_resolves_derive():
     params = {"fuzzed": {"n": [4, 64], "nn": {"derive": "n*n"}}}
     shapes = fuzz.edge_shapes(params, config={"mode": "x"})
     for _, s in shapes:
-        assert s["mode"] == "x"            # config merged in
+        assert s["mode"] == "x"  # config merged in
         assert s["nn"] == s["n"] * s["n"]  # derive resolved off the edge root
 
 
@@ -124,8 +123,8 @@ def test_fuzzed_shape_is_reproducible_and_config_merged():
     params = {"fuzzed": {"N": [16, 4096]}}
     a = fuzz.fuzzed_shape(params, 0, config_ns={"mode": "x"})
     b = fuzz.fuzzed_shape(params, 0, config_ns={"mode": "x"})
-    assert a == b                 # same iteration seed -> identical draw
-    assert a["mode"] == "x"       # config merged in
+    assert a == b  # same iteration seed -> identical draw
+    assert a["mode"] == "x"  # config merged in
     assert 16 <= a["N"] <= 4096
 
 
@@ -133,7 +132,7 @@ def test_fuzzed_shape_iterations_differ():
     params = {"fuzzed": {"N": [16, 4096]}}
     p0 = fuzz.fuzzed_shape(params, 0)
     p1 = fuzz.fuzzed_shape(params, 1)
-    assert p0["N"] != p1["N"]     # distinct iterations sample distinct sizes
+    assert p0["N"] != p1["N"]  # distinct iterations sample distinct sizes
 
 
 def test_fuzzed_shape_resolves_derive_against_config():

@@ -14,7 +14,6 @@ import importlib.util
 import tempfile
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "check_no_hidden_in_image.py"
 HIDDEN_REL_PATH = "optarena/agent_bench/hidden_tests"

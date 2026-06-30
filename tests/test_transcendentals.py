@@ -26,57 +26,77 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "optarena" / "NumpyTranslators" / "src"))
 
-from numpyto_c.frontend import parse_kernel          # noqa: E402
-from numpyto_c.lowering import lower                  # noqa: E402
-from numpyto_c.emit import emit_c, emit_cpp           # noqa: E402
-from numpyto_c.bindings import emit_binding           # noqa: E402
-from numpyto_fortran.emit import emit_fortran         # noqa: E402
+from numpyto_c.frontend import parse_kernel  # noqa: E402
+from numpyto_c.lowering import lower  # noqa: E402
+from numpyto_c.emit import emit_c, emit_cpp  # noqa: E402
+from numpyto_c.bindings import emit_binding  # noqa: E402
+from numpyto_fortran.emit import emit_fortran  # noqa: E402
 
-_CT = {"int": ctypes.c_int, "double": ctypes.c_double,
-       "int64": ctypes.c_int64, "int32": ctypes.c_int32}
+_CT = {"int": ctypes.c_int, "double": ctypes.c_double, "int64": ctypes.c_int64, "int32": ctypes.c_int32}
 
 #: unary ufuncs validated on an array operand in (0.1, 0.9) -- a domain
 #: valid for every one (arcsin/arctanh/log included).
-UNARY = ["tan", "sinh", "cosh", "arcsin", "arccos", "arctan",
-         "arcsinh", "arctanh", "exp2", "expm1", "log2", "log10", "log1p",
-         "cbrt", "floor", "ceil", "trunc", "rint", "around",
-         "square", "reciprocal", "sign", "degrees", "radians"]
+UNARY = [
+    "tan", "sinh", "cosh", "arcsin", "arccos", "arctan", "arcsinh", "arctanh", "exp2", "expm1", "log2", "log10",
+    "log1p", "cbrt", "floor", "ceil", "trunc", "rint", "around", "square", "reciprocal", "sign", "degrees", "radians"
+]
 BINARY = ["arctan2", "hypot", "copysign", "fmod", "fmax", "fmin"]
 
 # symbol == file stem == binding symbol (the canonical scheme: one name, no
 # _auto / per-compiler suffix). emit_binding(base_name="k") records "k" for every
 # language, so each backend emits its source with fn_name "k".
 _BACKENDS = {
-    "c":       (emit_c,       "c",       "k",
-                ["gcc", "-O2", "-std=c17", "-shared", "-fPIC"], "gcc"),
-    "cpp":     (emit_cpp,     "cpp",     "k",
-                ["g++", "-O2", "-std=c++20", "-shared", "-fPIC"], "g++"),
+    "c": (emit_c, "c", "k", ["gcc", "-O2", "-std=c17", "-shared", "-fPIC"], "gcc"),
+    "cpp": (emit_cpp, "cpp", "k", ["g++", "-O2", "-std=c++20", "-shared", "-fPIC"], "g++"),
     "fortran": (emit_fortran, "fortran", "k",
-                ["gfortran", "-O2", "-ffree-form", "-ffree-line-length-none",
-                 "-std=f2018", "-shared", "-fPIC"], "gfortran"),
+                ["gfortran", "-O2", "-ffree-form", "-ffree-line-length-none", "-std=f2018", "-shared",
+                 "-fPIC"], "gfortran"),
 }
 
 
 def _kernel_ir(d, fn, nargs):
     arr = (["a", "out"] if nargs == 1 else ["a", "b", "out"])
-    body = (f"out[:] = np.{fn}(a)" if nargs == 1
-            else f"out[:] = np.{fn}(a, b)")
+    body = (f"out[:] = np.{fn}(a)" if nargs == 1 else f"out[:] = np.{fn}(a, b)")
     (d / "k_numpy.py").write_text(f"import numpy as np\ndef k({', '.join(arr[:-1])}, out):\n    {body}\n")
-    (d / "k.json").write_text(json.dumps({"benchmark": {
-        "name": fn, "short_name": "k", "relative_path": ".", "module_name": "k",
-        "func_name": "k", "kind": "m", "domain": "d", "dwarf": "d",
-        "parameters": {"S": {"N": 32}},
-        "init": {"func_name": "", "input_args": [], "output_args": [],
-                 "shapes": {x: "(N,)" for x in arr}},
-        "input_args": arr, "array_args": arr, "output_args": ["out"]}}))
+    (d / "k.json").write_text(
+        json.dumps({
+            "benchmark": {
+                "name": fn,
+                "short_name": "k",
+                "relative_path": ".",
+                "module_name": "k",
+                "func_name": "k",
+                "kind": "m",
+                "domain": "d",
+                "dwarf": "d",
+                "parameters": {
+                    "S": {
+                        "N": 32
+                    }
+                },
+                "init": {
+                    "func_name": "",
+                    "input_args": [],
+                    "output_args": [],
+                    "shapes": {
+                        x: "(N,)"
+                        for x in arr
+                    }
+                },
+                "input_args": arr,
+                "array_args": arr,
+                "output_args": ["out"]
+            }
+        }))
     return lower(parse_kernel(d / "k_numpy.py", d / "k.json"))
 
 
 def _numpy_ref(fn, nargs, a, b):
     out = np.empty_like(a)
     g = {"np": np}
-    exec(f"def k({'a, out' if nargs == 1 else 'a, b, out'}):\n"
-         f"    out[:] = np.{fn}({'a' if nargs == 1 else 'a, b'})", g)
+    exec(
+        f"def k({'a, out' if nargs == 1 else 'a, b, out'}):\n"
+        f"    out[:] = np.{fn}({'a' if nargs == 1 else 'a, b'})", g)
     (g["k"](a.copy(), out) if nargs == 1 else g["k"](a.copy(), b.copy(), out))
     return out
 
@@ -94,8 +114,7 @@ def _run_backend(backend, fn, nargs):
         emit_binding(kir, d / "kb.json", base_name="k")
         binding = json.loads((d / "kb.json").read_text())
         so = d / "k.so"
-        r = subprocess.run(compile_cmd + [str(src), "-o", str(so)],
-                           capture_output=True, text=True)
+        r = subprocess.run(compile_cmd + [str(src), "-o", str(so)], capture_output=True, text=True)
         assert r.returncode == 0, f"{backend} compile failed:\n{r.stderr}"
         rng = np.random.default_rng(0)
         a = rng.uniform(0.1, 0.9, 32)
@@ -121,8 +140,8 @@ def _run_backend(backend, fn, nargs):
         keep.append(np.zeros(1, np.int64))
         cargs.append(keep[-1].ctypes.data_as(ctypes.c_void_p))
         cfn(*cargs)
-        assert np.allclose(got, expected, rtol=1e-9, atol=1e-9), (
-            f"{backend}/{fn}: max diff {np.abs(got - expected).max():.2e}")
+        assert np.allclose(got, expected, rtol=1e-9,
+                           atol=1e-9), (f"{backend}/{fn}: max diff {np.abs(got - expected).max():.2e}")
 
 
 @pytest.mark.parametrize("backend", list(_BACKENDS))

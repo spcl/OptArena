@@ -100,8 +100,14 @@ def grade(kernel: str,
 
     mode = "restricted" if source is not None else "any"
     submission = Submission(language=language, source=source, library=library)
-    ts = score_task_fuzzed(submission, Task(kernel, mode, language), k=k, baseline=baseline, datatype=datatype,
-                           repeat=repeat, verify=verify, c_max=c_max)
+    ts = score_task_fuzzed(submission,
+                           Task(kernel, mode, language),
+                           k=k,
+                           baseline=baseline,
+                           datatype=datatype,
+                           repeat=repeat,
+                           verify=verify,
+                           c_max=c_max)
 
     valid = [(it.speedup, it.native_ns, it.baseline_ns) for it in ts.iterations
              if it.correct and it.verified and it.speedup > 0]
@@ -115,7 +121,11 @@ def grade(kernel: str,
         "gsd_gated": gated,
         "baseline": ts.baseline,
         "kernel": kernel,
-        "iterations": [{"speedup": s, "native_ns": n, "baseline_ns": b} for s, n, b in valid],
+        "iterations": [{
+            "speedup": s,
+            "native_ns": n,
+            "baseline_ns": b
+        } for s, n, b in valid],
         "suspect": ts.suspect_count > 0,
     }
 
@@ -176,7 +186,9 @@ def main(argv=None) -> int:
     p.add_argument("--language", default="c", help="implementation language (default c)")
     p.add_argument("--reward", default="/logs/verifier/reward.json", help="reward file to write")
     p.add_argument("--k", type=int, default=None, help="fuzz iterations (default config fuzz.iterations)")
-    p.add_argument("--baseline", default=config.get("measurement.baseline", "c"), choices=list(BASELINE_CHOICES),
+    p.add_argument("--baseline",
+                   default=config.get("measurement.baseline", "c"),
+                   choices=list(BASELINE_CHOICES),
                    help="speedup denominator")
     p.add_argument("--no-verify", dest="verify", action="store_false", help="skip independent_verify")
     args = p.parse_args(argv)
@@ -191,8 +203,13 @@ def main(argv=None) -> int:
 
     pin_threads()
     with timing_lock():  # serialize the all-CPU timing; agents still solve in parallel
-        reward = grade_items(args.kernel, sources, language=args.language, baseline=args.baseline,
-                             libraries=libraries, k=args.k, verify=args.verify)
+        reward = grade_items(args.kernel,
+                             sources,
+                             language=args.language,
+                             baseline=args.baseline,
+                             libraries=libraries,
+                             k=args.k,
+                             verify=args.verify)
 
     with open(args.reward, "w") as f:
         json.dump(reward, f)

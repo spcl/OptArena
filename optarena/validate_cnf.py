@@ -29,17 +29,19 @@ import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set
 
-
 # Containers forbidden by INV3.
 _FORBIDDEN_CTORS = {"list", "set", "dict", "frozenset", "tuple"}
 _FORBIDDEN_COLLECTIONS = {
-    "deque", "defaultdict", "OrderedDict", "Counter", "namedtuple",
+    "deque",
+    "defaultdict",
+    "OrderedDict",
+    "Counter",
+    "namedtuple",
 }
 # Growth / dynamic-shape method calls forbidden by INV3.
 _FORBIDDEN_METHODS = {"append", "extend", "insert", "pop", "remove", "add"}
 # numpy calls that grow / change rank dynamically (INV1/INV3 hints).
-_DYNAMIC_NP = {"concatenate", "hstack", "vstack", "stack", "append",
-                "resize", "vsplit", "hsplit", "split"}
+_DYNAMIC_NP = {"concatenate", "hstack", "vstack", "stack", "append", "resize", "vsplit", "hsplit", "split"}
 
 
 @dataclass(frozen=True)
@@ -47,9 +49,9 @@ class CnfViolation:
     kernel: str
     lineno: int
     col: int
-    invariant: str          # "INV1" | "INV2" | "INV3"
+    invariant: str  # "INV1" | "INV2" | "INV3"
     message: str
-    hint: str               # cookbook pointer
+    hint: str  # cookbook pointer
 
 
 def _kernel_funcs(tree: ast.AST) -> List[ast.FunctionDef]:
@@ -70,8 +72,7 @@ def _array_decl_rank(value: ast.AST) -> Optional[int]:
         attr = func.attr
     elif isinstance(func, ast.Name):
         attr = func.id
-    if attr not in {"zeros", "empty", "ones", "full", "ndarray",
-                     "zeros_like", "empty_like", "ones_like"}:
+    if attr not in {"zeros", "empty", "ones", "full", "ndarray", "zeros_like", "empty_like", "ones_like"}:
         return None
     if attr.endswith("_like"):
         return None  # rank follows the source; treat as opaque
@@ -100,14 +101,12 @@ def _scan_function(fn: ast.FunctionDef, kernel: str) -> List[CnfViolation]:
     # Map name -> declared rank (from np.zeros/empty/... or reshape arg).
     decl_rank: Dict[str, int] = {}
 
-    def _record_and_check_assign(target_id: str, value: ast.AST,
-                                  node: ast.AST) -> None:
+    def _record_and_check_assign(target_id: str, value: ast.AST, node: ast.AST) -> None:
         new_rank = _array_decl_rank(value)
         # reshape(x, (a, b, ...)) declares the target's new rank.
         if new_rank is None and isinstance(value, ast.Call):
             f = value.func
-            if (isinstance(f, ast.Attribute) and f.attr == "reshape"
-                    and len(value.args) >= 2):
+            if (isinstance(f, ast.Attribute) and f.attr == "reshape" and len(value.args) >= 2):
                 sh = value.args[1]
                 if isinstance(sh, (ast.Tuple, ast.List)):
                     new_rank = len(sh.elts)
@@ -117,11 +116,12 @@ def _scan_function(fn: ast.FunctionDef, kernel: str) -> List[CnfViolation]:
             return
         prev = decl_rank.get(target_id)
         if prev is not None and prev != new_rank:
-            out.append(CnfViolation(
-                kernel, node.lineno, node.col_offset, "INV1",
-                f"'{target_id}' reassigned from rank-{prev} to rank-{new_rank}; "
-                "an array's rank must not change.",
-                "cookbook: whole-array reassign with shape change -> named buffers"))
+            out.append(
+                CnfViolation(
+                    kernel, node.lineno, node.col_offset, "INV1",
+                    f"'{target_id}' reassigned from rank-{prev} to rank-{new_rank}; "
+                    "an array's rank must not change.",
+                    "cookbook: whole-array reassign with shape change -> named buffers"))
         decl_rank[target_id] = new_rank
 
     for node in ast.walk(fn):
@@ -136,11 +136,10 @@ def _scan_function(fn: ast.FunctionDef, kernel: str) -> List[CnfViolation]:
             # array), not e.g. a tuple-shape constant fold.
             inner = node.value
             if isinstance(inner.value, ast.Name):
-                out.append(CnfViolation(
-                    kernel, node.lineno, node.col_offset, "INV2",
-                    f"chained subscript on '{inner.value.id}' "
-                    "(a[i][j]); use a single full index a[i, j].",
-                    "cookbook: chained subscript -> full index"))
+                out.append(
+                    CnfViolation(
+                        kernel, node.lineno, node.col_offset, "INV2", f"chained subscript on '{inner.value.id}' "
+                        "(a[i][j]); use a single full index a[i, j].", "cookbook: chained subscript -> full index"))
 
         # INV2 — fancy indexing a[index_array] (a Name slot that is an
         # array, not a scalar loop var). We can't resolve dtype here, so
@@ -157,37 +156,34 @@ def _scan_function(fn: ast.FunctionDef, kernel: str) -> List[CnfViolation]:
             if isinstance(f, ast.Name) and f.id in _FORBIDDEN_CTORS:
                 # Allow `tuple()`-free: bare tuple literals are fine; only
                 # the `tuple(...)` / `list(...)` ctor calls are flagged.
-                out.append(CnfViolation(
-                    kernel, node.lineno, node.col_offset, "INV3",
-                    f"'{f.id}(...)' container constructor; CNF allows only "
-                    "static-shape tensors.",
-                    "cookbook: dynamic growth -> pre-declared buffer"))
+                out.append(
+                    CnfViolation(kernel, node.lineno, node.col_offset, "INV3",
+                                 f"'{f.id}(...)' container constructor; CNF allows only "
+                                 "static-shape tensors.", "cookbook: dynamic growth -> pre-declared buffer"))
             if isinstance(f, ast.Attribute):
                 # Is the receiver a module alias (np / numpy / cp / cupy /
                 # math)? ``np.add(Z, C, Z)`` is an elementwise ufunc, NOT
                 # a set ``.add`` — only flag .add/.append/etc. on a
                 # NON-module receiver.
-                recv_is_module = (
-                    isinstance(f.value, ast.Name)
-                    and f.value.id in {"np", "numpy", "cp", "cupy", "math"})
+                recv_is_module = (isinstance(f.value, ast.Name) and f.value.id in {"np", "numpy", "cp", "cupy", "math"})
                 if f.attr in _FORBIDDEN_METHODS and not recv_is_module:
-                    out.append(CnfViolation(
-                        kernel, node.lineno, node.col_offset, "INV3",
-                        f"'.{f.attr}(...)' grows/mutates a container; "
-                        "CNF forbids dynamic resize.",
-                        "cookbook: .append -> pre-declared worst-case buffer"))
+                    out.append(
+                        CnfViolation(kernel, node.lineno, node.col_offset, "INV3",
+                                     f"'.{f.attr}(...)' grows/mutates a container; "
+                                     "CNF forbids dynamic resize.",
+                                     "cookbook: .append -> pre-declared worst-case buffer"))
                 if f.attr in _DYNAMIC_NP:
-                    out.append(CnfViolation(
-                        kernel, node.lineno, node.col_offset, "INV1",
-                        f"'np.{f.attr}(...)' changes shape/rank dynamically.",
-                        "cookbook: reshape/concat -> declared buffer + copy"))
+                    out.append(
+                        CnfViolation(kernel, node.lineno, node.col_offset, "INV1",
+                                     f"'np.{f.attr}(...)' changes shape/rank dynamically.",
+                                     "cookbook: reshape/concat -> declared buffer + copy"))
             if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) \
                     and f.value.id == "collections" \
                     and f.attr in _FORBIDDEN_COLLECTIONS:
-                out.append(CnfViolation(
-                    kernel, node.lineno, node.col_offset, "INV3",
-                    f"'collections.{f.attr}' is not a tensor; CNF forbids it.",
-                    "cookbook: dynamic growth -> pre-declared buffer"))
+                out.append(
+                    CnfViolation(kernel, node.lineno, node.col_offset, "INV3",
+                                 f"'collections.{f.attr}' is not a tensor; CNF forbids it.",
+                                 "cookbook: dynamic growth -> pre-declared buffer"))
 
     # INV2 — fancy gather a[idx] where idx is used elsewhere as an array.
     # Build the set of names ever used as a Subscript BASE (i.e. arrays).
@@ -200,12 +196,12 @@ def _scan_function(fn: ast.FunctionDef, kernel: str) -> List[CnfViolation]:
             sl = node.slice
             # a[idx] single-axis where idx is a Name that is itself an array
             if isinstance(sl, ast.Name) and sl.id in array_names:
-                out.append(CnfViolation(
-                    kernel, node.lineno, node.col_offset, "INV2",
-                    f"fancy index '{node.value.id}[{sl.id}]' where '{sl.id}' "
-                    "is an array; use an explicit gather loop (or the sparse "
-                    "layout system).",
-                    "cookbook: fancy gather -> explicit loop"))
+                out.append(
+                    CnfViolation(
+                        kernel, node.lineno, node.col_offset, "INV2",
+                        f"fancy index '{node.value.id}[{sl.id}]' where '{sl.id}' "
+                        "is an array; use an explicit gather loop (or the sparse "
+                        "layout system).", "cookbook: fancy gather -> explicit loop"))
 
     # Stable order by line then column.
     out.sort(key=lambda v: (v.lineno, v.col))
@@ -223,8 +219,7 @@ def validate_cnf_file(path: str) -> List[CnfViolation]:
 def main(argv: Optional[List[str]] = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if not args:
-        print("usage: python -m optarena.validate_cnf <kernel_numpy.py> [...]",
-              file=sys.stderr)
+        print("usage: python -m optarena.validate_cnf <kernel_numpy.py> [...]", file=sys.stderr)
         return 2
     total = 0
     for path in args:
@@ -234,8 +229,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"({v.hint})")
         total += len(violations)
     if total:
-        print(f"\n{total} CNF violation(s) across {len(args)} file(s).",
-              file=sys.stderr)
+        print(f"\n{total} CNF violation(s) across {len(args)} file(s).", file=sys.stderr)
         return 1
     print(f"CNF clean: {len(args)} file(s) checked.")
     return 0

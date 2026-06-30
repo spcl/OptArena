@@ -93,4 +93,4 @@ def test_agent_budget_tokens():
     assert budget_tokens(None, 512) == 512
     assert budget_tokens(256, 512) == 256
     assert budget_tokens(TuningBudget(scale="x", trials=1, configs=1, cost=1024), 512) == 1024
-    assert budget_tokens(TuningBudget.from_env("small"), 512) == 512   # no cost -> default
+    assert budget_tokens(TuningBudget.from_env("small"), 512) == 512  # no cost -> default

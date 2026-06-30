@@ -26,8 +26,11 @@ def test_wheel_is_pip_installable_and_complete(tmp_path):
     the console-script entry point -- i.e. `pip install optarena` yields a usable
     package (guards the find_packages / include_package_data / entry_points wiring)."""
     rc = subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation", "-w", str(tmp_path), str(_ROOT)],
-        capture_output=True, text=True)
+        [sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation", "-w",
+         str(tmp_path),
+         str(_ROOT)],
+        capture_output=True,
+        text=True)
     assert rc.returncode == 0, rc.stderr
     whl = list(tmp_path.glob("optarena-*.whl"))
     assert whl, "no wheel produced"
@@ -84,6 +87,6 @@ From: python:3.12-slim
     if build.returncode != 0 and any(s in build.stderr for s in ("newuidmap", "fakeroot", "subuid")):
         pytest.skip(f"host cannot build unprivileged (apptainer rootless tooling missing): {build.stderr.strip()}")
     assert build.returncode == 0, build.stderr
-    run = subprocess.run(["apptainer", "run", str(sif), "python", "-c", "import optarena.containers"],
-                         capture_output=True, text=True)
+    run = subprocess.run(
+        ["apptainer", "run", str(sif), "python", "-c", "import optarena.containers"], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr

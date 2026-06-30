@@ -16,8 +16,7 @@ import triton.language as tl
 
 
 @triton.jit
-def _spmv_kernel(indptr_ptr, indices_ptr, data_ptr, x_ptr, y_ptr,
-                 MAX_NNZ: tl.constexpr):
+def _spmv_kernel(indptr_ptr, indices_ptr, data_ptr, x_ptr, y_ptr, MAX_NNZ: tl.constexpr):
     row = tl.program_id(0)
     start = tl.load(indptr_ptr + row)
     end = tl.load(indptr_ptr + row + 1)
@@ -38,18 +37,14 @@ class TritonSpMV:
     def __init__(self, A, dtype):
         A = A.tocsr()
         self.n = int(A.shape[0])
-        self.indptr = torch.from_numpy(
-            np.ascontiguousarray(A.indptr, dtype=np.int32)).to('cuda')
-        self.indices = torch.from_numpy(
-            np.ascontiguousarray(A.indices, dtype=np.int32)).to('cuda')
-        self.data = torch.from_numpy(
-            np.ascontiguousarray(A.data, dtype=str(dtype))).to('cuda')
+        self.indptr = torch.from_numpy(np.ascontiguousarray(A.indptr, dtype=np.int32)).to('cuda')
+        self.indices = torch.from_numpy(np.ascontiguousarray(A.indices, dtype=np.int32)).to('cuda')
+        self.data = torch.from_numpy(np.ascontiguousarray(A.data, dtype=str(dtype))).to('cuda')
         row_len = np.diff(A.indptr)
         max_nnz = int(row_len.max()) if row_len.size else 1
         self.max_nnz = triton.next_power_of_2(max(max_nnz, 1))
 
     def __call__(self, x):
         y = torch.empty(self.n, dtype=x.dtype, device='cuda')
-        _spmv_kernel[(self.n,)](self.indptr, self.indices, self.data, x, y,
-                                MAX_NNZ=self.max_nnz)
+        _spmv_kernel[(self.n, )](self.indptr, self.indices, self.data, x, y, MAX_NNZ=self.max_nnz)
         return y

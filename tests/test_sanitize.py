@@ -23,7 +23,6 @@ from optarena.sanitize.comments import tree_sitter_available
 
 TREE_SITTER = tree_sitter_available()
 
-
 # --------------------------------------------------------------------------- #
 # Sample snippets
 # --------------------------------------------------------------------------- #
@@ -56,10 +55,10 @@ def relu(a):
     return [helper(v) for v in a]
 '''
 
-
 # --------------------------------------------------------------------------- #
 # Comment stripping
 # --------------------------------------------------------------------------- #
+
 
 def test_strip_comments_c_removes_all_comments():
     out = strip_comments(C_SRC, "c")
@@ -93,6 +92,7 @@ def test_strip_comments_python_removes_comments_and_keeps_strings():
 # Name map construction
 # --------------------------------------------------------------------------- #
 
+
 def test_build_name_map_ordering_and_precedence():
     nm = build_name_map(["relu", "conv"], ["helper", "pad", "relu"])
     assert nm["relu"] == "kernel1"
@@ -113,6 +113,7 @@ def test_build_name_map_dedups():
 # --------------------------------------------------------------------------- #
 # Mangling
 # --------------------------------------------------------------------------- #
+
 
 def test_mangle_c_consistent_and_boundary_safe():
     name_map = build_name_map(["relu"], ["helper"])
@@ -170,6 +171,7 @@ def test_mangle_python_consistent():
 # Compilation gate
 # --------------------------------------------------------------------------- #
 
+
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
 def test_mangled_c_still_compiles():
     name_map = build_name_map(["relu"], ["helper"])
@@ -178,9 +180,7 @@ def test_mangled_c_still_compiles():
     with tempfile.NamedTemporaryFile("w", suffix=".c", delete=True) as fh:
         fh.write(out)
         fh.flush()
-        proc = subprocess.run(
-            ["gcc", "-fsyntax-only", fh.name],
-            capture_output=True, text=True)
+        proc = subprocess.run(["gcc", "-fsyntax-only", fh.name], capture_output=True, text=True)
     assert proc.returncode == 0, f"gcc rejected mangled C:\n{proc.stderr}"
 
 
@@ -188,9 +188,9 @@ def test_mangled_c_still_compiles():
 # tree-sitter parity (only when installed)
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("tree_sitter_language_pack") is None,
-    reason="tree-sitter (tree-sitter-language-pack) not installed")
+
+@pytest.mark.skipif(importlib.util.find_spec("tree_sitter_language_pack") is None,
+                    reason="tree-sitter (tree-sitter-language-pack) not installed")
 def test_tree_sitter_path_used_when_available():
     assert TREE_SITTER is True
     # Comment strip + mangle still satisfy the core contract on the ts path.

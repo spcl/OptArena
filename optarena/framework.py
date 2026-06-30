@@ -62,8 +62,7 @@ class Framework:
     full_name: str = ""
     postfix: str = ""
     arch: str = "cpu"
-    SUPPORTED_PRECISIONS: Set[Precision] = frozenset(
-        {Precision.FP32, Precision.FP64})
+    SUPPORTED_PRECISIONS: Set[Precision] = frozenset({Precision.FP32, Precision.FP64})
 
     _name: str = ""
 

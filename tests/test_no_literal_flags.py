@@ -24,12 +24,12 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 _PATTERN = re.compile(r"-O3|-march=native|-ffast-math")
 _SCAN_DIRS = ("optarena", "scripts")
 _ALLOW = {
-    "optarena/flags.py",                                       # the matrix itself
+    "optarena/flags.py",  # the matrix itself
     "optarena/hardware_info/practical/flops_with_linpack.py",  # emits an HPL Makefile
     "optarena/hardware_info/practical/memory_with_stream.py",  # emits a STREAM build
-    "scripts/emit_cpp_ports.py",                              # emits CMake text (TODO: route)
-    "scripts/emit_c_variants.py",                             # emits CMake text (TODO: route)
-    "scripts/pull_cpp.py",                                    # emits CMake text (TODO: route)
+    "scripts/emit_cpp_ports.py",  # emits CMake text (TODO: route)
+    "scripts/emit_c_variants.py",  # emits CMake text (TODO: route)
+    "scripts/pull_cpp.py",  # emits CMake text (TODO: route)
 }
 
 #: AST nodes that carry a leading docstring (module / class / def / async def).
@@ -92,7 +92,6 @@ def test_no_literal_opt_flags_outside_matrix():
     for p, rel in _candidates():
         text = p.read_text(errors="ignore")
         offenders += _py_offenders(text, rel) if p.suffix == ".py" else _raw_offenders(text, rel)
-    assert not offenders, (
-        "Literal optimization flags found outside optarena/flags.py -- route them "
-        "through the matrix (or allowlist with a justification in this file):\n  "
-        + "\n  ".join(offenders))
+    assert not offenders, ("Literal optimization flags found outside optarena/flags.py -- route them "
+                           "through the matrix (or allowlist with a justification in this file):\n  " +
+                           "\n  ".join(offenders))

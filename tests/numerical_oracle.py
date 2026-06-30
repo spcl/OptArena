@@ -118,6 +118,7 @@ def _all_backend_status(reason: str) -> Dict[str, str]:
     is resolved at call time -- it is defined further down the module.)"""
     return {b: reason for b in (*BACKENDS, *PY_BACKENDS, "jax")}
 
+
 #: Built-in defaults for the operational config -- used when a key is absent from
 #: the consolidated ``optarena/config.yaml`` ``oracle:`` block so the oracle never
 #: hard-depends on it.
@@ -207,7 +208,7 @@ def _is_perfect_cube(n: int) -> bool:
     """True if ``n`` is a positive perfect cube (``edgeElems**3``)."""
     if not isinstance(n, int) or n < 1:
         return False
-    r = round(n ** (1.0 / 3.0))
+    r = round(n**(1.0 / 3.0))
     return any(c >= 1 and c * c * c == n for c in (r - 1, r, r + 1))
 
 
@@ -229,8 +230,8 @@ def _custom_initialize(info, syms, datatype=np.float64) -> Dict[str, Any]:
     # first (preserves intra-package relative imports), then the _numpy file.
     fn = None
     try:
-        mod = importlib.import_module("optarena.benchmarks.{r}.{m}".format(
-            r=info["relative_path"].replace("/", "."), m=info["module_name"]))
+        mod = importlib.import_module("optarena.benchmarks.{r}.{m}".format(r=info["relative_path"].replace("/", "."),
+                                                                           m=info["module_name"]))
         fn = vars(mod).get(init["func_name"])
     except ModuleNotFoundError:
         fn = None
@@ -312,6 +313,7 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
         mx = max(ints.values(), default=0)
         if mx > 48:
             f = 48.0 / mx
+
             # Scale only the genuinely-large dimensions. A small radix /
             # exponent param (stockham_fft R=2, K=15) must stay put --
             # scaling it floors both to 10 and ``N = R**K`` explodes to
@@ -343,11 +345,12 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
                 # non-cube and the initializer raised. Round the EDGE length down
                 # (floor 2) so the scaled value stays a cube.
                 if is_cube:
-                    e = max(2, round(t ** (1.0 / 3.0)))
+                    e = max(2, round(t**(1.0 / 3.0)))
                     while e > 2 and e * e * e > max(t, 8):
                         e -= 1
                     return e * e * e
                 return t
+
             syms = {k: (_scale_dim(v) if (k in ints and v > 48) else v) for k, v in syms.items()}
     # Kernel scalar params (``init.scalars``, e.g. crc16's CRC polynomial
     # ``poly``) pass to the kernel by value and must resolve by name like a
@@ -567,8 +570,16 @@ def run_kernel(short: str, preset: str = "S", precision: str = "fp64", seed: int
             except Exception as exc:  # noqa: BLE001
                 status[pb] = f"FAIL:{type(exc).__name__}"
         try:
-            status["jax"] = _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol,
-                                             emit_prec=emit_prec, norm_error=spec.norm_error or 0.0)
+            status["jax"] = _run_jax_backend(short,
+                                             info,
+                                             by,
+                                             syms,
+                                             expected,
+                                             compare,
+                                             rtol,
+                                             atol,
+                                             emit_prec=emit_prec,
+                                             norm_error=spec.norm_error or 0.0)
         except Exception as exc:  # noqa: BLE001
             status["jax"] = f"FAIL:{type(exc).__name__}"
     finally:
@@ -598,7 +609,16 @@ def _dep_available(dep: str) -> bool:
     return True
 
 
-def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "",
+def _run_py_backend(backend,
+                    short,
+                    info,
+                    by,
+                    syms,
+                    expected,
+                    compare,
+                    rtol,
+                    atol,
+                    emit_prec: str = "",
                     norm_error: float = 0.0) -> str:
     """Validate a Python/JIT backend (numba/pythran/cupy) vs numpy.
 
@@ -711,7 +731,15 @@ def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, ato
         return "ok"
 
 
-def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "",
+def _run_jax_backend(short,
+                     info,
+                     by,
+                     syms,
+                     expected,
+                     compare,
+                     rtol,
+                     atol,
+                     emit_prec: str = "",
                      norm_error: float = 0.0) -> str:
     """Validate the NumpyToJAX emitter vs numpy, in a forked child.
 
@@ -765,8 +793,7 @@ def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_
     return b"".join(chunks).decode() or "FAIL:no-result"
 
 
-def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str,
-                 norm_error: float = 0.0) -> str:
+def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str, norm_error: float = 0.0) -> str:
     """Emit + run + compare the jax kernel. Runs ONLY inside the forked child.
 
     JAX is functional: the emitted kernel RETURNS its outputs (even when the

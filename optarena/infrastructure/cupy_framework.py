@@ -23,7 +23,7 @@ class CupyFramework(Framework):
         return next(d.version for d in importlib.metadata.distributions() if d.metadata["Name"].startswith("cupy"))
 
     def autogen_targets(self):
-        return ("cupy",)
+        return ("cupy", )
 
     def imports(self) -> Dict[str, Any]:
         import cupy

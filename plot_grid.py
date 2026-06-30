@@ -3,6 +3,7 @@ import math
 import numpy as np
 import pandas as pd
 import matplotlib
+
 matplotlib.use('Agg')  # headless: save to file, never open a window
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
@@ -12,31 +13,46 @@ from optarena.infrastructure import utilities as util
 _BODY_WIDTH = 0.7
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-r", "--rows", type=int, default=None,
+parser.add_argument("-r",
+                    "--rows",
+                    type=int,
+                    default=None,
                     help="Number of rows in the grid (default: auto, derived "
-                         "from --cols so every (benchmark, variant) row fits).")
-parser.add_argument("-c", "--cols", type=int, default=None,
+                    "from --cols so every (benchmark, variant) row fits).")
+parser.add_argument("-c",
+                    "--cols",
+                    type=int,
+                    default=None,
                     help="Number of columns in the grid (default: auto — see "
-                         "--rows).")
-parser.add_argument("--plot-kind", choices=["violin", "bar"], default="violin",
+                    "--rows).")
+parser.add_argument("--plot-kind",
+                    choices=["violin", "bar"],
+                    default="violin",
                     help="Per-cell plot kind (default: violin)")
-parser.add_argument("-d", "--datatype", choices=["float32", "float64"], default="float64",
+parser.add_argument("-d",
+                    "--datatype",
+                    choices=["float32", "float64"],
+                    default="float64",
                     help="Precision to plot (default: float64). NULL/missing datatype "
-                         "rows from pre-datatype-column DBs are treated as float64.")
-parser.add_argument("--exclude-frameworks", default="dace_cpu,pythran,numba",
+                    "rows from pre-datatype-column DBs are treated as float64.")
+parser.add_argument("--exclude-frameworks",
+                    default="dace_cpu,pythran,numba",
                     help="Comma-separated frameworks to exclude (default: "
-                         "dace_cpu,pythran,numba — the GPU-focused historical "
-                         "default). Pass an empty string to include everything.")
-parser.add_argument("-V", "--variant", default=None,
+                    "dace_cpu,pythran,numba — the GPU-focused historical "
+                    "default). Pass an empty string to include everything.")
+parser.add_argument("-V",
+                    "--variant",
+                    default=None,
                     help="Restrict to a single sparse variant (e.g. "
-                         "csr_uniform). Default: show all variants — each "
-                         "(benchmark, variant) becomes its own row labelled "
-                         "`benchmark/variant`. Dense rows keep their plain "
-                         "name. Pass an explicit variant to focus the plot.")
+                    "csr_uniform). Default: show all variants — each "
+                    "(benchmark, variant) becomes its own row labelled "
+                    "`benchmark/variant`. Dense rows keep their plain "
+                    "name. Pass an explicit variant to focus the plot.")
 args = parser.parse_args()
 
 
 def bootstrap_ci(data, statfunction=np.median, alpha=0.05, n_samples=300):
+
     def bootstrap_ids(data, n_samples=100):
         for _ in range(n_samples):
             yield np.random.randint(data.shape[0], size=(data.shape[0], ))
@@ -60,8 +76,7 @@ database = r"optarena.db"
 conn = util.create_connection(database)
 data = pd.read_sql_query("SELECT * FROM results", conn)
 
-data = data.drop(['timestamp', 'kind', 'dwarf', 'version'],
-                 axis=1).reset_index(drop=True)
+data = data.drop(['timestamp', 'kind', 'dwarf', 'version'], axis=1).reset_index(drop=True)
 
 data = data[data["domain"] != ""]
 
@@ -83,32 +98,23 @@ elif args.datatype != 'float64':
 # `benchmark/variant` for sparse rows; dense rows keep the plain name.
 if 'variant' in data.columns:
     if args.variant is not None:
-        data = data[(data['variant'].isna()) |
-                    (data['variant'] == args.variant)]
+        data = data[(data['variant'].isna()) | (data['variant'] == args.variant)]
     sparse_mask = data['variant'].notna()
-    data.loc[sparse_mask, 'benchmark'] = (
-        data.loc[sparse_mask, 'benchmark'].astype(str)
-        + '/'
-        + data.loc[sparse_mask, 'variant'].astype(str)
-    )
+    data.loc[sparse_mask, 'benchmark'] = (data.loc[sparse_mask, 'benchmark'].astype(str) + '/' +
+                                          data.loc[sparse_mask, 'variant'].astype(str))
     data = data.drop(['variant'], axis=1).reset_index(drop=True)
 
 data = data[data['preset'] == 'paper']
 data = data.drop(['preset'], axis=1).reset_index(drop=True)
 
-aggdata = data.groupby(["benchmark", "domain", "framework", "mode", "details"],
-                       dropna=False).agg({
-                           "time": "median",
-                           "validated": "first"
-                       }).reset_index()
-best = aggdata.sort_values("time").groupby(
-    ["benchmark", "domain", "framework", "mode"],
-    dropna=False).first().reset_index()
+aggdata = data.groupby(["benchmark", "domain", "framework", "mode", "details"], dropna=False).agg({
+    "time": "median",
+    "validated": "first"
+}).reset_index()
+best = aggdata.sort_values("time").groupby(["benchmark", "domain", "framework", "mode"],
+                                           dropna=False).first().reset_index()
 bestgroup = best.drop(["time", "validated"], axis=1)
-data = pd.merge(left=bestgroup,
-                right=data,
-                on=["benchmark", "domain", "framework", "mode", "details"],
-                how="inner")
+data = pd.merge(left=bestgroup, right=data, on=["benchmark", "domain", "framework", "mode", "details"], how="inner")
 data = data.drop(['mode', 'details'], axis=1).reset_index(drop=True)
 
 excluded = [f.strip() for f in args.exclude_frameworks.split(',') if f.strip()]
@@ -175,8 +181,7 @@ if 'triton' in frmwrks:
     benchmarks = triton_speedups['benchmark'].tolist()
 else:
     # fall back: order by median speedup across whichever frameworks we have
-    benchmarks = (results_df.groupby('benchmark')['speedup'].median()
-                  .sort_values(ascending=False).index.tolist())
+    benchmarks = (results_df.groupby('benchmark')['speedup'].median().sort_values(ascending=False).index.tolist())
 
 missing_benchmarks = [b for b in benchmarks_unsorted if b not in benchmarks]
 benchmarks.extend(sorted(missing_benchmarks))
@@ -238,8 +243,8 @@ for row in range(n_rows):
         row_min = 0.1
     if row_max == float('-inf'):
         row_max = 10
-    y_max = 10 ** math.ceil(math.log10(row_max * 3))
-    y_min = 10 ** math.floor(math.log10(max(row_min * 0.3, 0.001)))
+    y_max = 10**math.ceil(math.log10(row_max * 3))
+    y_min = 10**math.floor(math.log10(max(row_min * 0.3, 0.001)))
     row_y_limits.append((y_min, y_max))
 
 axes_flat = axes.flatten()
@@ -297,8 +302,10 @@ for idx, benchmark in enumerate(benchmarks):
                     line_pos.append(pos)
                     line_vals.append(float(dist[0]))
             if v_dists:
-                parts = ax.violinplot(v_dists, positions=v_pos,
-                                      widths=_BODY_WIDTH, showmedians=False,
+                parts = ax.violinplot(v_dists,
+                                      positions=v_pos,
+                                      widths=_BODY_WIDTH,
+                                      showmedians=False,
                                       showextrema=False)
                 for body, color in zip(parts['bodies'], v_colors):
                     body.set_facecolor(color)
@@ -306,8 +313,7 @@ for idx, benchmark in enumerate(benchmarks):
                     body.set_alpha(0.7)
                     body.set_linewidth(0.5)
             for pos, val in zip(line_pos, line_vals):
-                ax.hlines(val, pos - _BODY_WIDTH / 2, pos + _BODY_WIDTH / 2,
-                          colors='black', linewidth=1.0)
+                ax.hlines(val, pos - _BODY_WIDTH / 2, pos + _BODY_WIDTH / 2, colors='black', linewidth=1.0)
         else:
             bottoms = []
             heights = []
@@ -330,8 +336,15 @@ for idx, benchmark in enumerate(benchmarks):
                 ax.scatter(pos, speedup, marker='x', s=50, c='red', linewidths=1.5, zorder=5)
 
         for j, (pos, speedup, err_low, err_up) in enumerate(zip(x_positions, speedups, errors_lower, errors_upper)):
-            ax.errorbar(pos, speedup, yerr=[[err_low], [err_up]], fmt='none',
-                       ecolor='black', capsize=2, capthick=1, elinewidth=1, zorder=10)
+            ax.errorbar(pos,
+                        speedup,
+                        yerr=[[err_low], [err_up]],
+                        fmt='none',
+                        ecolor='black',
+                        capsize=2,
+                        capthick=1,
+                        elinewidth=1,
+                        zorder=10)
 
         for j, (pos, speedup) in enumerate(zip(x_positions, speedups)):
             label_y = speedup * 1.3 if speedup >= 1 else speedup * 0.7
@@ -339,8 +352,14 @@ for idx, benchmark in enumerate(benchmarks):
                 label = f'{speedup:.0e}x'
             else:
                 label = f'{speedup:.1f}x'
-            ax.text(pos, label_y, label, ha='left', va='bottom' if speedup >= 1 else 'top',
-                   fontsize=5, fontweight='bold', rotation=45)
+            ax.text(pos,
+                    label_y,
+                    label,
+                    ha='left',
+                    va='bottom' if speedup >= 1 else 'top',
+                    fontsize=5,
+                    fontweight='bold',
+                    rotation=45)
 
         ax.set_ylim(row_y_limits[row])
 
@@ -356,14 +375,26 @@ for idx in range(len(benchmarks), n_rows * n_cols):
 
 fig.suptitle('log10(Speedup) over NumPy by Benchmark', fontsize=16, fontweight='bold', y=0.995)
 
-legend_elements = [plt.Rectangle((0,0),1,1, facecolor=color_map[fw], label=fw) for fw in frmwrks]
-legend_elements.append(Line2D([0], [0], marker='x', color='w', markerfacecolor='red',
-                              markeredgecolor='red', markersize=8, markeredgewidth=2, label='Not validated'))
-legend_elements.append(Line2D([0], [0], color='black', marker='_', markersize=10,
-                              markeredgewidth=1.5, label='95% CI'))
-legend = fig.legend(handles=legend_elements, loc='lower center', ncol=len(frmwrks) + 2,
-                    fontsize=12, bbox_to_anchor=(0.5, 0.01), frameon=True,
-                    fancybox=True, shadow=True, borderpad=1)
+legend_elements = [plt.Rectangle((0, 0), 1, 1, facecolor=color_map[fw], label=fw) for fw in frmwrks]
+legend_elements.append(
+    Line2D([0], [0],
+           marker='x',
+           color='w',
+           markerfacecolor='red',
+           markeredgecolor='red',
+           markersize=8,
+           markeredgewidth=2,
+           label='Not validated'))
+legend_elements.append(Line2D([0], [0], color='black', marker='_', markersize=10, markeredgewidth=1.5, label='95% CI'))
+legend = fig.legend(handles=legend_elements,
+                    loc='lower center',
+                    ncol=len(frmwrks) + 2,
+                    fontsize=12,
+                    bbox_to_anchor=(0.5, 0.01),
+                    frameon=True,
+                    fancybox=True,
+                    shadow=True,
+                    borderpad=1)
 legend.get_frame().set_linewidth(1.5)
 legend.get_frame().set_edgecolor('gray')
 

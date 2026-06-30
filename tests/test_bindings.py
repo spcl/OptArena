@@ -41,6 +41,7 @@ def _load(name):
 # Dense kernel: gemm
 # --------------------------------------------------------------------------- #
 
+
 def test_gemm_canonical_order_and_constness():
     spec = _load("gemm")
     b = binding_from_spec(spec)
@@ -99,8 +100,8 @@ def test_gemm_stub_has_signature_and_todo_not_reference():
     c_stub = gen_call_stub(b, "c")
     # The canonical C signature shape (§7 / §9).
     assert "const double *restrict A" in c_stub
-    assert "double *restrict C" in c_stub          # output, non-const
-    assert "const long" not in c_stub              # symbols are int64_t
+    assert "double *restrict C" in c_stub  # output, non-const
+    assert "const long" not in c_stub  # symbols are int64_t
     assert "const int64_t NI" in c_stub
     assert "int64_t *restrict time_ns" in c_stub
 
@@ -133,6 +134,7 @@ def test_gemm_json_round_trip():
 # --------------------------------------------------------------------------- #
 # Sparse kernel: spmv (packed group)
 # --------------------------------------------------------------------------- #
+
 
 def test_spmv_packed_group_and_order():
     spec = _load("spmv")
@@ -186,6 +188,7 @@ def test_spmv_host_glue_unpacks_handle():
 # Phantom-arg filter (§2)
 # --------------------------------------------------------------------------- #
 
+
 def test_phantom_np_arg_filtered():
     # A synthetic spec carrying a captured ``np`` numpy module param: it must
     # never reach the binding (§2).
@@ -195,7 +198,11 @@ def test_phantom_np_arg_filtered():
         "relative_path": "phantom",
         "module_name": "phantom",
         "func_name": "kernel",
-        "parameters": {"S": {"N": 16}},
+        "parameters": {
+            "S": {
+                "N": 16
+            }
+        },
         "input_args": ["x", "y", "N", "np"],
         "array_args": ["x", "y"],
         "output_args": ["y"],
