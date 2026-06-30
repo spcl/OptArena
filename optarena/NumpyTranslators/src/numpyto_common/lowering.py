@@ -1395,6 +1395,39 @@ def _harvest_local_shapes(tree: ast.AST,
                 shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
 
 
+class _FullLikeRewriter(ast.NodeTransformer):
+    """``X = np.full_like(src, val)`` -> ``X = np.empty_like(src); X[:] = val`` and
+    ``X = np.full(shape, val)`` -> ``X = np.empty(shape); X[:] = val``.
+
+    The existing empty-alias shape harvest declares X (shape from src / the shape
+    arg) and the whole-array scalar-broadcast assign fills it -- so no dedicated
+    full/full_like emitter path is needed (lulesh ``pbvc = np.full_like(bvc, c1s)``)."""
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        v = node.value
+        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(v, ast.Call)
+                and isinstance(v.func, ast.Attribute) and v.func.attr in ("full_like", "full")
+                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and len(v.args) >= 2):
+            return node
+        tgt = node.targets[0]
+        alloc_attr = "empty_like" if v.func.attr == "full_like" else "empty"
+        dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
+        alloc = ast.Assign(
+            targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
+            value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=alloc_attr, ctx=ast.Load()),
+                           args=[v.args[0]], keywords=dtype_kw))
+        fill = ast.Assign(
+            targets=[ast.Subscript(value=ast.Name(id=tgt.id, ctx=ast.Load()),
+                                   slice=ast.Slice(lower=None, upper=None, step=None), ctx=ast.Store())],
+            value=v.args[1])
+        for s in (alloc, fill):
+            ast.copy_location(s, node)
+        ast.fix_missing_locations(alloc)
+        ast.fix_missing_locations(fill)
+        return [alloc, fill]
+
+
 class _ZerosRewriter(ast.NodeTransformer):
     """Turn ``x = np.zeros((N, K))`` (and family) into a side-table entry.
 
@@ -4187,6 +4220,7 @@ def lower(kir: KernelIR) -> KernelIR:
     # before any slice-aware pass runs (lulesh ``a[..., k]``).
     _EllipsisExpander(arrays_shapes).visit(lowered.tree)
     _NpAliasRewriter().visit(lowered.tree)
+    _FullLikeRewriter().visit(lowered.tree)
     _MatmulCallRewriter().visit(lowered.tree)
     _ScatterAtRewriter(arrays_shapes).visit(lowered.tree)
     _TransposeAttrRewriter(set(kir.sparse or {})).visit(lowered.tree)

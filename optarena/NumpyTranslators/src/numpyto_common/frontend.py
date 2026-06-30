@@ -147,6 +147,10 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
         # ``relu(conv2d(input, w) + b)`` becomes
         # ``__hcall0 = conv2d(input, w); relu(__hcall0 + b)``; the _InlineHelpers
         # pass then inlines the hoisted call via its visit_Assign path.
+        # Unroll ``for x in [<const tuples>]: body`` (lulesh face-node loops)
+        # BEFORE inlining so the per-iteration void-helper calls (``_sum_face_normal
+        # (.., *f)``) become concrete statements the inliner can splice.
+        _unroll_const_list_loops(fn)
         _HoistMultiStmtHelpers(helpers).visit(fn)
         _InlineHelpers(helpers).visit(fn)
         ast.fix_missing_locations(fn)
@@ -155,6 +159,11 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
         if not any(
                 isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names for n in ast.walk(fn)):
             break
+    # Final unroll: the LAST inline round can splice in fresh ``for nk in
+    # (n0,n1,n2,n3)`` tuple-literal loops (lulesh _sum_face_normal) after the
+    # in-loop unroll already ran, so do one more pass once inlining settles.
+    _unroll_const_list_loops(fn)
+    ast.fix_missing_locations(fn)
     # Materialise module-level constant ARRAYS (lookup tables -- lulesh's
     # ``_VOLU_PERM = np.array([[...]], dtype=np.intp)``) into the kernel body as a
     # zeros local + element stores. Runs AFTER inlining so a table referenced only
@@ -1472,10 +1481,12 @@ def _collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> 
                 and isinstance(body[0].orelse[0], ast.Return)):
             return True
         # Form 3: multi-statement body ending with ``return expr``. No
-        # early returns / yields / nested defs allowed.
+        # early returns / yields / nested defs allowed. ``Expr`` statements are
+        # allowed (side-effect void calls -- lulesh ``_integrate_stress`` runs
+        # ``np.add.at(fx, nodelist, sfx)`` scatters then ``return determ``).
         if isinstance(body[-1], ast.Return) and body[-1].value is not None:
             mid = body[:-1]
-            if all(isinstance(s, (ast.Assign, ast.AugAssign, ast.For, ast.If)) for s in mid):
+            if all(isinstance(s, (ast.Assign, ast.AugAssign, ast.For, ast.If, ast.Expr)) for s in mid):
                 if not any(isinstance(sub, ast.Return) for s in mid for sub in ast.walk(s)):
                     return True
         # Form 4: void helper -- simple Assign / AugAssign / For / If / Expr
@@ -1528,6 +1539,114 @@ def _flatten_nested_helpers(tree: ast.Module) -> None:
             changed = True
         if not changed:
             break
+
+
+def _is_const_list_literal(node: ast.AST) -> bool:
+    """A non-empty list/tuple literal usable as a compile-time-unrollable loop
+    iterable: lulesh's ``faces = [(0,1,2,3), (0,4,5,1), ...]`` AND the inlined
+    ``for nk in (n0, n1, n2, n3)``. Elements may be constants, names, or nested
+    sequences -- the loop body is cloned once per element with the loop variable
+    substituted, so any element expression is fine."""
+    return isinstance(node, (ast.List, ast.Tuple)) and bool(node.elts)
+
+
+class _LoopVarSubst(ast.NodeTransformer):
+    """Substitute a (now compile-time-known) loop variable with one list element.
+
+    Handles a Tuple target (``for (a, b, d, e) in faces`` -> a/b/d/e bound to the
+    element's components) and a single Name target (``for f in faces`` -> ``*f`` in
+    a call expanded to the element's components, and bare ``f`` replaced by it)."""
+
+    def __init__(self, target: ast.AST, elt: ast.AST) -> None:
+        self.elt = elt
+        self.map: Dict[str, ast.AST] = {}
+        if (isinstance(target, ast.Tuple) and isinstance(elt, (ast.Tuple, ast.List))
+                and len(target.elts) == len(elt.elts)):
+            for t, v in zip(target.elts, elt.elts):
+                if isinstance(t, ast.Name):
+                    self.map[t.id] = v
+        self.single = target.id if isinstance(target, ast.Name) else None
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        # After substitution ``*f`` has become ``*(c0, c1, ...)`` (a Starred over a
+        # literal tuple/list) -- splat it into the call's positional args.
+        if any(isinstance(a, ast.Starred) and isinstance(a.value, (ast.Tuple, ast.List)) for a in node.args):
+            new_args: List[ast.expr] = []
+            for a in node.args:
+                if isinstance(a, ast.Starred) and isinstance(a.value, (ast.Tuple, ast.List)):
+                    new_args.extend(copy.deepcopy(e) for e in a.value.elts)
+                else:
+                    new_args.append(a)
+            node.args = new_args
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if isinstance(node.ctx, ast.Load):
+            if node.id in self.map:
+                return copy.deepcopy(self.map[node.id])
+            if self.single is not None and node.id == self.single:
+                return copy.deepcopy(self.elt)
+        return node
+
+
+def _unroll_const_list_loops(fn: ast.FunctionDef) -> None:
+    """Unroll ``for x in <const list of tuples/values>: body`` at compile time --
+    a backend has no Python list iteration (lulesh's face-node loops). The
+    iterable is a list literal directly, or a local bound exactly once to one;
+    the consumed binding is dropped so no list literal reaches emit."""
+    binds_count: Dict[str, int] = {}
+    for s in ast.walk(fn):
+        if isinstance(s, ast.Assign):
+            for t in s.targets:
+                if isinstance(t, ast.Name):
+                    binds_count[t.id] = binds_count.get(t.id, 0) + 1
+    list_binds: Dict[str, List[ast.expr]] = {}
+    for s in ast.walk(fn):
+        if (isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+                and _is_const_list_literal(s.value) and binds_count.get(s.targets[0].id) == 1):
+            list_binds[s.targets[0].id] = s.value.elts
+    consumed: Set[str] = set()
+
+    class _U(ast.NodeTransformer):
+
+        def visit_For(self, node: ast.For):
+            self.generic_visit(node)
+            if node.orelse:
+                return node
+            seq: Optional[List[ast.expr]] = None
+            src: Optional[str] = None
+            if _is_const_list_literal(node.iter):
+                seq = node.iter.elts
+            elif isinstance(node.iter, ast.Name) and node.iter.id in list_binds:
+                seq = list_binds[node.iter.id]
+                src = node.iter.id
+            if seq is None:
+                return node
+            out: List[ast.stmt] = []
+            for elt in seq:
+                for st in node.body:
+                    cloned = ast.parse(ast.unparse(st)).body[0]
+                    cloned = _LoopVarSubst(node.target, elt).visit(cloned)
+                    ast.fix_missing_locations(cloned)
+                    out.append(cloned)
+            if src is not None:
+                consumed.add(src)
+            return out
+
+    _U().visit(fn)
+    if consumed:
+
+        class _DropBind(ast.NodeTransformer):
+
+            def visit_Assign(self, node: ast.Assign):
+                if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                        and node.targets[0].id in consumed and _is_const_list_literal(node.value)):
+                    return None
+                return node
+
+        _DropBind().visit(fn)
+    ast.fix_missing_locations(fn)
 
 
 class _HoistMultiStmtHelpers(ast.NodeTransformer):
