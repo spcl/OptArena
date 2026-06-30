@@ -31,6 +31,18 @@ def _np_attr(node: ast.AST) -> Optional[str]:
     return None
 
 
+def _np_fft_attr(node: ast.AST) -> Optional[str]:
+    """``np.fft.<attr>(...)`` / ``numpy.fft.<attr>(...)`` call -> ``attr`` (one
+    of ``fft``/``ifft``/``fft2``/``ifft2``/``fftn``/``ifftn``), else None. The
+    call func is a two-level Attribute (``np.fft.fft``), so the single-level
+    ``_np_attr`` misses it."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "fft"
+            and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id in ("np", "numpy")):
+        return node.func.attr
+    return None
+
+
 def _tuple_len(node: ast.AST) -> Optional[int]:
     if isinstance(node, (ast.Tuple, ast.List)):
         return len(node.elts)
@@ -70,7 +82,11 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             return base - drop
         return base - 1  # single integer/Name index
     if isinstance(value, ast.Call):
+        if _np_fft_attr(value) and value.args:
+            return _expr_rank(value.args[0], ranks)  # fft/ifft/fftn... preserve rank
         attr = _np_attr(value)
+        if attr in ("arange", "linspace"):
+            return 1  # always 1-D
         if attr in _SHAPE_CTORS and value.args:
             n = _tuple_len(value.args[0])
             if n is not None:
@@ -401,14 +417,257 @@ class _EinsumInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
+def _fft_axes(fattr: str, call: ast.Call, rank: int):
+    """``(transform_axes, inverse)`` for an ``np.fft.<fattr>`` call, or
+    ``(None, inverse)`` when the axis spec is non-constant (caller bails, leaving
+    the call verbatim). ``fft``/``ifft`` take one ``axis`` (default last);
+    ``fftn``/``ifftn`` an ``axes`` sequence (default ALL); ``fft2``/``ifft2`` the
+    last two axes. Negative axes wrap modulo ``rank``."""
+    kwargs = {k.arg: k.value for k in call.keywords}
+    inverse = fattr.startswith("i")
+    base = fattr[1:] if inverse else fattr
+    if base == "fft":
+        ax = kwargs.get("axis") or (call.args[1] if len(call.args) > 1 else None)
+        if ax is None:
+            return [rank - 1], inverse
+        if isinstance(ax, ast.Constant) and isinstance(ax.value, int):
+            return [ax.value % rank], inverse
+        return None, inverse
+    if base == "fft2":
+        return ([rank - 2, rank - 1] if rank >= 2 else None), inverse
+    if base == "fftn":
+        axes = kwargs.get("axes") or (call.args[1] if len(call.args) > 1 else None)
+        if axes is None:
+            return list(range(rank)), inverse
+        if isinstance(axes, (ast.Tuple, ast.List)) and all(
+                isinstance(e, ast.Constant) and isinstance(e.value, int) for e in axes.elts):
+            return [e.value % rank for e in axes.elts], inverse
+        return None, inverse
+    return None, inverse
+
+
+def _fft_inline_stmts(tname: str, sname: str, taxes: List[int], rank: int, inverse: bool, ctr: int,
+                      alloc: bool) -> List[ast.stmt]:
+    """Source statements computing ``np.fft.*`` into ``tname`` (shape == source)
+    as a naive DFT loop nest -- the same O(prod(N_t)^2) transform the C/Fortran
+    backends lower, but as plain numpy (``np.exp`` of a complex phase, complex
+    ``+=``) that numba njit-compiles and pythran template-instantiates. Output
+    indices iterate every axis; summation iterators only the transform axes
+    ``taxes`` (batch axes ride the output iterator). Inverse uses ``+1j`` and
+    divides by ``prod(N_t)``. ``alloc`` allocates ``tname`` (bare-Name target);
+    a ``tname[:]`` slice target writes the existing buffer in place."""
+    p = f"__ft{ctr}"
+    sign = "1j" if inverse else "-1j"
+    # Bind each axis size to an int local first. pythran otherwise forward-
+    # substitutes ``sname.shape[i]`` into ``range(...)`` over a lazy numpy_expr
+    # source and fails template type inference; an int local pins it to ``long``.
+    d = [f"{p}_d{i}" for i in range(rank)]
+    lines: List[str] = [f"{d[i]} = {sname}.shape[{i}]" for i in range(rank)]
+    if alloc:
+        lines.append(f"{tname} = np.zeros(({', '.join(d)},), np.complex128)")
+    o = [f"{p}_k{i}" for i in range(rank)]
+    ind = ""
+    for i in range(rank):
+        lines.append(f"{ind}for {o[i]} in range({d[i]}):")
+        ind += "    "
+    oidx = ", ".join(o)
+    lines.append(f"{ind}{tname}[{oidx}] = 0j")
+    n = {t: f"{p}_n{t}" for t in taxes}
+    cind = ind
+    for t in taxes:
+        lines.append(f"{cind}for {n[t]} in range({d[t]}):")
+        cind += "    "
+    terms = [f"(2.0 * 3.141592653589793 * {o[t]} * {n[t]} / {d[t]})" for t in taxes]
+    phase = " + ".join(terms)
+    sidx = ", ".join((n[ax] if ax in taxes else o[ax]) for ax in range(rank))
+    lines.append(f"{cind}{tname}[{oidx}] += {sname}[{sidx}] * np.exp({sign} * ({phase}))")
+    if inverse:
+        denom = " * ".join(d[t] for t in taxes)
+        lines.append(f"{ind}{tname}[{oidx}] = {tname}[{oidx}] / ({denom})")
+    return ast.parse("\n".join(lines)).body
+
+
+class _FftInline(ast.NodeTransformer):
+    """Replace ``out = np.fft.fft/ifft/fftn/ifftn/fft2/ifft2(x)`` (and the
+    ``out[:] =`` slice-assign form) with a naive-DFT loop nest. numba supports no
+    ``np.fft`` at all; pythran supports 1-D ``fft``/``ifft`` but not N-D
+    ``fftn``/``ifftn`` -- lowering all variants uniformly keeps one code path
+    (the loop DFT matches numpy to ~1e-15 at any realistic size). A non-Name
+    argument (``ifftn(u1 * np.exp(...))``) is hoisted to a temp first so the loop
+    body can index it; a non-constant axis spec leaves the call verbatim."""
+
+    def __init__(self, ranks: Dict[str, int]):
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def visit_Assign(self, node: ast.Assign):
+        self.generic_visit(node)
+        if len(node.targets) != 1:
+            return node
+        fattr = _np_fft_attr(node.value)
+        if fattr is None or not node.value.args:
+            return node
+        tgt = node.targets[0]
+        if isinstance(tgt, ast.Name):
+            tname, alloc = tgt.id, True
+        elif (isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name) and isinstance(tgt.slice, ast.Slice)
+              and tgt.slice.lower is None and tgt.slice.upper is None):
+            tname, alloc = tgt.value.id, False
+        else:
+            return node
+        arg = node.value.args[0]
+        rank = _expr_rank(arg, self.ranks)
+        if rank is None or rank < 1:
+            return node
+        taxes, inverse = _fft_axes(fattr, node.value, rank)
+        if not taxes:
+            return node
+        pre: List[ast.stmt] = []
+        if isinstance(arg, ast.Name):
+            sname = arg.id
+        else:
+            sname = f"__fti{self._ctr}"
+            pre = ast.parse(f"{sname} = {ast.unparse(arg)}").body
+        stmts = _fft_inline_stmts(tname, sname, taxes, rank, inverse, self._ctr, alloc)
+        self._ctr += 1
+        self.changed = True
+        return pre + stmts
+
+
+def _mgrid_inline_stmts(tnames: List[str], slices: List[ast.AST], ctr: int) -> Optional[List[ast.stmt]]:
+    """``i, j = np.mgrid[a0:b0, a1:b1]`` -> per-axis ``arange`` reshaped onto its
+    own axis and broadcast-added to a full-shape int zeros. numba and pythran
+    support neither ``np.mgrid``; both support ``arange`` + ``reshape`` +
+    broadcasting. ``None`` when a slice has a step / open upper bound."""
+    k = len(slices)
+    if len(tnames) != k:
+        return None
+    los, his = [], []
+    for sl in slices:
+        if not isinstance(sl, ast.Slice) or sl.step is not None or sl.upper is None:
+            return None
+        los.append("0" if sl.lower is None else f"({ast.unparse(sl.lower)})")
+        his.append(f"({ast.unparse(sl.upper)})")
+    exts = [f"({his[m]} - {los[m]})" for m in range(k)]
+    full = ", ".join(exts)
+    lines = []
+    for m in range(k):
+        rshape = ", ".join(exts[mm] if mm == m else "1" for mm in range(k))
+        lines.append(f"{tnames[m]} = np.arange({los[m]}, {his[m]}).reshape({rshape}) + "
+                     f"np.zeros(({full},), np.int64)")
+    return ast.parse("\n".join(lines)).body
+
+
+class _MgridInline(ast.NodeTransformer):
+    """Replace ``i, j = np.mgrid[s0, s1]`` with explicit ``arange`` broadcasts."""
+
+    def __init__(self):
+        self.changed = False
+        self._ctr = 0
+
+    def visit_Assign(self, node: ast.Assign):
+        self.generic_visit(node)
+        val = node.value
+        if not (isinstance(val, ast.Subscript) and isinstance(val.value, ast.Attribute) and val.value.attr == "mgrid"
+                and isinstance(val.value.value, ast.Name) and val.value.value.id in ("np", "numpy")):
+            return node
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
+            return node
+        elts = node.targets[0].elts
+        if not all(isinstance(e, ast.Name) for e in elts):
+            return node
+        slices = val.slice.elts if isinstance(val.slice, ast.Tuple) else [val.slice]
+        stmts = _mgrid_inline_stmts([e.id for e in elts], slices, self._ctr)
+        if stmts is None:
+            return node
+        self._ctr += 1
+        self.changed = True
+        return stmts
+
+
+class _FancyGatherHoister(ast.NodeTransformer):
+    """Replace each multi-array fancy gather ``A[i, j, k]`` (every index a 1-D
+    array, one per axis of ``A``) inside one statement with a fresh temp Name,
+    accumulating the temp's gather loop in ``self.pre``. numba supports single
+    advanced-index ``A[idx]`` but not the multi-index ``UniTuple`` form (numpy's
+    point-wise gather); the explicit loop is what every other backend lowers."""
+
+    def __init__(self, ranks: Dict[str, int], ctr: int):
+        self.ranks = ranks
+        self.ctr = ctr
+        self.pre: List[ast.stmt] = []
+
+    def _is_gather(self, node: ast.Subscript) -> bool:
+        if not (isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load)):
+            return False
+        arank = self.ranks.get(node.value.id)
+        if not arank or not isinstance(node.slice, ast.Tuple):
+            return False
+        idxs = node.slice.elts
+        # full point-wise gather: one 1-D index array per axis of A.
+        return (len(idxs) == arank and len(idxs) >= 2
+                and all(isinstance(e, ast.Name) and self.ranks.get(e.id) == 1 for e in idxs))
+
+    def visit_Subscript(self, node: ast.Subscript):
+        self.generic_visit(node)
+        if not self._is_gather(node):
+            return node
+        arr = node.value.id
+        idxs = [e.id for e in node.slice.elts]
+        temp, gi = f"__gather{self.ctr}", f"__gi{self.ctr}"
+        self.ctr += 1
+        n = f"{idxs[0]}.shape[0]"
+        src = [
+            f"{temp} = np.empty({n}, {arr}.dtype)", f"for {gi} in range({n}):",
+            f"    {temp}[{gi}] = {arr}[{', '.join(f'{ix}[{gi}]' for ix in idxs)}]"
+        ]
+        self.pre.extend(ast.parse("\n".join(src)).body)
+        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+
+
+class _FancyGatherInline(ast.NodeTransformer):
+    """Hoist multi-array fancy gathers out of any value-bearing statement into a
+    preceding gather loop (handles ``chk[i] = np.sum(u2[q, r, s])``)."""
+
+    def __init__(self, ranks: Dict[str, int]):
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def _hoist(self, node):
+        if getattr(node, "value", None) is None:
+            return node
+        h = _FancyGatherHoister(self.ranks, self._ctr)
+        node.value = h.visit(node.value)
+        self._ctr = h.ctr
+        if h.pre:
+            self.changed = True
+            return h.pre + [node]
+        return node
+
+    def visit_Assign(self, node):
+        return self._hoist(node)
+
+    def visit_AugAssign(self, node):
+        return self._hoist(node)
+
+    def visit_Return(self, node):
+        return self._hoist(node)
+
+    def visit_Expr(self, node):
+        return self._hoist(node)
+
+
 def desugar_for_python_backend(source: str, kir) -> str:
     """Rewrite ``source`` so numba / pythran can compile it: expand the numpy
-    ops they do not support (currently batched ``@`` / ``np.matmul``) into plain
-    loops. Returns the rewritten source; a no-op when nothing matches."""
+    ops they do not support (batched ``@`` / ``np.matmul``, ``np.pad``,
+    ``np.einsum``, ``np.fft.*``, ``np.mgrid``) into plain loops / broadcasts.
+    Returns the rewritten source; a no-op when nothing matches."""
     # Cheap pre-check: a source with none of the trigger tokens cannot match
     # any rewrite -> return it byte-for-byte so the (vast) majority of kernels
     # keep their verbatim body (no reparse / comment-stripping churn).
-    if not any(tok in source for tok in ("@", "matmul", "pad", "einsum")):
+    if not any(tok in source for tok in ("@", "matmul", "pad", "einsum", "fft", "mgrid")):
         return source
     tree = ast.parse(source)
     seed: Dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
@@ -421,7 +680,13 @@ def desugar_for_python_backend(source: str, kir) -> str:
     pad.visit(scope)
     es = _EinsumInline()
     es.visit(scope)
-    if not (mm.changed or pad.changed or es.changed):
+    fft = _FftInline(ranks)
+    fft.visit(scope)
+    mg = _MgridInline()
+    mg.visit(scope)
+    fg = _FancyGatherInline(ranks)
+    fg.visit(scope)
+    if not (mm.changed or pad.changed or es.changed or fft.changed or mg.changed or fg.changed):
         return source  # nothing matched -> leave the body verbatim
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)
