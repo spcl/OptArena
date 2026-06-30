@@ -4509,6 +4509,27 @@ def lower(kir: KernelIR) -> KernelIR:
             k: list(v) for k, v in wa_rewriter._reassign_shapes.items()},
     ).visit(lowered.tree)
     ast.fix_missing_locations(lowered.tree)
+    # Force index-array LOCALS to int64. A local whose VALUES index another array
+    # (``delv[neigh_safe[w0]]`` -- neigh_safe = np.clip(lxim, ..) is a local, so
+    # the param-only _detect_output_and_index_arrays misses it) must be integer;
+    # C/Fortran reject a float subscript. A name used as a subscript index is
+    # always integral, so this is sound.
+    _idx_locals: Set[str] = set()
+    for node in ast.walk(lowered.tree):
+        if isinstance(node, ast.Subscript):
+            sl = node.slice
+            elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
+            for e in elts:
+                if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name):
+                    _idx_locals.add(e.value.id)        # A[B[i]] -> B is an index array
+                elif isinstance(e, ast.Name):
+                    _idx_locals.add(e.id)              # A[B] (whole-array gather) -> B
+    for _nm in _idx_locals:
+        if (_nm in shapes or _nm in local_dtypes):
+            _dt = local_dtypes.get(_nm)
+            if not (_dt and _dt.startswith(("int", "uint"))):
+                local_dtypes[_nm] = "int64"
+    lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
     return lowered
 
 
