@@ -637,42 +637,57 @@ class _MgridInline(ast.NodeTransformer):
 
 
 class _FancyGatherHoister(ast.NodeTransformer):
-    """Replace each multi-array fancy gather ``A[i, j, k]`` (every index a 1-D
-    array, one per axis of ``A``) inside one statement with a fresh temp Name,
-    accumulating the temp's gather loop in ``self.pre``. numba supports single
-    advanced-index ``A[idx]`` but not the multi-index ``UniTuple`` form (numpy's
-    point-wise gather); the explicit loop is what every other backend lowers."""
+    """Replace each multi-index fancy gather ``A[idx0, idx1, ...]`` (a Tuple index,
+    one entry per axis, with >=1 index ARRAY entry) inside one statement with a
+    fresh temp Name, accumulating the temp's gather loop in ``self.pre``. numba
+    supports a single advanced index ``A[idx]`` but not the multi-index
+    (``UniTuple``) point-wise gather -- neither all-1-D (fft_3d's ``u2[q,r,s]``)
+    nor mixed 2-D-array + scalar (icon_gather's ``A[nbr[:,:,n]-1, jk,
+    blk[:,:,n]-1]``). Array index entries (possibly expressions) are hoisted to
+    temps; the driver is the first array entry, scalar axes ride each iteration.
+    All array entries must share the driver rank (they broadcast to it)."""
 
     def __init__(self, ranks: Dict[str, int], ctr: int):
         self.ranks = ranks
         self.ctr = ctr
         self.pre: List[ast.stmt] = []
 
-    def _is_gather(self, node: ast.Subscript) -> bool:
-        if not (isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load)):
-            return False
-        arank = self.ranks.get(node.value.id)
-        if not arank or not isinstance(node.slice, ast.Tuple):
-            return False
-        idxs = node.slice.elts
-        # full point-wise gather: one 1-D index array per axis of A.
-        return (len(idxs) == arank and len(idxs) >= 2
-                and all(isinstance(e, ast.Name) and self.ranks.get(e.id) == 1 for e in idxs))
-
     def visit_Subscript(self, node: ast.Subscript):
         self.generic_visit(node)
-        if not self._is_gather(node):
+        if not (isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load)
+                and isinstance(node.slice, ast.Tuple)):
             return node
         arr = node.value.id
-        idxs = [e.id for e in node.slice.elts]
-        temp, gi = f"__gather{self.ctr}", f"__gi{self.ctr}"
+        arank = self.ranks.get(arr)
+        elts = node.slice.elts
+        if not arank or len(elts) != arank:
+            return node
+        elt_ranks = [_expr_rank(e, self.ranks) for e in elts]
+        arrs = [r for r in elt_ranks if r and r >= 1]
+        if not arrs or any(r != arrs[0] for r in arrs):
+            return node  # need >=1 index array; all arrays share the driver rank
+        driver_rank = arrs[0]
+        p = f"__gather{self.ctr}"
         self.ctr += 1
-        n = f"{idxs[0]}.shape[0]"
-        src = [
-            f"{temp} = np.empty({n}, {arr}.dtype)", f"for {gi} in range({n}):",
-            f"    {temp}[{gi}] = {arr}[{', '.join(f'{ix}[{gi}]' for ix in idxs)}]"
-        ]
-        self.pre.extend(ast.parse("\n".join(src)).body)
+        iters = [f"{p}_i{k}" for k in range(driver_rank)]
+        it = ", ".join(iters)
+        pre, idx_exprs, first = [], [], None
+        for j, e in enumerate(elts):
+            if (elt_ranks[j] or 0) >= 1:
+                t = f"{p}_x{j}"
+                pre.append(f"{t} = {ast.unparse(e)}")
+                idx_exprs.append(f"{t}[{it}]")
+                first = first or t
+            else:
+                idx_exprs.append(ast.unparse(e))
+        temp = f"{p}_o"
+        lines = pre + [f"{temp} = np.empty({first}.shape, {arr}.dtype)"]
+        deepen = ""
+        for k in range(driver_rank):
+            lines.append(f"{deepen}for {iters[k]} in range({first}.shape[{k}]):")
+            deepen += "    "
+        lines.append(f"{deepen}{temp}[{it}] = {arr}[{', '.join(idx_exprs)}]")
+        self.pre.extend(ast.parse("\n".join(lines)).body)
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
@@ -711,7 +726,7 @@ class _FancyGatherInline(ast.NodeTransformer):
 
 #: Reductions numba does NOT accept an ``axis=`` kwarg for (unlike ``sum`` /
 #: ``prod``, which it supports natively). ``mean`` additionally has no axis form.
-_REDUCE_AXIS_OPS = {"mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax"}
+_REDUCE_AXIS_OPS = {"mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
 
 
 def _reduce_axis_stmts(tname: str, sname: str, op: str, ax: int, rank: int, ctr: int) -> List[ast.stmt]:
@@ -726,7 +741,8 @@ def _reduce_axis_stmts(tname: str, sname: str, op: str, ax: int, rank: int, ctr:
     d = [f"{p}_d{i}" for i in range(rank)]
     lines: List[str] = [f"{d[i]} = {sname}.shape[{i}]" for i in range(rank)]
     is_arg = op in ("argmin", "argmax")
-    dtype = ("np.int64" if is_arg else "np.float64" if op in ("mean", "std", "var") else f"{sname}.dtype")
+    dtype = ("np.int64" if is_arg else
+             "np.bool_" if op in ("any", "all") else "np.float64" if op in ("mean", "std", "var") else f"{sname}.dtype")
     lines.append(f"{tname} = np.empty(({''.join(d[i] + ', ' for i in out_axes)}), {dtype})")
     o = {i: f"{p}_k{i}" for i in out_axes}
     ind = ""
@@ -738,7 +754,16 @@ def _reduce_axis_stmts(tname: str, sname: str, op: str, ax: int, rank: int, ctr:
     def elem(jexpr):
         return f"{sname}[{', '.join((jexpr if i == ax else o[i]) for i in range(rank))}]"
 
-    if op == "mean":
+    if op in ("any", "all"):
+        lines.append(f"{ind}{tgt} = {'True' if op == 'all' else 'False'}")
+        lines.append(f"{ind}for {p}_j in range({d[ax]}):")
+        if op == "all":
+            lines.append(f"{ind}    if not {elem(p + '_j')}:")
+            lines.append(f"{ind}        {tgt} = False")
+        else:
+            lines.append(f"{ind}    if {elem(p + '_j')}:")
+            lines.append(f"{ind}        {tgt} = True")
+    elif op == "mean":
         lines.append(f"{ind}{tgt} = 0.0")
         lines.append(f"{ind}for {p}_j in range({d[ax]}):")
         lines.append(f"{ind}    {tgt} += {elem(p + '_j')}")
@@ -777,11 +802,12 @@ def _reduce_axis_stmts(tname: str, sname: str, op: str, ax: int, rank: int, ctr:
 
 
 class _ReduceAxisHoister(ast.NodeTransformer):
-    """Replace each ``np.mean/min/max/argmin/argmax(x, axis=<int>)`` inside one
-    statement with a fresh temp Name, accumulating its reduction loop in
-    ``self.pre``. A non-Name ``x`` (bellman_ford's ``dist[:, None] + graph``) is
-    hoisted to a temp first; a non-constant axis or a rank<2 (scalar-result)
-    reduction is left verbatim (numba handles the no-axis scalar form)."""
+    """Replace each ``np.mean/min/max/argmin/argmax/any/all(x, axis=<int>)`` --
+    OR the method form ``x.mean(axis=<int>)`` (velocity's ``levmask.any(axis=0)``)
+    -- inside one statement with a fresh temp Name, accumulating its reduction
+    loop in ``self.pre``. A non-Name ``x`` (bellman_ford's ``dist[:, None] +
+    graph``) is hoisted to a temp first; a non-constant axis or a rank<2
+    (scalar-result) reduction is left verbatim (numba's no-axis scalar form)."""
 
     def __init__(self, ranks: Dict[str, int], ctr: int):
         self.ranks = ranks
@@ -790,14 +816,19 @@ class _ReduceAxisHoister(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        op = _np_attr(node)
-        if op not in _REDUCE_AXIS_OPS or not node.args:
-            return node
         kw = {k.arg: k.value for k in node.keywords}
-        ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
+        npop = _np_attr(node)
+        if npop in _REDUCE_AXIS_OPS and node.args:  # np.mean(x, axis=k)
+            op, arg = npop, node.args[0]
+            ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
+        elif (isinstance(node.func, ast.Attribute) and node.func.attr in _REDUCE_AXIS_OPS
+              and not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy"))):
+            op, arg = node.func.attr, node.func.value  # x.mean(axis=k) method form
+            ax = kw.get("axis") or (node.args[0] if node.args else None)
+        else:
+            return node
         if not (isinstance(ax, ast.Constant) and isinstance(ax.value, int)):
             return node
-        arg = node.args[0]
         rank = _expr_rank(arg, self.ranks)
         if rank is None or rank < 2:
             return node
@@ -866,6 +897,10 @@ class _CallFixups(ast.NodeTransformer):
             npabs = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="abs", ctx=ast.Load())
             return ast.copy_location(ast.Call(func=npabs, args=node.args, keywords=[]), node)
         attr = _np_attr(node)
+        if attr in ("zeros", "ones", "empty", "full") and any(k.arg == "order" for k in node.keywords):
+            self.changed = True
+            node.keywords = [k for k in node.keywords if k.arg != "order"]
+            return node
         if attr == "ndarray" and node.args:
             kw = {k.arg: k.value for k in node.keywords}
             dt = kw.get("dtype") or (node.args[1] if len(node.args) > 1 else None)
@@ -1044,35 +1079,154 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
 
 
+_AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
+
+
+def _ufunc_at_op(node: ast.AST) -> Optional[str]:
+    """``np.add.at(...)`` / ``np.subtract.at`` / ``np.multiply.at`` -> the op."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "at"
+            and isinstance(node.func.value, ast.Attribute) and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id in ("np", "numpy")):
+        return node.func.value.attr
+    return None
+
+
+class _AddAtInline(ast.NodeTransformer):
+    """``np.add.at(A, idx, vals)`` -> an explicit scatter loop. numba has no
+    ufunc.at; a sequential ``+=`` loop reproduces its defining property --
+    duplicate indices accumulate (unlike ``A[idx] += vals``). Handles a single
+    1-D index (edge_laplacian's ``np.add.at(Lx, src, flux)``) and a tuple of
+    index arrays + scalar axes (icon_scatter's ``np.add.at(out, (i2d, jk, j2d),
+    val)``); the driver is the first index array, scalars ride each iteration."""
+
+    def __init__(self, ranks: Dict[str, int]):
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def visit_Expr(self, node: ast.Expr):
+        self.generic_visit(node)
+        call = node.value
+        op = _ufunc_at_op(call) if isinstance(call, ast.Call) else None
+        if op not in _AT_OPS or len(call.args) < 2 or not isinstance(call.args[0], ast.Name):
+            return node
+        A = call.args[0].id
+        elts = call.args[1].elts if isinstance(call.args[1], ast.Tuple) else [call.args[1]]
+        vals = call.args[2] if len(call.args) > 2 else None
+        driver_rank = next((r for e in elts if (r := _expr_rank(e, self.ranks)) and r >= 1), None)
+        if driver_rank is None:
+            return node
+        p = f"__sc{self._ctr}"
+        self._ctr += 1
+        iters = [f"{p}_i{k}" for k in range(driver_rank)]
+        it = ", ".join(iters)
+        pre, idx_exprs, first_arr = [], [], None
+        for j, e in enumerate(elts):
+            if (_expr_rank(e, self.ranks) or 0) >= 1:
+                t = f"{p}_x{j}"
+                pre.append(f"{t} = {ast.unparse(e)}")
+                idx_exprs.append(f"{t}[{it}]")
+                first_arr = first_arr or t
+            else:
+                idx_exprs.append(ast.unparse(e))
+        if vals is None:
+            rhs = "1"
+        else:
+            tv = f"{p}_v"
+            pre.append(f"{tv} = {ast.unparse(vals)}")
+            rhs = tv if not (_expr_rank(vals, self.ranks) or 0) >= 1 else f"{tv}[{it}]"
+        lines, deepen = list(pre), ""
+        for k in range(driver_rank):
+            lines.append(f"{deepen}for {iters[k]} in range({first_arr}.shape[{k}]):")
+            deepen += "    "
+        lines.append(f"{deepen}{A}[{', '.join(idx_exprs)}] {_AT_OPS[op]} {rhs}")
+        self.changed = True
+        return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
+
+
+def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
+                       kir_seed: Dict[str, int]) -> Dict[str, Dict[str, int]]:
+    """Per-function ``{param: ndim}`` seeds. The kernel's array params come from
+    ``kir_seed``; a HELPER function's param ranks are inferred from its call sites
+    -- ``getAcc(pos, ...)`` in the kernel tells ``getAcc`` that ``pos`` has the
+    kernel's rank for ``pos``. Iterated to a fixpoint so a helper calling another
+    helper also resolves (nbody's masked ops live in getAcc/getEnergy)."""
+    by_name = {fn.name: fn for fn in funcs}
+    params = {fn.name: [a.arg for a in fn.args.args] for fn in funcs}
+    seeds: Dict[str, Dict[str, int]] = {name: {} for name in by_name}
+    for _ in range(4):
+        changed = False
+        for fn in funcs:
+            base = dict(seeds[fn.name])
+            if fn.name == kernel_name:
+                base.update(kir_seed)
+            ranks = _rank_table(fn, base)
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in by_name:
+                    callee = node.func.id
+                    for i, arg in enumerate(node.args):
+                        if i >= len(params[callee]):
+                            break
+                        r = _expr_rank(arg, ranks)
+                        pname = params[callee][i]
+                        if r is not None and seeds[callee].get(pname) != r:
+                            seeds[callee][pname] = r
+                            changed = True
+        if not changed:
+            break
+    return seeds
+
+
 def desugar_for_python_backend(source: str, kir) -> str:
     """Rewrite ``source`` so numba / pythran can compile it: expand the numpy
     ops they do not support (batched ``@`` / ``np.matmul``, ``np.pad``,
     ``np.einsum``, ``np.fft.*``, ``np.mgrid``, axis reductions, ufunc.outer,
     multi-array fancy gather, 2-D boolean-mask assignment, ``np.ndarray`` /
     ``np.linspace(dtype=)`` / ``abs(array)``) into plain loops / broadcasts /
-    ``np.where``. Every pass is pattern-guarded and the original ``source`` is
-    returned byte-for-byte when none fire, so a kernel that needs no rewrite keeps
-    its verbatim body (only the cheap parse is paid). Returns rewritten source."""
+    ``np.where``. EVERY function in the module is processed (helpers too -- nbody's
+    masked updates live in getAcc/getEnergy), each with its own rank table seeded
+    from the kernel arrays (kir) or inferred call-site param ranks. Every pass is
+    pattern-guarded and the original ``source`` is returned byte-for-byte when none
+    fire, so a kernel that needs no rewrite keeps its verbatim body."""
     tree = ast.parse(source)
-    seed: Dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
-    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == kir.kernel_name), None)
-    scope = fn if fn is not None else tree
-    ranks = _rank_table(scope, seed)
-    passes = [
-        _BatchedMatmulToLoop(ranks),
-        _PadInline(ranks),
-        _EinsumInline(),
-        _FftInline(ranks),
-        _MgridInline(),
-        _FancyGatherInline(ranks),
-        _ReduceAxisInline(ranks),
-        _CallFixups(ranks),
-        _UfuncOuterInline(ranks),
-        _MaskedAssignToLoop(ranks)
-    ]
-    for p in passes:
-        p.visit(scope)
-    if not any(p.changed for p in passes):
+    all_funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    kir_seed: Dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
+    param_ranks = _infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
+    changed = False
+    for fn in (all_funcs or [tree]):
+        seed = dict(param_ranks.get(getattr(fn, "name", None), {}))
+        if getattr(fn, "name", None) == kir.kernel_name:
+            seed.update(kir_seed)
+        ranks = _rank_table(fn, seed)
+        passes = [
+            _BatchedMatmulToLoop(ranks),
+            _PadInline(ranks),
+            _EinsumInline(),
+            _FftInline(ranks),
+            _MgridInline(),
+            _FancyGatherInline(ranks),
+            _ReduceAxisInline(ranks),
+            _CallFixups(ranks),
+            _UfuncOuterInline(ranks),
+            _MaskedAssignToLoop(ranks),
+            _AddAtInline(ranks),
+        ]
+        for p in passes:
+            # Process THIS scope's own statements only; a nested def is its own
+            # scope (its params carry different ranks) and is handled as its own
+            # entry in ``all_funcs``, so skip it here to avoid a wrong-rank pass.
+            new_body = []
+            for stmt in fn.body:
+                if isinstance(stmt, ast.FunctionDef):
+                    new_body.append(stmt)
+                    continue
+                res = p.visit(stmt)
+                if res is None:
+                    continue
+                new_body.extend(res if isinstance(res, list) else [res])
+            fn.body = new_body
+        changed = changed or any(p.changed for p in passes)
+    if not changed:
         return source  # nothing matched -> leave the body verbatim
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)

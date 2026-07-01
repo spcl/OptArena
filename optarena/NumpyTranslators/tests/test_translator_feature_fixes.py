@@ -849,3 +849,33 @@ def test_ufunc_outer_and_call_fixups():
                                                             ("out", "float64", ("N", "N"))], [], ["a", "tmp", "out"]))
     assert "np.ndarray(" not in out and "np.empty(" in out   # ndarray -> empty
     assert "np.add.outer" not in out and "reshape(" in out   # outer -> reshape+broadcast
+
+
+def test_add_at_scatter_and_mixed_gather():
+    """np.add.at -> a scatter loop (accumulates duplicate indices); a mixed
+    2-D-array + scalar fancy gather -> a gather loop (numba supports neither)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(A, i2, j2, jk, out, Lx, src, flux):\n"
+           "    out[:] = A[i2, jk, j2]\n"
+           "    np.add.at(Lx, src, flux)\n")
+    arrays = [("A", "float64", ("M", "L", "M")), ("i2", "int64", ("P", "Q")), ("j2", "int64", ("P", "Q")),
+              ("out", "float64", ("P", "Q")), ("Lx", "float64", ("N",)), ("src", "int64", ("E",)),
+              ("flux", "float64", ("E",))]
+    out = desugar_for_python_backend(src, _py_kir("k", src, arrays, ["jk"],
+                                                  ["A", "i2", "j2", "jk", "out", "Lx", "src", "flux"]))
+    assert "A[i2, jk, j2]" not in out and "np.add.at" not in out
+    assert "np.empty(" in out and "+=" in out and "for " in out
+
+
+def test_reduce_axis_method_form_and_helper_function():
+    """``levmask.any(axis=0)`` (method form) lowers, and a reduction in a HELPER
+    function is reached (its param ranks inferred from the call site)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def helper(m):\n"
+           "    return m.any(axis=0)\n"
+           "def k(mask, out):\n"
+           "    out[:] = helper(mask)\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("mask", "bool", ("R", "C")),
+                                                            ("out", "bool", ("C",))], [], ["mask", "out"]))
+    assert ".any(axis" not in out and "np.any" not in out   # method-form reduction lowered in the helper
+    assert "for " in out
