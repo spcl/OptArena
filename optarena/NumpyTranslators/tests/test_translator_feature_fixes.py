@@ -879,3 +879,17 @@ def test_reduce_axis_method_form_and_helper_function():
                                                             ("out", "bool", ("C",))], [], ["mask", "out"]))
     assert ".any(axis" not in out and "np.any" not in out   # method-form reduction lowered in the helper
     assert "for " in out
+
+
+def test_histogram_desugar_to_binning_loop():
+    """np.histogram(a, bins[, weights=w])[0] -> a min/max scan + a binning loop
+    (numba has no np.histogram); matches the C/Fortran lowering."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(radius, data, npt, hu, hw):\n"
+           "    hu[:] = np.histogram(radius, npt)[0]\n"
+           "    hw[:] = np.histogram(radius, npt, weights=data)[0]\n")
+    arrays = [("radius", "float64", ("N",)), ("data", "float64", ("N",)), ("hu", "float64", ("B",)),
+              ("hw", "float64", ("B",))]
+    out = desugar_for_python_backend(src, _py_kir("k", src, arrays, ["npt"], ["radius", "data", "npt", "hu", "hw"]))
+    assert "np.histogram" not in out
+    assert "int(" in out and "np.zeros(" in out and "+= " in out   # binning loop

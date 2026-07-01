@@ -1144,6 +1144,86 @@ class _AddAtInline(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
 
 
+class _HistogramHoister(ast.NodeTransformer):
+    """Replace ``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` with a fresh
+    temp Name, emitting the numpy-histogram loop into ``self.pre``: a min/max scan
+    for the default range, then per-element binning ``b = int((a-lo)*bins/(hi-lo))``
+    clamped to ``[0, bins-1]`` accumulating ``1`` (or ``w[i]``). numba has no
+    np.histogram; this is the same loop the C/Fortran backends lower (azimint_hist)."""
+
+    def __init__(self, ctr: int):
+        self.ctr = ctr
+        self.pre: List[ast.stmt] = []
+
+    def visit_Subscript(self, node: ast.Subscript):
+        self.generic_visit(node)
+        if not (isinstance(node.slice, ast.Constant) and node.slice.value == 0 and _np_attr(node.value) == "histogram"
+                and len(node.value.args) >= 2):
+            return node
+        call = node.value
+        a, bins = ast.unparse(call.args[0]), ast.unparse(call.args[1])
+        kw = {k.arg: k.value for k in call.keywords}
+        lo = hi = None
+        if len(call.args) >= 4:
+            lo, hi = call.args[2], call.args[3]
+        rng = kw.get("range")
+        if isinstance(rng, ast.Tuple) and len(rng.elts) == 2:
+            lo, hi = rng.elts
+        weights = kw.get("weights")
+        p = f"__hist{self.ctr}"
+        self.ctr += 1
+        lines = []
+        if lo is None or hi is None:
+            lo_s, hi_s = f"{p}_lo", f"{p}_hi"
+            lines += [
+                f"{lo_s} = {a}[0]", f"{hi_s} = {a}[0]", f"for {p}_s in range({a}.shape[0]):",
+                f"    if {a}[{p}_s] < {lo_s}: {lo_s} = {a}[{p}_s]", f"    if {a}[{p}_s] > {hi_s}: {hi_s} = {a}[{p}_s]"
+            ]
+        else:
+            lo_s, hi_s = f"({ast.unparse(lo)})", f"({ast.unparse(hi)})"
+        temp = f"{p}_o"
+        add = f"{ast.unparse(weights)}[{p}_i]" if weights is not None else "1.0"
+        lines += [
+            f"{temp} = np.zeros({bins}, np.float64)", f"for {p}_i in range({a}.shape[0]):",
+            f"    {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))", f"    if {p}_b < 0: {p}_b = 0",
+            f"    if {p}_b > {bins} - 1: {p}_b = {bins} - 1", f"    {temp}[{p}_b] += {add}"
+        ]
+        self.pre.extend(ast.parse("\n".join(lines)).body)
+        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+
+
+class _HistogramInline(ast.NodeTransformer):
+    """Hoist ``np.histogram(...)[0]`` out of any value-bearing statement into its
+    preceding binning loop (azimint's ``histw = np.histogram(r, n, weights=d)[0]``)."""
+
+    def __init__(self, ranks: Dict[str, int]):
+        self.changed = False
+        self._ctr = 0
+
+    def _hoist(self, node):
+        if getattr(node, "value", None) is None:
+            return node
+        h = _HistogramHoister(self._ctr)
+        node.value = h.visit(node.value)
+        self._ctr = h.ctr
+        if h.pre:
+            self.changed = True
+            return h.pre + [node]
+        return node
+
+    def visit_Assign(self, node):
+        return self._hoist(node)
+
+    def visit_AugAssign(self, node):
+        return self._hoist(node)
+
+    def visit_Return(self, node):
+        return self._hoist(node)
+
+    def visit_Expr(self, node):
+        return self._hoist(node)
+
+
 def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
                        kir_seed: Dict[str, int]) -> Dict[str, Dict[str, int]]:
     """Per-function ``{param: ndim}`` seeds. The kernel's array params come from
@@ -1210,6 +1290,7 @@ def desugar_for_python_backend(source: str, kir) -> str:
             _UfuncOuterInline(ranks),
             _MaskedAssignToLoop(ranks),
             _AddAtInline(ranks),
+            _HistogramInline(ranks),
         ]
         for p in passes:
             # Process THIS scope's own statements only; a nested def is its own
