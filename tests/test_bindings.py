@@ -19,8 +19,6 @@ dense kernel (``gemm``) and one sparse kernel (``spmv``):
 import pytest
 
 from optarena.bindings import (
-    Arg,
-    Binding,
     PackedGroup,
     binding_from_spec,
     gen_call_stub,
