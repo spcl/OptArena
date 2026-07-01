@@ -893,3 +893,84 @@ def test_histogram_desugar_to_binning_loop():
     out = desugar_for_python_backend(src, _py_kir("k", src, arrays, ["npt"], ["radius", "data", "npt", "hu", "hw"]))
     assert "np.histogram" not in out
     assert "int(" in out and "np.zeros(" in out and "+= " in out   # binning loop
+
+
+def test_int_matmul_lowers_but_float_matmul_kept():
+    """An INTEGER a @ b lowers to a loop (numba's @ is float-only); a float a @ b
+    is left for numba's fast BLAS path."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    isrc = ("def k(frontier, graph, reach):\n"
+            "    reach[:] = frontier @ graph\n")
+    iout = desugar_for_python_backend(isrc, _py_kir("k", isrc, [("frontier", "int64", ("N",)),
+                                                               ("graph", "int64", ("N", "N")),
+                                                               ("reach", "int64", ("N",))], [], ["frontier", "graph", "reach"]))
+    assert "@" not in iout and "for " in iout                 # int matmul -> loop
+    fsrc = ("def k(a, b, c):\n"
+            "    c[:] = a @ b\n")
+    fout = desugar_for_python_backend(fsrc, _py_kir("k", fsrc, [("a", "float64", ("N", "N")),
+                                                              ("b", "float64", ("N", "N")),
+                                                              ("c", "float64", ("N", "N"))], [], ["a", "b", "c"]))
+    assert "@" in fout                                        # float matmul untouched
+
+
+def test_reshape_batched_matmul_lowers():
+    """doitgen's reshape(reshape(A,(NR,NQ,1,NP)) @ C4, (NR,NQ,NP)) -> contraction."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(A, C4):\n"
+           "    A[:] = np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("A", "float64", ("NR", "NQ", "NP")),
+                                                            ("C4", "float64", ("NP", "NP"))], ["NR", "NQ", "NP"],
+                                                 ["A", "C4"]))
+    assert "@" not in out and "reshape" not in out and "for " in out
+
+
+# --------------------------------------------------------------------------- #
+# P. Loud failure: a desugar that OWNS a construct but hits a variant it cannot #
+#    lower correctly raises DesugarError (never emits silently-wrong code). A   #
+#    construct it does NOT own is left verbatim (a clean skip) -- not asserted   #
+#    here. (An unknown *rank* is an inference gap, also left verbatim.)         #
+# --------------------------------------------------------------------------- #
+def test_int_matmul_unsupported_rank_raises():
+    from numpyto_common.numpy_desugar import _int_matmul_stmts, DesugarError
+    with pytest.raises(DesugarError):
+        _int_matmul_stmts("out", "a", "b", 3, 2, 0)   # >2-D integer matmul: no lowering
+
+
+def test_reshape_matmul_non_2d_right_operand_raises():
+    """Matched the unit-dim reshape-matmul form but the right operand is not 2-D
+    -> raise rather than emit a wrong contraction."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend, DesugarError
+    src = ("def k(A, C4, out):\n"
+           "    out[:] = np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))\n")
+    kir = _py_kir("k", src, [("A", "float64", ("NR", "NQ", "NP")), ("C4", "float64", ("NP", "NP", "NP")),
+                             ("out", "float64", ("NR", "NQ", "NP"))], ["NR", "NQ", "NP"], ["A", "C4", "out"])
+    with pytest.raises(DesugarError):
+        desugar_for_python_backend(src, kir)
+
+
+def test_add_at_mismatched_value_rank_raises():
+    """np.add.at with values whose ndim is neither scalar nor the index ndim ->
+    raise (broadcast alignment we do not model)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend, DesugarError
+    src = ("def k(A, i2, vals):\n"
+           "    np.add.at(A, (i2, i2), vals)\n")
+    kir = _py_kir("k", src, [("A", "float64", ("M", "M")), ("i2", "int64", ("P", "Q")),
+                             ("vals", "float64", ("P", "Q", "R"))], [], ["A", "i2", "vals"])
+    with pytest.raises(DesugarError):
+        desugar_for_python_backend(src, kir)
+
+
+def test_issparse_folds_to_false_for_dense_abi():
+    """``sp.issparse(x)`` -> ``False`` (the dense-only ABI): numba/pythran cannot
+    type scipy.sparse, and the sparse branch is dead -- exactly as C/Fortran prune
+    it statically (banded_mmt)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(A, B, out):\n"
+           "    if sp.issparse(A) and sp.issparse(B):\n"
+           "        out[:] = (A @ B).toarray()\n"
+           "        return\n"
+           "    out[:] = A @ B\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("A", "float64", ("N", "N")),
+                                                            ("B", "float64", ("N", "N")),
+                                                            ("out", "float64", ("N", "N"))], [], ["A", "B", "out"]))
+    assert "issparse" not in out and "False" in out

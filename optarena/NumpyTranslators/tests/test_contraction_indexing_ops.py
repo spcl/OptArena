@@ -124,14 +124,17 @@ def test_2d_matmul_left_verbatim():
     assert desugar_for_python_backend(src, kir) == src
 
 
-def test_reshape_wrapped_matmul_not_misfired():
-    # doitgen: ``np.reshape(A, (...)) @ C4`` -- the operand is reshaped, so the
-    # leading axis is NOT a clean batch axis; indexing it would miscompile.
-    # Must be left verbatim (bare-Name-operand guard).
+def test_reshape_wrapped_matmul_lowers_to_contraction():
+    # doitgen: ``np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))``.
+    # The batched-matmul pass still refuses reshape-wrapped operands (indexing the
+    # leading axis would miscompile), but the dedicated reshape-matmul pass
+    # recognises the unit-dim-insertion form and lowers it to a contraction loop
+    # into a fresh temp (so the ``A = f(A)`` WAR is safe).
     src = ("def kernel(NR, NQ, NP, A, C4):\n"
            "    A[:] = np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))\n")
     kir = _kir("kernel", A=("NR", "NQ", "NP"), C4=("NP", "NP"))
-    assert desugar_for_python_backend(src, kir) == src
+    out = desugar_for_python_backend(src, kir)
+    assert "@" not in out and "reshape" not in out and "for " in out
 
 
 def test_no_matmul_returned_bytewise_unchanged():

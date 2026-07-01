@@ -18,9 +18,70 @@ import ast
 import copy
 from typing import Dict, List, Optional
 
+
+class DesugarError(NotImplementedError):
+    """A desugar pass matched a construct it OWNS but hit a variant it cannot
+    lower correctly. Raised (never swallowed) so the emit fails loudly instead of
+    producing a silently-wrong kernel -- a construct we do NOT own is left
+    verbatim (a clean backend skip), only an owned-but-unhandled shape raises."""
+
+
 # Constructors whose first arg is a shape tuple -> result rank = len(shape).
 _SHAPE_CTORS = {"empty", "zeros", "ones", "full", "ndarray"}
 _LIKE_CTORS = {"empty_like", "zeros_like", "ones_like"}
+
+# dtype "kind" ordered by promotion rank (numpy-style: bool < int < float < complex).
+_KIND_RANK = {"bool": 0, "int": 1, "float": 2, "complex": 3}
+#: ``np.<name>`` dtype spellings -> kind.
+_DTYPE_NAME_KIND = {
+    "bool": "bool",
+    "bool_": "bool",
+    "int8": "int",
+    "int16": "int",
+    "int32": "int",
+    "int64": "int",
+    "intp": "int",
+    "intc": "int",
+    "uint8": "int",
+    "uint16": "int",
+    "uint32": "int",
+    "uint64": "int",
+    "float16": "float",
+    "float32": "float",
+    "float64": "float",
+    "float": "float",
+    "double": "float",
+    "complex64": "complex",
+    "complex128": "complex",
+    "complex": "complex"
+}
+
+
+def _kind_of_dtype_str(dt: Optional[str]) -> Optional[str]:
+    """A numpy dtype tag string (``"int64"``, ``"float32"``) -> its kind."""
+    if not dt:
+        return None
+    return _DTYPE_NAME_KIND.get(dt) or ("int" if dt.startswith(("int", "uint")) else "float" if dt.startswith(
+        "float") else "complex" if dt.startswith("complex") else "bool" if dt.startswith("bool") else None)
+
+
+def _dtype_arg_kind(node: ast.AST) -> Optional[str]:
+    """A dtype ARGUMENT (``np.int64`` / ``np.dtype('f8')`` / a bare name) -> kind."""
+    if isinstance(node, ast.Attribute):
+        return _DTYPE_NAME_KIND.get(node.attr)
+    if isinstance(node, ast.Name):
+        return _DTYPE_NAME_KIND.get(node.id)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return _kind_of_dtype_str(node.value)
+    return None
+
+
+def _promote_kind(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    """numpy-style promotion; ``None`` (unknown) is contagious so callers stay
+    conservative (an unknown operand never masquerades as a known kind)."""
+    if a is None or b is None:
+        return None
+    return a if _KIND_RANK[a] >= _KIND_RANK[b] else b
 
 
 def _np_attr(node: ast.AST) -> Optional[str]:
@@ -145,6 +206,9 @@ def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             return _expr_rank(value.args[0], ranks)
         if attr == "matmul" and len(value.args) == 2:
             return _expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
+        # rank-preserving methods ``x.astype(dt)`` / ``x.copy()`` (receiver's rank).
+        if (isinstance(value.func, ast.Attribute) and value.func.attr in ("astype", "copy", "ravel")):
+            return _expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
         # ``x.reshape((a, b))`` method form.
         if (isinstance(value.func, ast.Attribute) and value.func.attr == "reshape" and value.args):
             n = _tuple_len(value.args[0]) or (len(value.args) if all(
@@ -176,6 +240,68 @@ def _rank_table(tree: ast.AST, seed: Dict[str, int]) -> Dict[str, int]:
         if not changed:
             break
     return ranks
+
+
+def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
+    """Best-effort dtype KIND (``bool``/``int``/``float``/``complex``) of an
+    expression given the current name->kind table. ``None`` = unknown; callers
+    must treat unknown conservatively (e.g. not desugar a matmul as integer)."""
+    if isinstance(value, ast.Name):
+        return dtypes.get(value.id)
+    if isinstance(value, ast.Constant):
+        v = value.value
+        return ("bool" if isinstance(v, bool) else "int" if isinstance(v, int) else
+                "float" if isinstance(v, float) else "complex" if isinstance(v, complex) else None)
+    if isinstance(value, (ast.Compare, ast.BoolOp)):
+        return "bool"
+    if isinstance(value, ast.UnaryOp):
+        return "bool" if isinstance(value.op, ast.Not) else _dtype_kind(value.operand, dtypes)
+    if isinstance(value, ast.BinOp):
+        lk, rk = _dtype_kind(value.left, dtypes), _dtype_kind(value.right, dtypes)
+        if isinstance(value.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
+            return "bool" if (lk == "bool" or rk == "bool") else _promote_kind(lk, rk)
+        if isinstance(value.op, (ast.Div, ast.MatMult)):
+            p = _promote_kind(lk, rk)
+            return "float" if p in ("int", "bool") else p  # true division promotes to float
+        return _promote_kind(lk, rk)
+    if isinstance(value, ast.Subscript):
+        return _dtype_kind(value.value, dtypes)  # indexing preserves dtype
+    if isinstance(value, ast.Call):
+        f = value.func
+        if isinstance(f, ast.Attribute) and f.attr == "astype" and value.args:
+            return _dtype_arg_kind(value.args[0])
+        attr = _np_attr(value)
+        if attr in _DTYPE_NAME_KIND:
+            return _DTYPE_NAME_KIND[attr]  # np.int64(x) scalar cast
+        if attr in _SHAPE_CTORS:
+            kw = {k.arg: k.value for k in value.keywords}
+            dt = kw.get("dtype") or (value.args[1] if len(value.args) > 1 else None)
+            return _dtype_arg_kind(dt) if dt is not None else "float"  # default float64
+        if attr in _LIKE_CTORS and value.args:
+            return _dtype_kind(value.args[0], dtypes)
+        if attr in ("astype", "copy", "ascontiguousarray", "asarray", "array", "reshape") and value.args:
+            return _dtype_kind(value.args[0], dtypes)
+        if attr in ("where", "minimum", "maximum", "clip") and len(value.args) >= 2:
+            return _promote_kind(_dtype_kind(value.args[-2], dtypes), _dtype_kind(value.args[-1], dtypes))
+        if attr in ("abs", "sqrt", "exp", "sin", "cos", "conj", "real", "imag", "sum", "prod") and value.args:
+            return _dtype_kind(value.args[0], dtypes)
+    return None
+
+
+def _dtype_table(tree: ast.AST, seed: Dict[str, str]) -> Dict[str, str]:
+    """Propagate dtype kinds across straight-line assignments to a fixpoint."""
+    dtypes = dict(seed)
+    for _ in range(8):
+        changed = False
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+                k = _dtype_kind(node.value, dtypes)
+                if k is not None and dtypes.get(node.targets[0].id) != k:
+                    dtypes[node.targets[0].id] = k
+                    changed = True
+        if not changed:
+            break
+    return dtypes
 
 
 def _matmul_pairs(node: ast.AST) -> List[ast.AST]:
@@ -896,6 +1022,14 @@ class _CallFixups(ast.NodeTransformer):
             self.changed = True
             npabs = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="abs", ctx=ast.Load())
             return ast.copy_location(ast.Call(func=npabs, args=node.args, keywords=[]), node)
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "issparse":
+            # ``scipy.sparse.issparse(x)`` -> ``False``: the C/Fortran/dace ABI
+            # only ever passes DENSE numpy arrays, so the sparse branch is dead
+            # (banded_mmt's own comment: "the static dense backends prune this
+            # branch"). numba/pythran cannot type scipy.sparse; folding to False
+            # lets them dead-code-eliminate it and compile the dense path.
+            self.changed = True
+            return ast.copy_location(ast.Constant(value=False), node)
         attr = _np_attr(node)
         if attr in ("zeros", "ones", "empty", "full") and any(k.arg == "order" for k in node.keywords):
             self.changed = True
@@ -1031,10 +1165,12 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
     never overflows, and force_lj divides only where ``rsq > 0``. ``np.where``
     would evaluate the RHS everywhere and change those results. Restricted to a
     >=2-D mask that is a bool-array Name of the target's rank or an inline
-    Compare / ``& | ^ ~`` logical combo of that rank."""
+    Compare / ``& | ^ ~`` logical combo of that rank. A same-rank INTEGER index
+    Name is a fancy index, not a mask, so it is left verbatim (a clean skip)."""
 
-    def __init__(self, ranks: Dict[str, int]):
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
         self.ranks = ranks
+        self.dtypes = dtypes
         self.changed = False
         self._ctr = 0
 
@@ -1053,8 +1189,10 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
                        or (isinstance(idx, ast.BinOp) and isinstance(idx.op, (ast.BitAnd, ast.BitOr, ast.BitXor)))
                        or (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.Invert)))
         if isinstance(idx, ast.Name):
-            if self.ranks.get(idx.id) != arank:
-                return node  # an int/index Name (not a full-shape bool mask)
+            # A full-shape index Name is a mask ONLY if boolean-kind; a same-rank
+            # integer array is a fancy index (different semantics) -> leave verbatim.
+            if self.ranks.get(idx.id) != arank or _dtype_kind(idx, self.dtypes) in ("int", "float", "complex"):
+                return node
         elif struct_mask:
             if _expr_rank(idx, self.ranks) != arank:
                 return node
@@ -1134,7 +1272,14 @@ class _AddAtInline(ast.NodeTransformer):
         else:
             tv = f"{p}_v"
             pre.append(f"{tv} = {ast.unparse(vals)}")
-            rhs = tv if not (_expr_rank(vals, self.ranks) or 0) >= 1 else f"{tv}[{it}]"
+            vr = _expr_rank(vals, self.ranks)
+            if vr and vr not in (0, driver_rank):
+                # vals broadcasts against the index shape; only a scalar or a
+                # driver-shaped vals is unambiguous. Anything else would need
+                # numpy broadcast alignment we do not model -> fail loudly.
+                raise DesugarError(f"np.add.at values ndim {vr} != index ndim {driver_rank} "
+                                   "(only scalar or matching-shape values are lowered)")
+            rhs = f"{tv}[{it}]" if vr and vr >= 1 else tv
         lines, deepen = list(pre), ""
         for k in range(driver_rank):
             lines.append(f"{deepen}for {iters[k]} in range({first_arr}.shape[{k}]):")
@@ -1224,6 +1369,198 @@ class _HistogramInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
+def _int_matmul_stmts(temp: str, a: str, b: str, ra: int, rb: int, ctr: int) -> List[str]:
+    """Source lines for an INTEGER matmul (``a @ b``) as an explicit loop.
+    An int64 accumulator holds exact integer sums (numba's BLAS-backed ``@`` is
+    float-only). Raises for ranks numba could not express even after batching."""
+    p = f"__mm{ctr}"
+    if ra == 1 and rb == 1:  # dot -> scalar
+        return [f"{temp} = 0", f"for {p}_k in range({a}.shape[0]):", f"    {temp} += {a}[{p}_k] * {b}[{p}_k]"]
+    if ra == 1 and rb == 2:  # (K,) @ (K, N) -> (N,)
+        return [
+            f"{temp} = np.zeros({b}.shape[1], np.int64)", f"for {p}_j in range({b}.shape[1]):",
+            f"    for {p}_k in range({a}.shape[0]):", f"        {temp}[{p}_j] += {a}[{p}_k] * {b}[{p}_k, {p}_j]"
+        ]
+    if ra == 2 and rb == 1:  # (M, K) @ (K,) -> (M,)
+        return [
+            f"{temp} = np.zeros({a}.shape[0], np.int64)", f"for {p}_i in range({a}.shape[0]):",
+            f"    for {p}_k in range({a}.shape[1]):", f"        {temp}[{p}_i] += {a}[{p}_i, {p}_k] * {b}[{p}_k]"
+        ]
+    if ra == 2 and rb == 2:  # (M, K) @ (K, N) -> (M, N)
+        return [
+            f"{temp} = np.zeros(({a}.shape[0], {b}.shape[1]), np.int64)", f"for {p}_i in range({a}.shape[0]):",
+            f"    for {p}_j in range({b}.shape[1]):", f"        for {p}_k in range({a}.shape[1]):",
+            f"            {temp}[{p}_i, {p}_j] += {a}[{p}_i, {p}_k] * {b}[{p}_k, {p}_j]"
+        ]
+    raise DesugarError(f"integer matmul of ranks {ra}x{rb} is unsupported "
+                       "(numba has no integer @; only <=2-D operands are lowered)")
+
+
+class _IntMatmulHoister(ast.NodeTransformer):
+    """Replace each INTEGER ``a @ b`` / ``np.matmul`` / ``np.dot`` (both operands
+    integer/bool kind) with a temp Name, emitting an explicit loop into
+    ``self.pre``. numba's ``@`` is BLAS-backed and float-only, so int matmul
+    (bfs's ``frontier @ graph``) fails to type; float matmul is LEFT for numba's
+    fast path. Owned-but-unhandled shapes (unknown rank, >2-D) raise DesugarError."""
+
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str], ctr: int):
+        self.ranks = ranks
+        self.dtypes = dtypes
+        self.ctr = ctr
+        self.pre: List[ast.stmt] = []
+
+    def _lower(self, a: ast.expr, b: ast.expr):
+        if _dtype_kind(a, self.dtypes) not in ("int", "bool") or _dtype_kind(b, self.dtypes) not in ("int", "bool"):
+            return None  # not (definitely) an integer matmul -> leave for numba's float @
+        ra, rb = _expr_rank(a, self.ranks), _expr_rank(b, self.ranks)
+        if ra is None or rb is None:
+            return None  # can't determine the shape -> leave verbatim (a clean skip),
+            # NOT a raise: an unknown rank is an inference gap, not a known-unsupported shape.
+        p = f"__mmi{self.ctr}"
+        pre = []
+        aid = a.id if isinstance(a, ast.Name) else f"{p}_a"
+        bid = b.id if isinstance(b, ast.Name) else f"{p}_b"
+        if not isinstance(a, ast.Name):
+            pre.append(f"{aid} = {ast.unparse(a)}")
+        if not isinstance(b, ast.Name):
+            pre.append(f"{bid} = {ast.unparse(b)}")
+        temp = f"{p}_o"
+        self.pre.extend(ast.parse("\n".join(pre + _int_matmul_stmts(temp, aid, bid, ra, rb, self.ctr))).body)
+        self.ctr += 1
+        return ast.Name(id=temp, ctx=ast.Load())
+
+    def visit_BinOp(self, node: ast.BinOp):
+        self.generic_visit(node)
+        if isinstance(node.op, ast.MatMult):
+            rep = self._lower(node.left, node.right)
+            if rep is not None:
+                return ast.copy_location(rep, node)
+        return node
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)
+        if _np_attr(node) in ("matmul", "dot") and len(node.args) == 2:
+            rep = self._lower(node.args[0], node.args[1])
+            if rep is not None:
+                return ast.copy_location(rep, node)
+        return node
+
+
+class _IntMatmulInline(ast.NodeTransformer):
+    """Hoist integer matmuls out of any value-bearing statement (bfs's
+    ``reach = frontier @ graph``)."""
+
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]):
+        self.ranks = ranks
+        self.dtypes = dtypes
+        self.changed = False
+        self._ctr = 0
+
+    def _hoist(self, node):
+        if getattr(node, "value", None) is None:
+            return node
+        h = _IntMatmulHoister(self.ranks, self.dtypes, self._ctr)
+        node.value = h.visit(node.value)
+        self._ctr = h.ctr
+        if h.pre:
+            self.changed = True
+            return h.pre + [node]
+        return node
+
+    def visit_Assign(self, node):
+        return self._hoist(node)
+
+    def visit_AugAssign(self, node):
+        return self._hoist(node)
+
+    def visit_Return(self, node):
+        return self._hoist(node)
+
+    def visit_Expr(self, node):
+        return self._hoist(node)
+
+
+def _as_matmul(node: ast.AST):
+    """``a @ b`` / ``np.matmul(a, b)`` / ``np.dot(a, b)`` -> ``(a, b)`` else None."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
+        return node.left, node.right
+    if _np_attr(node) in ("matmul", "dot") and len(getattr(node, "args", [])) == 2:
+        return node.args[0], node.args[1]
+    return None
+
+
+def _as_reshape(node: ast.AST):
+    """``np.reshape(x, shape)`` / ``x.reshape(shape)`` -> ``(x, shape_node)`` else None."""
+    if _np_attr(node) == "reshape" and len(node.args) >= 2:
+        return node.args[0], node.args[1]
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"
+            and node.args):
+        shape = node.args[0] if len(node.args) == 1 else ast.Tuple(elts=list(node.args), ctx=ast.Load())
+        return node.func.value, shape
+    return None
+
+
+class _ReshapeMatmulInline(ast.NodeTransformer):
+    """``T[:] = np.reshape(np.reshape(X, (*batch, 1, K)) @ Y, (*batch, N))`` -> a
+    contraction loop ``r[*b, n] = sum_k X[*b, k] * Y[k, n]`` into a fresh full
+    temp (so the ``A = f(A)`` WAR in doitgen is safe). numba cannot type the
+    reshape-wrapped batched ``@`` (the existing batched-matmul pass deliberately
+    refuses reshape-wrapped operands as a miscompile risk). Fires ONLY on the
+    unit-dim-insertion form (``mid[-2] == 1``, ``len(mid) == X.ndim + 1``, Y 2-D);
+    a genuinely different reshape is left verbatim. A matched-but-inconsistent
+    shape (Y not 2-D) raises DesugarError rather than miscompiling."""
+
+    def __init__(self, ranks: Dict[str, int]):
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def visit_Assign(self, node: ast.Assign):
+        self.generic_visit(node)
+        if len(node.targets) != 1:
+            return node
+        tgt = node.targets[0]
+        if not ((isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name)
+                 and isinstance(tgt.slice, ast.Slice)) or isinstance(tgt, ast.Name)):
+            return node
+        outer = _as_reshape(node.value)
+        if not outer:
+            return node
+        mm = _as_matmul(outer[0])
+        if not mm:
+            return node
+        inner = _as_reshape(mm[0])
+        if not inner or not isinstance(inner[0], ast.Name) or not isinstance(mm[1], ast.Name):
+            return node
+        X, Y, mid = inner[0], mm[1], inner[1]
+        rX = _expr_rank(X, self.ranks)
+        # Fire only on the unit-dim-insertion batched form; other reshapes -> verbatim.
+        if not (isinstance(mid, ast.Tuple) and rX and len(mid.elts) == rX + 1
+                and isinstance(mid.elts[-2], ast.Constant) and mid.elts[-2].value == 1):
+            return node
+        if _expr_rank(Y, self.ranks) != 2 or rX < 2:
+            raise DesugarError(f"reshape-batched matmul: unit-dim form needs a 2-D right operand and a >=2-D "
+                               f"left operand (got left ndim {rX}, right ndim {_expr_rank(Y, self.ranks)})")
+        p = f"__dg{self._ctr}"
+        self._ctr += 1
+        batch = list(range(rX - 1))
+        bi = [f"{p}_b{i}" for i in batch]
+        bidx = ", ".join(bi)
+        oshape = "".join(f"{X.id}.shape[{i}], " for i in batch) + f"{Y.id}.shape[1]"
+        temp = f"{p}_o"
+        lines = [f"{temp} = np.zeros(({oshape},), {X.id}.dtype)"]
+        deep = ""
+        for i in batch:
+            lines.append(f"{deep}for {bi[i]} in range({X.id}.shape[{i}]):")
+            deep += "    "
+        lines.append(f"{deep}for {p}_n in range({Y.id}.shape[1]):")
+        lines.append(f"{deep}    for {p}_k in range({X.id}.shape[{rX - 1}]):")
+        lines.append(f"{deep}        {temp}[{bidx}, {p}_n] += {X.id}[{bidx}, {p}_k] * {Y.id}[{p}_k, {p}_n]")
+        node.value = ast.Name(id=temp, ctx=ast.Load())
+        self.changed = True
+        return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body] + [node]
+
+
 def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
                        kir_seed: Dict[str, int]) -> Dict[str, Dict[str, int]]:
     """Per-function ``{param: ndim}`` seeds. The kernel's array params come from
@@ -1271,14 +1608,21 @@ def desugar_for_python_backend(source: str, kir) -> str:
     tree = ast.parse(source)
     all_funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
     kir_seed: Dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
+    kir_dtype_seed: Dict[str, str] = {
+        a.name: _kind_of_dtype_str(vars(a).get("dtype"))
+        for a in kir.arrays if _kind_of_dtype_str(vars(a).get("dtype"))
+    }
     param_ranks = _infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
     changed = False
     for fn in (all_funcs or [tree]):
+        is_kernel = getattr(fn, "name", None) == kir.kernel_name
         seed = dict(param_ranks.get(getattr(fn, "name", None), {}))
-        if getattr(fn, "name", None) == kir.kernel_name:
+        if is_kernel:
             seed.update(kir_seed)
         ranks = _rank_table(fn, seed)
+        dtypes = _dtype_table(fn, kir_dtype_seed if is_kernel else {})
         passes = [
+            _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),
             _PadInline(ranks),
             _EinsumInline(),
@@ -1288,9 +1632,10 @@ def desugar_for_python_backend(source: str, kir) -> str:
             _ReduceAxisInline(ranks),
             _CallFixups(ranks),
             _UfuncOuterInline(ranks),
-            _MaskedAssignToLoop(ranks),
+            _MaskedAssignToLoop(ranks, dtypes),
             _AddAtInline(ranks),
             _HistogramInline(ranks),
+            _IntMatmulInline(ranks, dtypes),
         ]
         for p in passes:
             # Process THIS scope's own statements only; a nested def is its own
