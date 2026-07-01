@@ -30,12 +30,14 @@ gamma-extrapolation / erfc Coulomb factor), Si_vcut (cubic 2-Si: the WS /
 spherical truncated-Coulomb branches), and Si_paw (PAW: ``paw_newdxx``).
 """
 import importlib.util
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 _HERE = Path(__file__).resolve().parent
+_BASE = _HERE / "baseline"
 
 # Positional indices into initialize()'s flat return tuple (== kernel arg order).
 _IDX = {"psi": 0, "hpsi": 1, "x_occupation": 3, "n": 41, "m": 42, "npwx": 43, "npol": 44}
@@ -175,3 +177,46 @@ def test_coulomb_vcut_ws_without_table_raises():
     (data required) rather than silently running wrong physics."""
     with pytest.raises(NotImplementedError):
         _apply_vx_to_zero({}, use_coulomb_vcut_ws=True)
+
+
+# ----------------------------------------------------------------------------
+# C++ ORACLE cross-check. baseline/vexx_k_oracle (FFTW) is the whole Fock
+# operator reimplemented; it is the numerical reference the numpy port is graded
+# against, and is itself verified bit-for-bit against real Quantum Espresso data.
+# ----------------------------------------------------------------------------
+
+def _oracle():
+    import shutil
+    if shutil.which("g++") is None:
+        return None
+    sys.path.insert(0, str(_BASE))
+    try:
+        import vexx_k_oracle as O  # noqa: E402
+    except ImportError:
+        return None
+    try:
+        if O.build_so() is None:
+            return None
+    except RuntimeError:
+        return None
+    return O
+
+
+@pytest.mark.parametrize("name", ["collinear-NC", "noncolin", "collinear-US",
+                                   "collinear-US-tqr", "collinear-PAW"])
+def test_oracle_matches_numpy(name):
+    """The numpy kernel and the C++ oracle (FFTW) produce the same Vx|psi> on
+    identical inputs -- the regression gate for future numpy edits."""
+    O = _oracle()
+    if O is None:
+        pytest.skip("g++ / FFTW unavailable -- C++ oracle cross-check skipped")
+    init = _load("vexx_k").initialize
+    Knp = _load("vexx_k_numpy")
+    cfg = dict(_NONAUG, **_AUG)[name]
+    a_np = list(init(ngrid=8, nbnd=3, m=4, **cfg))
+    a_or = list(init(ngrid=8, nbnd=3, m=4, **cfg))
+    a_np[_IDX["hpsi"]] = np.zeros_like(a_np[_IDX["hpsi"]])
+    a_or[_IDX["hpsi"]] = np.zeros_like(a_or[_IDX["hpsi"]])
+    Knp.vexx_all_paths(*a_np)
+    O.vexx_all_paths(*a_or)
+    np.testing.assert_allclose(a_or[_IDX["hpsi"]], a_np[_IDX["hpsi"]], rtol=0, atol=1e-9)
