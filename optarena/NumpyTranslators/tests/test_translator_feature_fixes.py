@@ -806,3 +806,46 @@ def test_fft_numba_pythran_e2e(kernel):
         if s == "skip:not-installed":
             continue
         assert s == "ok", f"{kernel} {b}: {s}"
+
+
+# --------------------------------------------------------------------------- #
+# O. numba desugars: axis reductions, masked assignment, ufunc.outer, call     #
+#    fixups. numba rejects ``axis=`` on mean/std/min/max/argmax, 2-D bool-mask  #
+#    indexing, ufunc.outer, np.ndarray/linspace(dtype=)/abs(array).            #
+# --------------------------------------------------------------------------- #
+def test_reduce_axis_desugar_lowers_mean_min():
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(data, mn, mx):\n"
+           "    mn[:] = np.mean(data, axis=0)\n"
+           "    mx[:] = np.max(data, axis=0)\n")
+    arrays = [("data", "float64", ("M", "N")), ("mn", "float64", ("N",)), ("mx", "float64", ("N",))]
+    out = desugar_for_python_backend(src, _py_kir("k", src, arrays, [], ["data", "mn", "mx"]))
+    assert "np.mean" not in out and "np.max" not in out
+    assert "for " in out and "/ " in out  # explicit mean loop divides by N
+
+
+def test_masked_assign_lowers_to_guarded_loop_not_where():
+    """Masked assignment -> a guarded loop (NOT np.where): the RHS must be
+    computed only on selected elements (mandelbrot freezes diverged points to
+    avoid overflow; force_lj divides only where rsq > 0)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(rsq, out):\n"
+           "    in_range = (rsq < 1.0) & (rsq > 0.0)\n"
+           "    out[in_range] = 1.0 / rsq[in_range]\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("rsq", "float64", ("N", "N")),
+                                                             ("out", "float64", ("N", "N"))], [], ["rsq", "out"]))
+    assert "np.where" not in out               # a loop, not np.where (overflow-safe)
+    assert "if " in out and "for " in out      # guarded per-element write
+    assert "out[in_range]" not in out          # mask indexing removed
+
+
+def test_ufunc_outer_and_call_fixups():
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(a, tmp, out):\n"
+           "    tmp[:] = np.ndarray((a.shape[0],), dtype=a.dtype)\n"
+           "    out[:] = np.add.outer(a, a)\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("a", "float64", ("N",)),
+                                                            ("tmp", "float64", ("N",)),
+                                                            ("out", "float64", ("N", "N"))], [], ["a", "tmp", "out"]))
+    assert "np.ndarray(" not in out and "np.empty(" in out   # ndarray -> empty
+    assert "np.add.outer" not in out and "reshape(" in out   # outer -> reshape+broadcast
