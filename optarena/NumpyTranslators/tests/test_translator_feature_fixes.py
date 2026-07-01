@@ -963,17 +963,58 @@ def test_add_at_mismatched_value_rank_raises():
 def test_issparse_folds_to_false_for_dense_abi():
     """``sp.issparse(x)`` -> ``False`` (the dense-only ABI): numba/pythran cannot
     type scipy.sparse, and the sparse branch is dead -- exactly as C/Fortran prune
-    it statically (banded_mmt)."""
+    it statically (banded_mmt). Dead-branch elimination then drops it entirely."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(A, B, out):\n"
+           "    if sp.issparse(A):\n"
+           "        out[:] = (A @ B).toarray()\n"
+           "        return\n"
+           "    out[:] = A + B\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("A", "float64", ("N", "N")),
+                                                            ("B", "float64", ("N", "N")),
+                                                            ("out", "float64", ("N", "N"))], [], ["A", "B", "out"]))
+    assert "issparse" not in out and "toarray" not in out   # sparse branch folded away and eliminated
+
+
+def test_dead_branch_elim_removes_folded_issparse_branch():
+    """After ``sp.issparse(x)`` folds to False, the dead sparse branch (with its
+    ``.toarray()``) is removed -- pythran statically types even a dead branch."""
     from numpyto_common.numpy_desugar import desugar_for_python_backend
     src = ("def k(A, B, out):\n"
            "    if sp.issparse(A) and sp.issparse(B):\n"
            "        out[:] = (A @ B).toarray()\n"
            "        return\n"
-           "    out[:] = A @ B\n")
+           "    out[:] = A + B\n")
     out = desugar_for_python_backend(src, _py_kir("k", src, [("A", "float64", ("N", "N")),
                                                             ("B", "float64", ("N", "N")),
                                                             ("out", "float64", ("N", "N"))], [], ["A", "B", "out"]))
-    assert "issparse" not in out and "False" in out
+    assert "toarray" not in out and "issparse" not in out
+
+
+def test_pythran_clean_strips_imports_and_substitutes_precision():
+    """The pythran module drops imports it cannot resolve (optarena framework,
+    scipy) and substitutes the np_float / np_complex precision globals."""
+    from numpyto_pythran.emit import _clean_for_pythran
+    src = ("from optarena.infrastructure.framework import np_float, np_complex\n"
+           "import scipy.sparse as sp\n"
+           "import numpy as np\n"
+           "def k(x, out):\n"
+           "    out[:] = np.zeros(x.shape, dtype=np_complex)\n")
+    kir = _py_kir("k", src, [("x", "float64", ("N",)), ("out", "complex128", ("N",))], [], ["x", "out"])
+    cleaned = _clean_for_pythran(src, kir)
+    assert "optarena" not in cleaned and "scipy" not in cleaned
+    assert "np_float" not in cleaned and "np_complex" not in cleaned and "np.complex128" in cleaned
+
+
+def test_np_flip_lowers_to_reverse_slice():
+    """np.flip(x[, axis]) -> a reverse-step slice (pythran's np.flip fails type
+    deduction -- durbin); no axis reverses every axis."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(x, out):\n"
+           "    out[:] = np.flip(x)\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("x", "float64", ("N",)),
+                                                            ("out", "float64", ("N",))], [], ["x", "out"]))
+    assert "np.flip" not in out and "::-1" in out
 
 
 def test_repeat_axis_lowers_to_gather_loop():

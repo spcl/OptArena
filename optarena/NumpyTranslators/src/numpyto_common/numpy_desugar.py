@@ -1049,6 +1049,24 @@ class _CallFixups(ast.NodeTransformer):
                 base = ast.Call(func=node.func, args=node.args, keywords=[k for k in node.keywords if k.arg != "dtype"])
                 cast = ast.Attribute(value=base, attr="astype", ctx=ast.Load())
                 return ast.copy_location(ast.Call(func=cast, args=[kw["dtype"]], keywords=[]), node)
+        if attr == "flip" and node.args:
+            # np.flip(x[, axis]) -> a reverse-step slice (pythran's np.flip fails
+            # type deduction -- durbin); no axis reverses every axis.
+            x = node.args[0]
+            kw = {k.arg: k.value for k in node.keywords}
+            ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
+            rank = _expr_rank(x, self.ranks)
+            if rank is None:
+                return node
+            if ax is None:
+                axes = set(range(rank))
+            elif isinstance(ax, ast.Constant) and isinstance(ax.value, int):
+                axes = {ax.value % rank}
+            else:
+                return node
+            slices = ", ".join("::-1" if d in axes else ":" for d in range(rank))
+            self.changed = True
+            return ast.copy_location(ast.parse(f"({ast.unparse(x)})[{slices}]", mode="eval").body, node)
         return node
 
 
@@ -1258,11 +1276,15 @@ class _AddAtInline(ast.NodeTransformer):
         self._ctr += 1
         iters = [f"{p}_i{k}" for k in range(driver_rank)]
         it = ", ".join(iters)
+        # ``np.ascontiguousarray`` materialises each hoisted index / value array:
+        # pythran keeps ``nbr_idx[:, :, n] - 1`` as a lazy numpy_expr that cannot
+        # be indexed by a tuple in the scatter loop (icon_scatter); it is a no-op
+        # for an already-contiguous array under numba.
         pre, idx_exprs, first_arr = [], [], None
         for j, e in enumerate(elts):
             if (_expr_rank(e, self.ranks) or 0) >= 1:
                 t = f"{p}_x{j}"
-                pre.append(f"{t} = {ast.unparse(e)}")
+                pre.append(f"{t} = np.ascontiguousarray({ast.unparse(e)})")
                 idx_exprs.append(f"{t}[{it}]")
                 first_arr = first_arr or t
             else:
@@ -1271,7 +1293,7 @@ class _AddAtInline(ast.NodeTransformer):
             rhs = "1"
         else:
             tv = f"{p}_v"
-            pre.append(f"{tv} = {ast.unparse(vals)}")
+            pre.append(f"{tv} = np.ascontiguousarray({ast.unparse(vals)})")
             vr = _expr_rank(vals, self.ranks)
             if vr and vr not in (0, driver_rank):
                 # vals broadcasts against the index shape; only a scalar or a
@@ -1613,6 +1635,38 @@ class _RepeatAxisInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
+class _DeadBranchElim(ast.NodeTransformer):
+    """Constant-fold boolean guards (``X and False`` -> ``False``, etc.) and drop
+    the unreachable branch of ``if <const bool>:``. After the desugar folds a
+    ``scipy.sparse.issparse(x)`` guard to ``False`` (dense-only ABI), this removes
+    the dead sparse branch entirely -- numba DCEs it before typing, but pythran
+    statically types it (``.toarray()`` on a dense array) and errors otherwise."""
+
+    def __init__(self):
+        self.changed = False
+
+    def _const_bool(self, node: ast.AST):
+        if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            return node.value
+        if isinstance(node, ast.BoolOp):
+            vals = [self._const_bool(v) for v in node.values]
+            if isinstance(node.op, ast.And):
+                return False if any(v is False for v in vals) else (True if all(v is True for v in vals) else None)
+            return True if any(v is True for v in vals) else (False if all(v is False for v in vals) else None)
+        return None
+
+    def visit_If(self, node: ast.If):
+        self.generic_visit(node)
+        taken = self._const_bool(node.test)
+        if taken is True:
+            self.changed = True
+            return node.body
+        if taken is False:
+            self.changed = True
+            return node.orelse or [ast.copy_location(ast.Pass(), node)]
+        return node
+
+
 def _as_matmul(node: ast.AST):
     """``a @ b`` / ``np.matmul(a, b)`` / ``np.dot(a, b)`` -> ``(a, b)`` else None."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
@@ -1765,6 +1819,7 @@ def desugar_for_python_backend(source: str, kir) -> str:
             _FancyGatherInline(ranks),
             _ReduceAxisInline(ranks),
             _CallFixups(ranks),
+            _DeadBranchElim(),
             _UfuncOuterInline(ranks),
             _MaskedAssignToLoop(ranks, dtypes),
             _AddAtInline(ranks),
