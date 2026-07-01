@@ -162,7 +162,7 @@ class Benchmark(object):
                 data[name] = v
         elif info_init:
             base = "optarena.benchmarks.{r}.{m}".format(r=self.info["relative_path"].replace('/', '.'),
-                                                       m=self.info["module_name"])
+                                                        m=self.info["module_name"])
             # Foundation references live in ``<module_name>_numpy.py`` (the
             # ``_numpy`` postfix the frameworks load), so fall back to that when
             # the bare ``module_name`` module is absent -- this lets a foundation

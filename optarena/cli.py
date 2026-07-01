@@ -188,8 +188,13 @@ def _agent_registry() -> Dict[str, Any]:
     # noop / blas-reduction / tvm / triton (optarena.agent_bench.optimizers).
     from optarena.agent_bench.agent import ClaudeAgent, LocalHFAgent, OllamaAgent, StubAgent
     from optarena.agent_bench.optimizers import optimizer_registry
-    return {"stub": StubAgent, "claude": ClaudeAgent, "local": LocalHFAgent, "ollama": OllamaAgent,
-            **optimizer_registry()}
+    return {
+        "stub": StubAgent,
+        "claude": ClaudeAgent,
+        "local": LocalHFAgent,
+        "ollama": OllamaAgent,
+        **optimizer_registry()
+    }
 
 
 def _csv_or_none(value: str):

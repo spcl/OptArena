@@ -129,7 +129,11 @@ class LibraryOptimizer(Agent):
                 shutil.rmtree(root, ignore_errors=True)
             raise
 
-    def _library_submission(self, task: Task, source: str, *, extra_compile: Sequence[str] = (),
+    def _library_submission(self,
+                            task: Task,
+                            source: str,
+                            *,
+                            extra_compile: Sequence[str] = (),
                             extra_link: Sequence[str] = ()) -> Submission:
         """Build ``source`` to a ``.so`` and wrap it in a :class:`Submission` that
         OWNS the throwaway build dir -- the dir is removed when the submission is

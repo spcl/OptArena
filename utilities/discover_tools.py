@@ -36,7 +36,7 @@ _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
 # ------------------------------------------------------------------ platform ---
 def detect_platform():
-    sysname = platform.system()           # Linux / Darwin / Windows
+    sysname = platform.system()  # Linux / Darwin / Windows
     info = {"system": sysname.lower(), "machine": platform.machine(), "wsl": False}
     if sysname == "Darwin":
         info["distro"] = "macos " + platform.mac_ver()[0]
@@ -55,10 +55,8 @@ def detect_platform():
 
 def _linux_distro():
     try:
-        kv = dict(
-            line.rstrip().split("=", 1)
-            for line in pathlib.Path("/etc/os-release").read_text().splitlines()
-            if "=" in line)
+        kv = dict(line.rstrip().split("=", 1) for line in pathlib.Path("/etc/os-release").read_text().splitlines()
+                  if "=" in line)
     except OSError:
         return "linux"
     name = (kv.get("ID", "linux")).strip('"')
@@ -83,8 +81,7 @@ def _accel_roots():
 
 @functools.lru_cache(maxsize=1)
 def _lib_dirs():
-    dirs = ["/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64",
-            "/opt/homebrew/lib", "/usr/local/opt"]
+    dirs = ["/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64", "/opt/homebrew/lib", "/usr/local/opt"]
     dirs += [os.path.join(r, sub) for r in _accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
     dirs += [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
     return [d for d in dirs if os.path.isdir(d)]
@@ -104,8 +101,7 @@ def _ldconfig_index():
     if not shutil.which("ldconfig"):
         return {}
     try:
-        out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True,
-                             timeout=10).stdout
+        out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return {}
     index = {}
@@ -141,7 +137,7 @@ def detect_binary(spec):
             found.append({"name": name, "path": path})
     if not found:
         return {"found": False}
-    chosen = found[0]                       # names are in prefer-latest order
+    chosen = found[0]  # names are in prefer-latest order
     return {
         "found": True,
         "path": chosen["path"],
@@ -160,8 +156,8 @@ def detect_library(spec):
         for pc in _as_list(spec.get("pkgconfig", [])):
             try:
                 if subprocess.run(["pkg-config", "--exists", pc], timeout=10).returncode == 0:
-                    ver = subprocess.run(["pkg-config", "--modversion", pc],
-                                        capture_output=True, text=True, timeout=10).stdout.strip()
+                    ver = subprocess.run(["pkg-config", "--modversion", pc], capture_output=True, text=True,
+                                         timeout=10).stdout.strip()
                     return {"found": True, "via": f"pkg-config:{pc}", "version": ver or None}
             except (OSError, subprocess.SubprocessError):
                 pass
@@ -239,20 +235,18 @@ def print_human(report):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", action="store_true", help="emit JSON")
     ap.add_argument("--yaml", action="store_true", help="emit YAML")
     ap.add_argument("-o", "--out", help="write machine output to a file")
-    ap.add_argument("--require", choices=TARGETS,
-                    help="exit non-zero if a tool required for this target is missing")
+    ap.add_argument("--require", choices=TARGETS, help="exit non-zero if a tool required for this target is missing")
     args = ap.parse_args(argv)
 
     report = discover()
 
     if args.json or args.yaml or args.out:
-        text = (json.dumps(report, indent=2) if args.json or (args.out and not args.yaml)
-                else yaml.safe_dump(report, sort_keys=False))
+        text = (json.dumps(report, indent=2) if args.json or
+                (args.out and not args.yaml) else yaml.safe_dump(report, sort_keys=False))
         if args.out:
             pathlib.Path(args.out).write_text(text)
             print(f"wrote {args.out}", file=sys.stderr)
@@ -264,8 +258,7 @@ def main(argv=None):
     if args.require:
         miss = missing_for_target(report, args.require)
         if miss:
-            print(f"\nERROR: target {args.require} missing required tools: {', '.join(miss)}",
-                  file=sys.stderr)
+            print(f"\nERROR: target {args.require} missing required tools: {', '.join(miss)}", file=sys.stderr)
             return 1
     return 0
 

@@ -220,8 +220,8 @@ def _framework_class(fname: str):
     not a string). The per-framework modules import THIS module, so the import
     is done lazily here to avoid a circular import."""
     from optarena.infrastructure import (Framework, NumbaFramework, CupyFramework, JaxFramework, PythranFramework,
-                                        DaceFramework, LlvmFramework, CcFramework, FortranFramework, PollyFramework,
-                                        PlutoFramework, TritonFramework, TVMFramework, TVMCPUFramework, APPyFramework)
+                                         DaceFramework, LlvmFramework, CcFramework, FortranFramework, PollyFramework,
+                                         PlutoFramework, TritonFramework, TVMFramework, TVMCPUFramework, APPyFramework)
     classes = {
         "numpy": Framework,
         "numba": NumbaFramework,
@@ -328,7 +328,7 @@ class Framework(object):
 
         self.ensure_impls(bench)
         module_pypath = "optarena.benchmarks.{r}.{m}".format(r=bench.info["relative_path"].replace('/', '.'),
-                                                            m=bench.info["module_name"])
+                                                             m=bench.info["module_name"])
         if "postfix" in self.info.keys():
             postfix = self.info["postfix"]
         else:

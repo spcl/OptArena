@@ -41,8 +41,7 @@ SKIP = ("/.github/", "compose")
 
 def owned_yaml() -> list[pathlib.Path]:
     """Every tracked ``*.yaml`` / ``*.yml`` that is optarena's own to style."""
-    out = subprocess.run(["git", "ls-files", "*.yaml", "*.yml"],
-                         cwd=REPO, capture_output=True, text=True, check=True)
+    out = subprocess.run(["git", "ls-files", "*.yaml", "*.yml"], cwd=REPO, capture_output=True, text=True, check=True)
     files = []
     for rel in out.stdout.split():
         if any(s in f"/{rel}" for s in SKIP):
@@ -94,10 +93,8 @@ def fix(path: pathlib.Path) -> bool:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--fix", action="store_true",
-                    help="auto-fix trailing whitespace + final newline (lossless)")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--fix", action="store_true", help="auto-fix trailing whitespace + final newline (lossless)")
     args = ap.parse_args(argv)
 
     files = owned_yaml()

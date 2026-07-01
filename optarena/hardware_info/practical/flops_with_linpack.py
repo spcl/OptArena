@@ -12,15 +12,13 @@ from optarena.hardware_info.downloader import download_hpl
 def run(cmd):
     return subprocess.check_output(cmd, text=True).strip()
 
+
 def detect_mpi(mpicc="mpicc"):
     """
     Return (MPinc, MPlib) using `mpicc -show`
     """
     try:
-        output = subprocess.check_output(
-            [mpicc, "-show"],
-            text=True
-        )
+        output = subprocess.check_output([mpicc, "-show"], text=True)
     except subprocess.CalledProcessError as e:
         raise RuntimeError("Failed to run mpicc -show") from e
 
@@ -143,38 +141,30 @@ RANLIB       = ranlib
     makefile.write_text(makefile_text)
 
     # Build
-    subprocess.run(["cp", makefile, hpl_dir], 
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False)
-    
+    subprocess.run(["cp", makefile, hpl_dir], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+
     arch_dir = hpl_dir / "lib" / arch
 
     if arch_dir.exists():
         subprocess.run(["make", "clean", f"arch={arch}"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=hpl_dir,check=False)
-        
-    subprocess.run(["make", f"arch={arch}"], cwd=hpl_dir, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, check=True)
+                       stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE,
+                       cwd=hpl_dir,
+                       check=False)
+
+    subprocess.run(["make", f"arch={arch}"], cwd=hpl_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
     xhpl = hpl_dir / "bin" / arch / "xhpl"
     if not xhpl.exists():
-        subprocess.run(["rm", hpl_dir/f"Make.{arch}"], 
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False)
+        subprocess.run(["rm", hpl_dir / f"Make.{arch}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         raise RuntimeError("HPL build failed")
-    
-    subprocess.run(["rm", hpl_dir/f"Make.{arch}"], 
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False)
-    
+
+    subprocess.run(["rm", hpl_dir / f"Make.{arch}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+
     print("Successfully built HPL")
 
     return xhpl
+
 
 def get_available_mem():
     """
@@ -236,8 +226,7 @@ def get_available_mem():
     return None
 
 
-def auto_conf_hpl(xhpl_path: Path = None, num_cores: int = 1,
-                  available_mem: int = None, NB: int = 192):
+def auto_conf_hpl(xhpl_path: Path = None, num_cores: int = 1, available_mem: int = None, NB: int = 192):
     if xhpl_path is None:
         xhpl_path = download_hpl() / "bin" / "Linux_optarena" / "xhpl"
     if available_mem is None:
@@ -247,21 +236,21 @@ def auto_conf_hpl(xhpl_path: Path = None, num_cores: int = 1,
     if not available_mem:
         available_mem = 17179869184
 
-    problem_size = (int(sqrt(available_mem/8 * 0.6)) // NB) * NB
+    problem_size = (int(sqrt(available_mem / 8 * 0.6)) // NB) * NB
 
     p = 1
     q = 1
     # find closest to square grid
     core_sqrt = int(sqrt(num_cores))
-    for i in reversed(range(1,core_sqrt+1)):
-        if num_cores%i == 0:
+    for i in reversed(range(1, core_sqrt + 1)):
+        if num_cores % i == 0:
             v1 = i
-            v2 = num_cores//i
+            v2 = num_cores // i
             p = min(v1, v2)
             q = max(v1, v2)
             break
 
-    xhpl_dat_text= f"""HPLinpack benchmark input file
+    xhpl_dat_text = f"""HPLinpack benchmark input file
 Innovative Computing Laboratory, University of Tennessee (this configuration was automatically created by optarena)
 HPL.out      output file name (if any)
 6            device out (6=stdout,7=stderr,file)
@@ -294,10 +283,11 @@ HPL.out      output file name (if any)
 8            memory alignment in double (> 0)
 """
 
-    dat_path = xhpl_path.parent.resolve()/"HPL.dat"
+    dat_path = xhpl_path.parent.resolve() / "HPL.dat"
     with open(dat_path, 'w') as dat_file:
         dat_file.write(xhpl_dat_text)
         dat_file.close()
+
 
 def run_hpl(xhpl_path=None, num_ranks=1):
     if xhpl_path is None:
@@ -309,13 +299,11 @@ def run_hpl(xhpl_path=None, num_ranks=1):
     omp_threads_before = os.environ.get('OMP_NUM_THREADS')
     os.environ['OMP_NUM_THREADS'] = str(1)
 
-    output = subprocess.run(
-        ["mpirun", "-np", str(num_ranks), str(xhpl_path)],
-        cwd=workdir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
+    output = subprocess.run(["mpirun", "-np", str(num_ranks), str(xhpl_path)],
+                            cwd=workdir,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True)
 
     if omp_threads_before:
         os.environ['OMP_NUM_THREADS'] = omp_threads_before
@@ -326,27 +314,26 @@ def run_hpl(xhpl_path=None, num_ranks=1):
         raise RuntimeError("HPL failed:\n" + output.stderr)
     else:
         return output.stdout
-        
-    
-def get_peak_flops(num_cores:int = 1):
+
+
+def get_peak_flops(num_cores: int = 1):
     """ Builds, configures and runs the HPL benchmark, parses its output and returns the achieved GFLOPs/s
         :param num_cores: The number of cores, HPL should be configured and run with (default is 1)
     """
-    
+
     build_hpl()
     auto_conf_hpl(num_cores=num_cores)
     hpl_output = run_hpl(num_ranks=num_cores)
 
     pattern = re.compile(
         r"^\s*\S+\s+"
-        r"(\d+)\s+"        # N
-        r"(\d+)\s+"        # NB
-        r"(\d+)\s+"        # P
-        r"(\d+)\s+"        # Q
-        r"([\d.]+)\s+"     # Time
-        r"([\deE+.-]+)",   # Gflops
-        re.MULTILINE
-    )
+        r"(\d+)\s+"  # N
+        r"(\d+)\s+"  # NB
+        r"(\d+)\s+"  # P
+        r"(\d+)\s+"  # Q
+        r"([\d.]+)\s+"  # Time
+        r"([\deE+.-]+)",  # Gflops
+        re.MULTILINE)
 
     match = pattern.search(hpl_output)
 
@@ -355,7 +342,7 @@ def get_peak_flops(num_cores:int = 1):
 
     N, NB, P, Q, time_s, gflops = match.groups()
 
-    return{
+    return {
         "N": int(N),
         "NB": int(NB),
         "P": int(P),
@@ -364,14 +351,14 @@ def get_peak_flops(num_cores:int = 1):
         "gflops": float(gflops),
     }
 
+
 if __name__ == "__main__":
     import psutil
     from optarena.hardware_info.theoretical.cpu_gpu_info import get_cpu_flops
     num_cores = psutil.cpu_count(logical=False)
     hpl_results = get_peak_flops(num_cores=num_cores)
 
-    print(
-        f"""
+    print(f"""
 ================ HPL Results ================
 Problem size: {hpl_results["N"]}
 Block size: {hpl_results["NB"]}
@@ -379,5 +366,4 @@ Process grid (PxQ): {hpl_results["P"]}x{hpl_results["Q"]}
 Execution time: {hpl_results["time_seconds"]}
 GFLOPs: {hpl_results["gflops"]} GFLOP/s
 Efficiency: {hpl_results["gflops"]/get_cpu_flops(num_cores=num_cores)[1]}
-"""
-    )
+""")

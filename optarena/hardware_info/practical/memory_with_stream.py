@@ -13,17 +13,16 @@ def build_stream():
     compiler = "gcc"
 
     flags = []
-    
+
     l3_cache_size = get_cpu_cache_size()["L3"]
 
     stream_array_size = 0
     if l3_cache_size != "n/a":
-        stream_array_size = l3_cache_size//2
+        stream_array_size = l3_cache_size // 2
     else:
         stream_array_size = 50000000
-    
-    defines = [f"-DSTREAM_ARRAY_SIZE={stream_array_size}", "-DNTIMES=20"]
 
+    defines = [f"-DSTREAM_ARRAY_SIZE={stream_array_size}", "-DNTIMES=20"]
 
     if compiler in ("gcc", "clang"):
         flags = ["-O3", "-march=native", "-fopenmp"]
@@ -33,17 +32,13 @@ def build_stream():
 
     return exe_path
 
+
 def get_sustained_memory_bandwidth_with_stream():
     stream_exe = build_stream()
-    output = subprocess.run(
-        [stream_exe],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
+    output = subprocess.run([stream_exe], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if output.returncode != 0:
         raise RuntimeError("STREAM failed:\n" + output.stderr)
-    
+
     lines = output.stdout.split('\n')
     print(output.stdout)
     result = {}

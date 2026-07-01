@@ -33,8 +33,8 @@ def _spread(center, n=20):
 
 
 def test_mannwhitney_credits_clear_win_near_true_ratio():
-    cand = _spread(10.0)   # ~10 ns
-    base = _spread(20.0)   # ~20 ns -> ~2x
+    cand = _spread(10.0)  # ~10 ns
+    base = _spread(20.0)  # ~20 ns -> ~2x
     r = timing.reduce_mannwhitney_delta(cand, base, p=0.1, delta_step=0.01)
     assert r.significant
     assert r.delta > 0.0
@@ -44,7 +44,7 @@ def test_mannwhitney_credits_clear_win_near_true_ratio():
 
 def test_mannwhitney_no_credit_when_overlapping():
     cand = _spread(20.0)
-    base = _spread(20.0)   # identical distributions -> not significantly faster
+    base = _spread(20.0)  # identical distributions -> not significantly faster
     r = timing.reduce_mannwhitney_delta(cand, base, p=0.1)
     assert not r.significant
     assert r.speedup == 1.0
@@ -52,7 +52,7 @@ def test_mannwhitney_no_credit_when_overlapping():
 
 
 def test_mannwhitney_no_credit_when_slower():
-    cand = _spread(30.0)   # candidate SLOWER than baseline
+    cand = _spread(30.0)  # candidate SLOWER than baseline
     base = _spread(20.0)
     r = timing.reduce_mannwhitney_delta(cand, base, p=0.1)
     assert not r.significant

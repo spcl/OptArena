@@ -33,9 +33,9 @@ import sys
 
 import numpy as np
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 
 REPO_ROOT = pathlib.Path(__file__).parent.resolve()
 BENCH_DIR = REPO_ROOT / "bench_info"
@@ -47,16 +47,15 @@ def _safe_call(func, *args, **kwargs):
     try:
         return func(*args, **kwargs)
     except Exception as e:
-        print(f"[roofline] WARNING: {func.__name__} failed: {e}",
-              file=sys.stderr)
+        print(f"[roofline] WARNING: {func.__name__} failed: {e}", file=sys.stderr)
         return None
 
 
-def get_theoretical_caps(num_cores=None, dtype_peak="float64",
-                          bandwidth_override=None):
+def get_theoretical_caps(num_cores=None, dtype_peak="float64", bandwidth_override=None):
     """Return (peak_gflops, bandwidth_gb_s)."""
     from optarena.hardware_info.theoretical.cpu_gpu_info import (
-        get_cpu_flops, get_theoretical_bandwidth,
+        get_cpu_flops,
+        get_theoretical_bandwidth,
     )
     import psutil
     if num_cores is None:
@@ -74,14 +73,14 @@ def get_theoretical_caps(num_cores=None, dtype_peak="float64",
         # zero.
         if not bw:
             bw = None
-            print("[roofline] memory bandwidth unavailable (likely needs "
-                  "sudo for dmidecode); pass --bandwidth-gb-s to override.",
-                  file=sys.stderr)
+            print(
+                "[roofline] memory bandwidth unavailable (likely needs "
+                "sudo for dmidecode); pass --bandwidth-gb-s to override.",
+                file=sys.stderr)
     return peak, bw, num_cores
 
 
-def load_bench_estimates(preset: str, datatype: str,
-                         use_dace_analysis: bool = True):
+def load_bench_estimates(preset: str, datatype: str, use_dace_analysis: bool = True):
     """Yield (short_name, flops, bytes, source) for every bench_info.
 
     ``source`` is "json" when the bench_info JSON statically declares
@@ -151,8 +150,7 @@ def load_runtimes(conn, framework, preset, datatype):
     return {b: float(np.median(ts)) for b, ts in grouped.items()}
 
 
-def plot(peak_gflops, bw_gb_s, points, output_base, dtype_peak,
-         num_cores, preset, framework):
+def plot(peak_gflops, bw_gb_s, points, output_base, dtype_peak, num_cores, preset, framework):
     """Render the roofline."""
     fig, ax = plt.subplots(figsize=(8, 6))
     # Axis ranges. Pick a sensible default if no points yet.
@@ -170,18 +168,18 @@ def plot(peak_gflops, bw_gb_s, points, output_base, dtype_peak,
         mem_roof = bw_gb_s * xs  # GFLOPS = (GB/s) * (FLOP/B)
         if peak_gflops:
             mem_roof = np.minimum(mem_roof, peak_gflops)
-        ax.plot(xs, mem_roof, lw=2.0, color="C0",
-                label=f"memory roof ({bw_gb_s:.0f} GB/s)")
+        ax.plot(xs, mem_roof, lw=2.0, color="C0", label=f"memory roof ({bw_gb_s:.0f} GB/s)")
     if peak_gflops:
-        ax.axhline(peak_gflops, color="C3", lw=2.0, ls="--",
+        ax.axhline(peak_gflops,
+                   color="C3",
+                   lw=2.0,
+                   ls="--",
                    label=f"compute roof ({peak_gflops:.0f} GFLOP/s, {dtype_peak})")
 
     # Scatter benchmarks.
     for name, intensity, perf in points:
-        ax.scatter(intensity, perf, s=80, alpha=0.85, edgecolor="k",
-                   zorder=5)
-        ax.annotate(name, (intensity, perf), xytext=(4, 4),
-                    textcoords="offset points", fontsize=7)
+        ax.scatter(intensity, perf, s=80, alpha=0.85, edgecolor="k", zorder=5)
+        ax.annotate(name, (intensity, perf), xytext=(4, 4), textcoords="offset points", fontsize=7)
 
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -204,32 +202,30 @@ def plot(peak_gflops, bw_gb_s, points, output_base, dtype_peak,
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-f", "--framework", default="numpy")
-    ap.add_argument("-p", "--preset", choices=["S", "M", "L", "paper"],
-                    default="paper")
-    ap.add_argument("-d", "--datatype", choices=["float32", "float64"],
-                    default="float64")
-    ap.add_argument("--dtype-peak", choices=["float32", "float64"],
+    ap.add_argument("-p", "--preset", choices=["S", "M", "L", "paper"], default="paper")
+    ap.add_argument("-d", "--datatype", choices=["float32", "float64"], default="float64")
+    ap.add_argument("--dtype-peak",
+                    choices=["float32", "float64"],
                     default=None,
                     help="Which CPU peak to draw the compute roof at. "
-                         "Defaults to --datatype.")
-    ap.add_argument("--num-cores", type=int, default=None,
-                    help="Override the physical core count psutil reports.")
-    ap.add_argument("--bandwidth-gb-s", type=float, default=None,
+                    "Defaults to --datatype.")
+    ap.add_argument("--num-cores", type=int, default=None, help="Override the physical core count psutil reports.")
+    ap.add_argument("--bandwidth-gb-s",
+                    type=float,
+                    default=None,
                     help="Override the memory bandwidth (GB/s). Useful when "
-                         "the dmidecode-based detection requires sudo.")
-    ap.add_argument("--db", default="optarena.db",
-                    help="Path to the optarena results SQLite database.")
-    ap.add_argument("--output", default="roofline",
+                    "the dmidecode-based detection requires sudo.")
+    ap.add_argument("--db", default="optarena.db", help="Path to the optarena results SQLite database.")
+    ap.add_argument("--output",
+                    default="roofline",
                     help="Output file base (without extension; .pdf and "
-                         ".png are produced).")
+                    ".png are produced).")
     args = ap.parse_args(argv)
 
     dtype_peak = args.dtype_peak or args.datatype
-    peak, bw, num_cores = get_theoretical_caps(args.num_cores, dtype_peak,
-                                                args.bandwidth_gb_s)
+    peak, bw, num_cores = get_theoretical_caps(args.num_cores, dtype_peak, args.bandwidth_gb_s)
     print(f"[roofline] CPU peak {dtype_peak} = {peak} GFLOP/s, "
           f"memory BW = {bw} GB/s, cores = {num_cores}")
 
@@ -238,11 +234,9 @@ def main(argv=None):
     db_path = pathlib.Path(args.db)
     if db_path.exists():
         with sqlite3.connect(db_path) as conn:
-            runtimes = load_runtimes(conn, args.framework, args.preset,
-                                     args.datatype)
+            runtimes = load_runtimes(conn, args.framework, args.preset, args.datatype)
         sources = {}
-        for short_name, flops, byts, src in load_bench_estimates(
-                args.preset, args.datatype):
+        for short_name, flops, byts, src in load_bench_estimates(args.preset, args.datatype):
             sources[short_name] = src
             if short_name not in runtimes:
                 skipped.append((short_name, "no DB row"))
@@ -260,15 +254,12 @@ def main(argv=None):
         print(f"[roofline] {args.db} not present — rendering rooflines only.")
 
     # Also report which benches had no flops/bytes annotation.
-    annotated = {n for n, _, _, _ in load_bench_estimates(args.preset, args.datatype,
-                                                          use_dace_analysis=False)}
-    all_benches = {json.load(p.open())["benchmark"]["short_name"]
-                   for p in BENCH_DIR.glob("*.json")}
+    annotated = {n for n, _, _, _ in load_bench_estimates(args.preset, args.datatype, use_dace_analysis=False)}
+    all_benches = {json.load(p.open())["benchmark"]["short_name"] for p in BENCH_DIR.glob("*.json")}
     for n in sorted(all_benches - annotated):
         skipped.append((n, "no flops/bytes in bench_info"))
 
-    plot(peak, bw, points, pathlib.Path(args.output),
-         dtype_peak, num_cores, args.preset, args.framework)
+    plot(peak, bw, points, pathlib.Path(args.output), dtype_peak, num_cores, args.preset, args.framework)
 
     if skipped:
         print(f"[roofline] {len(skipped)} bench(es) skipped:")

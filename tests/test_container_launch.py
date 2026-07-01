@@ -78,9 +78,7 @@ def _judge_sif():
     if os.environ.get("OPTARENA_BUILD_SIF") == "1":
         sif = REPO / "optarena-cpu.sif"
         # --fakeroot so an unprivileged install (no setuid) can run the %post.
-        subprocess.run(
-            ["apptainer", "build", "--fakeroot",
-             str(sif), str(REPO / "containers" / "cpu.def")], check=True)
+        subprocess.run(["apptainer", "build", "--fakeroot", str(sif), str(REPO / "containers" / "cpu.def")], check=True)
         return str(sif)
     return None
 

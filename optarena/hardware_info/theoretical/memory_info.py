@@ -53,9 +53,7 @@ def _run_dmidecode(dump_file=None):
     """
     dump = _resolve_dump_file(dump_file)
     if dump:
-        proc = subprocess.run(
-            ['dmidecode', '--from-dump', dump, '--type', '17'],
-            capture_output=True, text=True)
+        proc = subprocess.run(['dmidecode', '--from-dump', dump, '--type', '17'], capture_output=True, text=True)
         if proc.returncode == 0:
             return proc.stdout
         print(f"dmidecode --from-dump {dump} failed (rc={proc.returncode}); "
@@ -65,8 +63,7 @@ def _run_dmidecode(dump_file=None):
               "the dmidecode command and thus needs either sudo privileges "
               "or a pre-generated dump file (see _run_dmidecode docstring).")
         return None
-    proc = subprocess.run(['sudo', 'dmidecode', '--type', '17'],
-                          capture_output=True, text=True)
+    proc = subprocess.run(['sudo', 'dmidecode', '--type', '17'], capture_output=True, text=True)
     return proc.stdout if proc.returncode == 0 else None
 
 
@@ -91,7 +88,12 @@ def get_memory_info(dump_file=None):
         handle, dmi_type, structure_size = list(map(lambda x: x.strip(), header[0].split(',')))
         type_name = header[1].strip()
 
-        block_dict = {'Handle': handle, 'Type number': dmi_type, 'Type name': type_name, 'Structure size': structure_size}
+        block_dict = {
+            'Handle': handle,
+            'Type number': dmi_type,
+            'Type name': type_name,
+            'Structure size': structure_size
+        }
         for block_line in block_lines:
             key, value = block_line.split(":", 1)
             block_dict[key.strip()] = value.strip()
@@ -118,20 +120,25 @@ def get_theoretical_bandwidth(dump_file=None):
             if speed_mt == 0:
                 speed_mt = device_speed
             elif speed_mt != device_speed:
-                raise NotImplementedError("The function for calculating theoretical bandwidth has not been designed to support multiple different memory speeds")
+                raise NotImplementedError(
+                    "The function for calculating theoretical bandwidth has not been designed to support multiple different memory speeds"
+                )
 
-            device_width = int(device.get("Total Width", "0").split()[0])/8
+            device_width = int(device.get("Total Width", "0").split()[0]) / 8
             if width == 0:
                 width = device_width
             elif width != device_width:
-                raise NotImplementedError("The function for calculating theoretical bandwidth has not been designed to support multiple different memory widths")
+                raise NotImplementedError(
+                    "The function for calculating theoretical bandwidth has not been designed to support multiple different memory widths"
+                )
     return speed_mt * width * len(used_channels)
+
 
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Print theoretical memory "
-                                  "bandwidth, optionally from a dump.")
+                                 "bandwidth, optionally from a dump.")
     ap.add_argument("--dump", help="Path to a pre-generated dmidecode "
-                                    "binary dump (sudo-free parse).")
+                    "binary dump (sudo-free parse).")
     a = ap.parse_args()
     print(get_theoretical_bandwidth(dump_file=a.dump), "MB/s")

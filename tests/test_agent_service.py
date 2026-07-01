@@ -25,7 +25,8 @@ def _get(port, path):
 def _post(port, path, body):
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
                                  data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
     with urllib.request.urlopen(req, timeout=300) as r:
         return r.status, json.loads(r.read())
 
@@ -40,7 +41,8 @@ def test_health_and_task():
         assert spec["kernel"] == "gemm" and spec["symbol"] and spec["signature"]
         assert "speedup" in spec["goal"]
     finally:
-        srv.shutdown(); srv.server_close()
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_baseline_endpoint():
@@ -50,7 +52,8 @@ def test_baseline_endpoint():
         assert code == 200
         assert body["baselines"]["numpy"] > 0
     finally:
-        srv.shutdown(); srv.server_close()
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_oracle_scores_the_reference():
@@ -66,7 +69,8 @@ def test_oracle_scores_the_reference():
         assert body["baseline_ns"] > 0
         assert body["kernel"] == "gemm"
     finally:
-        srv.shutdown(); srv.server_close()
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_oracle_rejects_wrong_input_mode():
@@ -77,4 +81,5 @@ def test_oracle_rejects_wrong_input_mode():
             _post(port, "/oracle", {"kernel": "gemm", "language": "c", "library": "/tmp/x.so"})
         assert ei.value.code == 400
     finally:
-        srv.shutdown(); srv.server_close()
+        srv.shutdown()
+        srv.server_close()

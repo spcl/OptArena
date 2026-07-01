@@ -272,8 +272,10 @@ def _resolve_config(configs, rng):
     raise ValueError(f"no config satisfies rules {rules}")
 
 
-def sample_params(parameters: Dict[str, Any], iteration: int = 0,
-                  configs: Dict[str, Any] = None, constraints=None) -> Dict[str, Any]:
+def sample_params(parameters: Dict[str, Any],
+                  iteration: int = 0,
+                  configs: Dict[str, Any] = None,
+                  constraints=None) -> Dict[str, Any]:
     """Concrete params for fuzz ``iteration``, seeded by ``seeds.fuzz + iteration``.
 
     Microkernels pass just ``parameters`` -- intervals / sets / scalars resolve as

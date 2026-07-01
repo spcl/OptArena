@@ -23,7 +23,6 @@ from pathlib import Path
 import numpy as np
 import scipy.sparse as sp
 
-
 _SUPPORTED_FORMATS = ("csr", "csc", "coo", "bsr", "dia")
 
 _SUITESPARSE_BASE = "https://suitesparse-collection-website.herokuapp.com/MM"
@@ -48,9 +47,8 @@ def to_format(m, fmt: str):
     :param fmt: one of ``csr``, ``csc``, ``coo``, ``bsr``, ``dia``.
     """
     if fmt not in _SUPPORTED_FORMATS:
-        raise ValueError(
-            f"Unsupported sparse format: {fmt!r}. "
-            f"Choose one of {_SUPPORTED_FORMATS}.")
+        raise ValueError(f"Unsupported sparse format: {fmt!r}. "
+                         f"Choose one of {_SUPPORTED_FORMATS}.")
     return sp.csr_matrix(m).asformat(fmt) if fmt != "csr" else sp.csr_matrix(m)
 
 
@@ -87,8 +85,7 @@ def make_uniform(n, nnz, dtype=np.float64, symmetric=False, seed=42):
     return sp.coo_matrix((vals, (rows, cols)), shape=(n, n))
 
 
-def make_banded(n, nnz, dtype=np.float64, bandwidth=None, symmetric=False,
-                seed=42):
+def make_banded(n, nnz, dtype=np.float64, bandwidth=None, symmetric=False, seed=42):
     """Uniformly random entries restricted to |i - j| <= bandwidth.
 
     If ``bandwidth`` is not given, picks it so the band has roughly
@@ -120,8 +117,7 @@ def make_banded(n, nnz, dtype=np.float64, bandwidth=None, symmetric=False,
     return sp.coo_matrix((vals, (rows, cols)), shape=(n, n))
 
 
-def make_diagonal(n, nnz, dtype=np.float64, off_diagonal_fraction=0.1,
-                  symmetric=False, seed=42):
+def make_diagonal(n, nnz, dtype=np.float64, off_diagonal_fraction=0.1, symmetric=False, seed=42):
     """Diagonally-dominant matrix: full diagonal plus a few off-diagonal
     entries (``off_diagonal_fraction * nnz`` of them) scattered
     uniformly.
@@ -220,15 +216,18 @@ def build_sparse(spec: dict, n, nnz=None, dtype=np.float64, symmetric=False):
     extra = {k: v for k, v in spec.items() if k not in ("format", "distribution")}
 
     if dist == "uniform":
-        m = make_uniform(n, nnz, dtype=dtype, symmetric=symmetric,
-                         seed=extra.get("seed", 42))
+        m = make_uniform(n, nnz, dtype=dtype, symmetric=symmetric, seed=extra.get("seed", 42))
     elif dist == "banded":
-        m = make_banded(n, nnz, dtype=dtype,
+        m = make_banded(n,
+                        nnz,
+                        dtype=dtype,
                         bandwidth=extra.get("bandwidth"),
                         symmetric=symmetric,
                         seed=extra.get("seed", 42))
     elif dist == "diagonal":
-        m = make_diagonal(n, nnz, dtype=dtype,
+        m = make_diagonal(n,
+                          nnz,
+                          dtype=dtype,
                           off_diagonal_fraction=extra.get("off_diagonal_fraction", 0.1),
                           symmetric=symmetric,
                           seed=extra.get("seed", 42))
