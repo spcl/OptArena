@@ -251,6 +251,20 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
                     output_args.append(out)
             _strip_trailing_return(fn)
             ast.fix_missing_locations(fn)
+        elif not returned_shapes and not output_args:
+            # SCALAR-only return (no array shape derivable) AND no other output --
+            # the value would be silently dropped. Promote each scalar return to a
+            # 1-element float output buffer (grid_search's binary-search index).
+            for out in _promote_scalar_returns(fn, returned_outputs):
+                input_args.append(out)
+                array_args.append(out)
+                output_args.append(out)
+                # Route the shape through ``shapes_raw`` (the bench-info output path,
+                # which runs ``_parse_shape_expression``) rather than ``returned_shapes``
+                # so the 1-element buffer parses to the ``('1',)`` dim tuple the
+                # multidim subscript lowering expects (a raw ``"(1,)"`` mis-tokenizes).
+                shapes_raw[out] = "(1,)"
+            ast.fix_missing_locations(fn)
         else:
             _revert_return()
             returned_shapes, returned_dtypes = {}, {}
@@ -1172,6 +1186,33 @@ def _strip_trailing_return(fn: ast.FunctionDef) -> None:
     """Remove a trailing ``Return`` statement (if present)."""
     if fn.body and isinstance(fn.body[-1], ast.Return):
         fn.body.pop()
+
+
+def _promote_scalar_returns(fn: ast.FunctionDef, names: List[str]) -> List[str]:
+    """Rewrite a trailing ``return x[, y]`` of SCALAR values into 1-element output
+    buffer writes ``optarena_out<i>[0] = x`` and drop the return.
+
+    A kernel whose only result is a scalar (xsbench ``grid_search`` returns the
+    binary-search index) has no array to promote, so without this the value is
+    silently dropped -- the emitter turns a bare ``return`` in a void kernel into
+    a no-op and the computed answer is lost. The buffer is declared at the run
+    float width (the framework compares every output as float64, and an index /
+    step-count is exact in a double), so no per-return dtype inference is needed.
+    Returns the synthesised output names."""
+    if not fn.body or not isinstance(fn.body[-1], ast.Return):
+        return []
+    writes: List[ast.stmt] = []
+    out_names: List[str] = []
+    for i, nm in enumerate(names):
+        buf = f"optarena_ret{i}"  # distinct from the ``optarena_out`` synthesis temps
+        writes.append(ast.Assign(
+            targets=[ast.Subscript(value=ast.Name(id=buf, ctx=ast.Load()),
+                                   slice=ast.Constant(value=0), ctx=ast.Store())],
+            value=ast.Name(id=nm, ctx=ast.Load())))
+        out_names.append(buf)
+    fn.body = fn.body[:-1] + writes
+    ast.fix_missing_locations(fn)
+    return out_names
 
 
 def _derive_returned_array_metadata(
