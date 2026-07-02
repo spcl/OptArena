@@ -26,6 +26,45 @@ class _SubstitutePrecisionGlobals(ast.NodeTransformer):
         return node
 
 
+#: parameter names that collide with an identifier pythran emits in its generated
+#: entry wrapper. ``res`` is pythran's return-capture variable (``auto res =
+#: func()(...)``); an argument named ``res`` triggers "use of 'res' before
+#: deduction of 'auto'". Such params are renamed (body references too); the
+#: ``#pythran export`` signature is type-only and the oracle calls positionally,
+#: so a rename is invisible to callers.
+_PYTHRAN_RESERVED_PARAMS = {"res"}
+
+
+class _RenameName(ast.NodeTransformer):
+    """Rename every ``Name`` load/store of ``old`` to ``new`` within a scope."""
+
+    def __init__(self, old: str, new: str):
+        self.old = old
+        self.new = new
+
+    def visit_Name(self, node: ast.Name):
+        if node.id == self.old:
+            node.id = self.new
+        return node
+
+
+def _rename_reserved_params(tree: ast.Module, kernel_name: str) -> None:
+    """Rename any kernel parameter that collides with a pythran wrapper identifier
+    (``res``) to a fresh ``<name>_`` (in the signature and body). In-place."""
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == kernel_name), None)
+    if fn is None:
+        return
+    taken = {a.arg for a in fn.args.args} | {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+    for arg in fn.args.args:
+        if arg.arg in _PYTHRAN_RESERVED_PARAMS:
+            new = arg.arg + "_"
+            while new in taken:
+                new += "_"
+            taken.add(new)
+            _RenameName(arg.arg, new).visit(fn)
+            arg.arg = new
+
+
 def _clean_for_pythran(source: str, kir: KernelIR) -> str:
     """Make a verbatim kernel module pythran-compilable: DROP imports pythran
     cannot resolve (``optarena.infrastructure.framework``, ``scipy.*`` -- the
@@ -48,6 +87,7 @@ def _clean_for_pythran(source: str, kir: KernelIR) -> str:
 
     tree.body = [n for n in tree.body if not _unresolvable(n)]
     tree = _SubstitutePrecisionGlobals(subs).visit(tree)
+    _rename_reserved_params(tree, kir.kernel_name)
     ast.fix_missing_locations(tree)
     src = ast.unparse(tree)
     return src if "import numpy as np" in src else "import numpy as np\n" + src

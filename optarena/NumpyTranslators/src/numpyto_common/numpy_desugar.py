@@ -120,6 +120,12 @@ def _is_newaxis(e: ast.AST) -> bool:
 #: scalar). Used only for ndim propagation, not rewriting.
 _REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
 
+#: ufuncs whose result is always a boolean array (regardless of operand dtype).
+_BOOL_UFUNCS = {
+    "logical_and", "logical_or", "logical_not", "logical_xor", "isnan", "isinf", "isfinite", "isclose", "equal",
+    "not_equal", "less", "less_equal", "greater", "greater_equal"
+}
+
 
 def _expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
     """Best-effort ndim of an expression given the current rank table."""
@@ -271,6 +277,8 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
         if isinstance(f, ast.Attribute) and f.attr == "astype" and value.args:
             return _dtype_arg_kind(value.args[0])
         attr = _np_attr(value)
+        if attr in _BOOL_UFUNCS:
+            return "bool"  # logical_and / less / isnan ... always produce a bool array
         if attr in _DTYPE_NAME_KIND:
             return _DTYPE_NAME_KIND[attr]  # np.int64(x) scalar cast
         if attr in _SHAPE_CTORS:
@@ -1235,6 +1243,145 @@ class _MaskedAssignToLoop(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
 
 
+#: masked-gather reductions this lowers (a boolean-mask select feeding a full
+#: reduction). ``mean`` matches numpy's mean-of-empty -> nan; extend as needed.
+_MASKED_REDUCE_OPS = {"mean"}
+
+
+def _masked_reduce_of(node: ast.AST, gathers: Dict[str, tuple]):
+    """A supported reduction of a masked-gather name in ``gathers`` -> ``(op,
+    name)``, else None. Handles the method form ``v.mean()`` and the function
+    form ``np.mean(v)`` (v the whole operand -- a full reduction, no axis)."""
+    if not isinstance(node, ast.Call) or node.keywords:
+        return None
+    f = node.func
+    if (isinstance(f, ast.Attribute) and f.attr in _MASKED_REDUCE_OPS and not node.args
+            and isinstance(f.value, ast.Name) and f.value.id in gathers):
+        return f.attr, f.value.id
+    if (_np_attr(node) in _MASKED_REDUCE_OPS and len(node.args) == 1 and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in gathers):
+        return _np_attr(node), node.args[0].id
+    return None
+
+
+def _masked_reduce_lines(temp: str, a: str, mask: str, rank: int, op: str, p: str) -> List[str]:
+    """Source lines reducing the boolean-masked selection ``a[mask]`` into scalar
+    ``temp`` via an accumulate loop -- the numba/pythran/dace-compatible form of
+    ``a[mask].mean()`` (the masked select alone is a dynamic-length array pythran
+    cannot type and dace cannot shape). ``mean`` divides sum by the masked count
+    and yields ``np.nan`` for an empty selection (numpy's mean-of-empty)."""
+    idx = ", ".join(f"{p}_i{d}" for d in range(rank))
+    lines = [f"{p}_s = 0.0", f"{p}_n = 0"]
+    deep = ""
+    for d in range(rank):
+        lines.append(f"{deep}for {p}_i{d} in range({a}.shape[{d}]):")
+        deep += "    "
+    lines += [f"{deep}if {mask}[{idx}]:", f"{deep}    {p}_s += {a}[{idx}]", f"{deep}    {p}_n += 1"]
+    # op == "mean" (the only supported reduction). Empty selection -> nan (numpy).
+    lines += [f"if {p}_n > 0:", f"    {temp} = {p}_s / {p}_n", "else:", f"    {temp} = np.nan"]
+    return lines
+
+
+def _is_bool_mask(mask: ast.AST, a: ast.AST, ranks: Dict[str, int], dtypes: Dict[str, str]) -> bool:
+    """True iff ``mask`` is a boolean array of ``a``'s rank -- a bool-kind Name or
+    an inline Compare / BoolOp / logical_* combo -- i.e. ``a[mask]`` is a boolean
+    select (not an integer fancy index or a scalar/slice index)."""
+    if isinstance(mask, (ast.Tuple, ast.Slice)) or _is_newaxis(mask):
+        return False
+    ar = _expr_rank(a, ranks)
+    if ar is None or _expr_rank(mask, ranks) != ar:
+        return False
+    return _dtype_kind(mask, dtypes) == "bool"
+
+
+def _masked_reduce_map(fn: ast.AST, ranks: Dict[str, int], dtypes: Dict[str, str]) -> Dict[str, tuple]:
+    """``{name: (a_Name, mask_ast)}`` for every ``name = a[mask]`` boolean-select
+    whose EVERY load-use is a supported masked reduction -- so the select can be
+    dropped and each reduction inlined as an accumulate loop. A name used any other
+    way (indexed, returned, passed on) is excluded and left verbatim."""
+    gathers: Dict[str, tuple] = {}
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Subscript) and isinstance(node.value.value, ast.Name)
+                and _is_bool_mask(node.value.slice, node.value.value, ranks, dtypes)):
+            gathers[node.targets[0].id] = (node.value.value, node.value.slice)
+    ok: Dict[str, tuple] = {}
+    for v, am in gathers.items():
+        loads = sum(1 for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == v and isinstance(n.ctx, ast.Load))
+        reds = sum(1 for n in ast.walk(fn) if _masked_reduce_of(n, {v: am}) is not None)
+        if reds and reds == loads:
+            ok[v] = am
+    return ok
+
+
+class _MaskedReduceHoister(ast.NodeTransformer):
+    """Replace each ``v.mean()`` / ``np.mean(v)`` (v a lowerable masked-gather
+    name) inside one statement with a fresh temp Name, emitting its accumulate
+    loop into ``self.pre``."""
+
+    def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int], ctr: int):
+        self.gathers = gathers
+        self.ranks = ranks
+        self.ctr = ctr
+        self.pre: List[ast.stmt] = []
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)
+        hit = _masked_reduce_of(node, self.gathers)
+        if hit is None:
+            return node
+        op, v = hit
+        a, mask = self.gathers[v]
+        p = f"__mr{self.ctr}"
+        self.ctr += 1
+        temp = f"{p}_o"
+        lines = _masked_reduce_lines(temp, a.id, ast.unparse(mask), _expr_rank(a, self.ranks), op, p)
+        self.pre.extend(ast.parse("\n".join(lines)).body)
+        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+
+
+class _MaskedReduceInline(ast.NodeTransformer):
+    """Drop each lowerable ``v = a[mask]`` boolean-select and inline its reductions
+    (``res[i] = v.mean()`` -> accumulate loop) -- azimint_naive's ``values =
+    data[mask]; res[i] = values.mean()``. The masked select is a dynamic-length
+    array pythran cannot type (auto-before-deduction) and dace cannot shape; numba
+    would DCE the now-unused select anyway. ``gathers`` is pre-vetted so every use
+    of the name is a reduction, making the drop safe."""
+
+    def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int]):
+        self.gathers = gathers
+        self.ranks = ranks
+        self.changed = False
+        self._ctr = 0
+
+    def _hoist(self, node):
+        if node.value is None:
+            return node
+        h = _MaskedReduceHoister(self.gathers, self.ranks, self._ctr)
+        node.value = h.visit(node.value)
+        self._ctr = h.ctr
+        if h.pre:
+            self.changed = True
+            return h.pre + [node]
+        return node
+
+    def visit_Assign(self, node: ast.Assign):
+        if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in self.gathers and isinstance(node.value, ast.Subscript)):
+            self.changed = True
+            return []  # drop the masked select; each reduction inlines its own loop
+        return self._hoist(node)
+
+    def visit_AugAssign(self, node):
+        return self._hoist(node)
+
+    def visit_Return(self, node):
+        return self._hoist(node)
+
+    def visit_Expr(self, node):
+        return self._hoist(node)
+
+
 _AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
 
 
@@ -2026,6 +2173,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         ranks = _rank_table(fn, seed)
         dtypes = _dtype_table(fn, kir_dtype_seed if is_kernel else {})
         noncontig = _noncontig_names(fn)
+        masked_gathers = _masked_reduce_map(fn, ranks, dtypes)
         passes = [
             _LinalgInline(ranks, dtypes, lower_linalg),
             _ReshapeMatmulInline(ranks),
@@ -2036,6 +2184,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _MgridInline(),
             _FancyGatherInline(ranks),
             _ReduceAxisInline(ranks),
+            _MaskedReduceInline(masked_gathers, ranks),
             _CallFixups(ranks),
             _DeadBranchElim(),
             _UfuncOuterInline(ranks),

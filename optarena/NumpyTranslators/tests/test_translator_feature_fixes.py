@@ -1147,11 +1147,89 @@ def test_linalg_desugar_raises_on_unsupported_shape(src, arrays, args):
         _desugar(src, arrays, [], args, "pythran")
 
 
-@pytest.mark.parametrize("kernel", ["cholesky2", "contour_integral"])
+# --------------------------------------------------------------------------- #
+# Q. masked-gather reduction: ``v = data[mask]; res[i] = v.mean()`` -- the      #
+#    boolean select is a dynamic-length array pythran can't type (auto-before-  #
+#    deduction) and dace can't shape, so the select is dropped and the mean     #
+#    inlined as an accumulate loop (azimint_naive).                            #
+# --------------------------------------------------------------------------- #
+_AZIMINT_SRC = ("def kernel(data, radius, npt, res):\n"
+                "    rmax = radius.max()\n"
+                "    for i in range(npt):\n"
+                "        r1 = rmax * i / npt\n"
+                "        r2 = rmax * (i + 1) / npt\n"
+                "        mask_r12 = np.logical_and((r1 <= radius), (radius < r2))\n"
+                "        values_r12 = data[mask_r12]\n"
+                "        res[i] = values_r12.mean()\n")
+_AZIMINT_ARRAYS = [("data", "float64", ("N",)), ("radius", "float64", ("N",)), ("res", "float64", ("npt",))]
+
+
+def test_masked_mean_lowers_to_accumulate_loop():
+    """The dynamic ``data[mask]`` select is dropped; its ``.mean()`` becomes a
+    mask-guarded accumulate loop with numpy's empty -> nan semantics."""
+    out = _desugar(_AZIMINT_SRC, _AZIMINT_ARRAYS, [], ["data", "radius", "npt", "res"], "pythran")
+    assert "values_r12" not in out                       # dynamic masked select gone
+    assert "mask_r12 = np.logical_and" in out            # the bool mask itself is kept
+    assert "+= data[" in out and "np.nan" in out         # accumulate loop + empty guard
+
+
+def test_masked_mean_matches_numpy():
+    rng = np.random.default_rng(0)
+    n, npt = 200, 17
+    data = rng.random(n)
+    radius = rng.random(n)
+    res = np.zeros(npt)
+    sc = _exec_desugared(_AZIMINT_SRC, _AZIMINT_ARRAYS, ["data", "radius", "npt", "res"],
+                         {"data": data.copy(), "radius": radius.copy(), "npt": npt, "res": res})
+    rmax = radius.max()
+    ref = np.empty(npt)
+    for i in range(npt):
+        m = np.logical_and(rmax * i / npt <= radius, radius < rmax * (i + 1) / npt)
+        ref[i] = data[m].mean() if m.any() else np.nan
+    assert np.allclose(sc["res"], ref, rtol=1e-12, atol=1e-12, equal_nan=True)
+
+
+def test_masked_gather_used_non_reduction_stays_verbatim():
+    """A masked select whose result is used any way OTHER than a supported
+    reduction is left verbatim (the drop would be unsound) -- a clean skip."""
+    src = ("def kernel(data, mask, out):\n"
+           "    v = data[mask]\n"
+           "    out[0] = v[0]\n")            # indexed, not reduced
+    out = _desugar(src, [("data", "float64", ("N",)), ("mask", "bool", ("N",)), ("out", "float64", ("N",))], [],
+                   ["data", "mask", "out"], "pythran")
+    assert "v = data[mask]" in out           # not dropped
+
+
+def test_pythran_renames_res_parameter():
+    """A kernel parameter named ``res`` collides with pythran's return-capture
+    variable, so the pythran emit renames it (signature + body)."""
+    from numpyto_pythran.emit import emit_pythran
+    src = "def k(data, res):\n    res[0] = data[0] + data[1]\n"
+    kir = _py_kir("k", src, [("data", "float64", ("N",)), ("res", "float64", ("N",))], [], ["data", "res"])
+    out = emit_pythran(src, kir)
+    fn = next(n for n in ast.parse(out).body if isinstance(n, ast.FunctionDef))
+    assert "res" not in {a.arg for a in fn.args.args}     # reserved param renamed
+    assert "res_[0] = data[0] + data[1]" in out           # body reference renamed consistently
+
+
+def test_pythran_export_dtypes_parses_2d_types():
+    """The oracle marshals pythran args to the export's declared dtypes; the
+    export parser must split on top-level commas only -- a 2-D ``int64[:,:]`` type
+    carries an inner comma (compute's TypeError was a mis-split here)."""
+    no = _oracle()
+    sig = "#pythran export f(int64[:,:], int64[:,:], float64, float64, float64, int64[:,:])\n"
+    dts = no._pythran_export_dtypes(sig)
+    assert dts == [np.int64, np.int64, np.float64, np.float64, np.float64, np.int64]
+    assert no._coerce_to_dtype(np.int64(4), np.float64).dtype == np.float64          # scalar cast
+    assert no._coerce_to_dtype(np.zeros(3, np.uint8), np.int64).dtype == np.int64    # array cast
+
+
+@pytest.mark.parametrize("kernel", ["cholesky2", "contour_integral", "azimint_naive", "crc16", "compute"])
 def test_cholesky2_contour_pythran_e2e(kernel):
-    """cholesky2 (np.linalg.cholesky) and contour_integral (np.linalg.solve + a
-    dead-but-type-checked np.linalg.inv branch) run bit-close to numpy on pythran
-    once the linalg intrinsics lower to loops."""
+    """Kernels reclaimed for pythran: cholesky2 (np.linalg.cholesky),
+    contour_integral (np.linalg.solve + dead-but-typed np.linalg.inv), azimint_naive
+    (masked-mean loop + 'res' param rename), crc16 (uint8-vs-int64 export marshal),
+    compute (int64-scalar-vs-float64 export marshal). All bit-close to numpy."""
     no = _oracle()
     status = no.run_kernel(kernel, preset="S", precision="fp64", seed=0)
     s = status.get("pythran")
