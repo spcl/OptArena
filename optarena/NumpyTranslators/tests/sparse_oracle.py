@@ -422,7 +422,8 @@ def run_kernel(k: SparseKernel,
     # signature (no ABI marshalling): the kernel takes the same args as the numpy
     # ref and returns its outputs, mapped onto output_args in order.
     if backend != "c":
-        return _run_module_backend(backend, k, info, sparse_logical, phys, dense_inputs, scalars, expected, rtol, atol)
+        return _run_module_backend(backend, k, info, sparse_logical, phys, dense_inputs, scalars, env, expected, rtol,
+                                   atol)
 
     # 6. emit + compile.
     import tempfile
@@ -513,13 +514,15 @@ def run_kernel(k: SparseKernel,
 
 def _run_module_backend(backend: str, k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, Any],
                         phys: Dict[str, np.ndarray], dense_inputs: Dict[str, np.ndarray], scalars: Dict[str, Any],
-                        expected: Dict[str, np.ndarray], rtol: float, atol: float) -> OracleResult:
-    """Validate a MODULE backend (jax) on the reference-style signature. The emitted
-    module takes the same args as the numpy ref -- a sparse LOGICAL matrix passed
-    dense (jax has no scipy sparse; eager ``A @ p`` on a dense array matches the ref),
+                        env: Dict[str, int], expected: Dict[str, np.ndarray], rtol: float, atol: float) -> OracleResult:
+    """Validate a MODULE backend (jax / dace) on the reference-style signature. The
+    emitted module takes the same args as the numpy ref -- a sparse LOGICAL matrix
+    passed dense (neither has scipy sparse; ``A @ p`` on a dense array matches the ref),
     unpacked CSR buffers as-is -- and returns its outputs, mapped onto ``output_args``
-    in order. jax runs EAGERLY, so the data-dependent CSR slice + gather in spmv-style
-    kernels execute directly on concrete arrays."""
+    in order. jax runs eagerly (dynamic CSR slice + gather on concrete arrays); dace
+    builds an SDFG (its symbolic shapes make the same slice expressible)."""
+    if backend == "dace":
+        return _run_dace(k, info, sparse_logical, phys, dense_inputs, scalars, env, expected, rtol, atol)
     if backend != "jax":
         raise NotImplementedError(f"sparse backend {backend!r}")
     import os
@@ -550,16 +553,82 @@ def _run_module_backend(backend: str, k: SparseKernel, info: Dict[str, Any], spa
     except Exception as exc:  # noqa: BLE001
         return OracleResult(k.short, False, float("nan"), f"jax run failed: {type(exc).__name__}: {exc}")
     rets = ret if isinstance(ret, tuple) else (ret,)
-    ret_arrays = [np.asarray(r) for r in rets if getattr(r, "shape", None) is not None]
+    ret_arrays = [np.asarray(r) for r in rets if r is not None and np.ndim(r) > 0]
     got = {info["output_args"][j]: np.asarray(ret_arrays[j], dtype=np.float64)
            for j in range(min(len(info["output_args"]), len(ret_arrays)))}
+    return _compare_outputs(k, "jax", info["output_args"], got, expected, rtol, atol)
+
+
+def _compare_outputs(k, backend, out_names, got, expected, rtol, atol) -> OracleResult:
+    """Element-wise compare each ``output_args`` entry (from a module backend) vs the
+    scipy/numpy reference; shared by the jax + dace paths."""
     worst = 0.0
-    for n in info["output_args"]:
+    for n in out_names:
         if n not in got:
-            return OracleResult(k.short, False, float("nan"), f"jax: no output for {n!r}")
+            return OracleResult(k.short, False, float("nan"), f"{backend}: no output for {n!r}")
         g, e = got[n], expected[n]
         err = float(np.abs(g - e).max()) if g.size else 0.0
         worst = max(worst, err)
         if not np.allclose(g, e, rtol=rtol, atol=atol):
-            return OracleResult(k.short, False, err, f"jax output {n!r} mismatch (max |Δ|={err:.3e})")
-    return OracleResult(k.short, True, worst, f"jax: {len(info['output_args'])} output(s) match")
+            return OracleResult(k.short, False, err, f"{backend} output {n!r} mismatch (max |Δ|={err:.3e})")
+    return OracleResult(k.short, True, worst, f"{backend}: {len(out_names)} output(s) match")
+
+
+def _run_dace(k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, Any], phys: Dict[str, np.ndarray],
+              dense_inputs: Dict[str, np.ndarray], scalars: Dict[str, Any], env: Dict[str, int],
+              expected: Dict[str, np.ndarray], rtol: float, atol: float) -> OracleResult:
+    """Build + run the emitted dace ``@dc.program`` (SDFG) and compare vs scipy. dace's
+    symbolic array shapes make the data-dependent CSR slice expressible; the emit (see
+    numpyto_c.dace_emit) declares the shape symbols + drops the ``.shape`` recompute so
+    the program is standalone. Outputs are the ``@dc.program`` return (Krylov solvers'
+    ``x``) or the in-place-mutated buffer (spmv/spmm's ``y``), mapped onto output_args."""
+    import importlib.util
+    import os
+    import tempfile
+    os.environ.setdefault("UCX_VFS_ENABLE", "n")
+    try:
+        import dace as dc
+    except ImportError:
+        return OracleResult(k.short, False, float("nan"), "dace not installed")
+    import optarena.infrastructure.dace_framework as dace_fw
+    dace_fw.dc_float = dc.float64  # bind the precision placeholder (float64 oracle)
+    import _bench_yaml
+    from numpyto_c.dace_emit import emit_dace
+    try:
+        src = emit_dace(_bench_yaml.kir_for(k.short, do_lower=False))
+        d = pathlib.Path(tempfile.mkdtemp())
+        f = d / f"{info['func_name']}_dace.py"
+        f.write_text(src)
+        spec = importlib.util.spec_from_file_location(f"{k.short}_dace_mod", f)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        prog = vars(mod)[info["func_name"]]
+        compiled = prog.to_sdfg(simplify=True).compile()
+    except Exception as exc:  # noqa: BLE001
+        return OracleResult(k.short, False, float("nan"), f"dace build failed: {type(exc).__name__}: {exc}")
+    call: Dict[str, Any] = {}
+    for a in info["input_args"]:
+        if a in sparse_logical:
+            call[a] = np.ascontiguousarray(sparse_logical[a].toarray())
+        elif a in phys:
+            call[a] = np.ascontiguousarray(phys[a])
+        elif a in dense_inputs:
+            call[a] = np.ascontiguousarray(dense_inputs[a].copy())
+        elif a in scalars:
+            call[a] = scalars[a]
+    syms = {s: int(env[s]) for s in map(str, compiled.sdfg.free_symbols) if s in env}
+    try:
+        ret = compiled(**call, **syms)
+    except Exception as exc:  # noqa: BLE001
+        return OracleResult(k.short, False, float("nan"), f"dace run failed: {type(exc).__name__}: {exc}")
+    rets = ret if isinstance(ret, tuple) else (ret,)
+    ret_arrays = [np.asarray(r) for r in rets if r is not None and np.ndim(r) > 0]
+    got: Dict[str, np.ndarray] = {}
+    ri = 0
+    for n in info["output_args"]:
+        if ri < len(ret_arrays):
+            got[n] = np.asarray(ret_arrays[ri], dtype=np.float64)
+            ri += 1
+        elif n in call and isinstance(call[n], np.ndarray):
+            got[n] = np.asarray(call[n], dtype=np.float64)  # in-place-mutated output buffer
+    return _compare_outputs(k, "dace", info["output_args"], got, expected, rtol, atol)

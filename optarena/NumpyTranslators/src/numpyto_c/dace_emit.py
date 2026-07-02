@@ -21,10 +21,48 @@ truth shared with the C/Fortran emitters.
 
 import ast
 import copy
-from typing import List
+import re
+from typing import Dict, List
 
 from numpyto_c.ir import KernelIR
 from numpyto_common.numpy_desugar import desugar_for_python_backend
+
+_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+class _ShapeToSymbol(ast.NodeTransformer):
+    """dace has no runtime ``.shape``: an array carries a SYMBOLIC shape (the
+    ``a: dc_float[M + 1]`` annotation), so ``a.shape[k]`` IS that symbolic dimension.
+    Replace each ``<array>.shape[<const k>]`` with the array's k-th declared shape
+    token (``A_indptr.shape[0]`` -> ``M + 1``)."""
+
+    def __init__(self, arr_shapes: Dict[str, List[str]]):
+        self.arr_shapes = arr_shapes
+
+    def visit_Subscript(self, node: ast.Subscript):
+        self.generic_visit(node)
+        v = node.value
+        if (isinstance(v, ast.Attribute) and v.attr == "shape" and isinstance(v.value, ast.Name)
+                and v.value.id in self.arr_shapes and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, int)):
+            toks = self.arr_shapes[v.value.id]
+            if 0 <= node.slice.value < len(toks):
+                return ast.copy_location(ast.parse(toks[node.slice.value], mode="eval").body, node)
+        return node
+
+
+class _DropSymbolAssign(ast.NodeTransformer):
+    """Drop ``<sym> = ...`` where ``<sym>`` is a declared size symbol. A dc.symbol is a
+    compile-time constant the harness supplies via the array shapes, so recomputing it
+    in the body (``M = A_indptr.shape[0] - 1``) is both redundant and illegal in dace."""
+
+    def __init__(self, symbols):
+        self.symbols = set(symbols)
+
+    def visit_Assign(self, node: ast.Assign):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.symbols:
+            return None
+        return node
 
 #: numpy dtype tag -> dace type expression. Floats route through the
 #: precision-driven ``dc_float`` / ``dc_complex_float`` globals the dace
@@ -63,6 +101,17 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     arrays = {a.name: a for a in kir.arrays}
     scalars = {s.name: s for s in kir.scalars}
     symbol_names = [s.name for s in kir.symbols]
+    # Sparse kirs carry their size symbols (nnz, M, N) ONLY in the array shapes, not
+    # kir.symbols -- collect every free identifier in a shape that is not itself an
+    # array or scalar, so it is declared as a dc.symbol below (otherwise the shape
+    # annotation ``A_indptr: dc.int64[M + 1]`` references an undefined name).
+    arr_shapes = {a.name: [str(s) for s in a.shape] for a in kir.arrays}
+    _known = set(arrays) | set(scalars)
+    for _toks in arr_shapes.values():
+        for _tok in _toks:
+            for _ident in _IDENT_RE.findall(_tok):
+                if _ident not in _known and _ident not in symbol_names:
+                    symbol_names.append(_ident)
 
     # Program signature: arrays + scalars in their original input_args
     # order; symbols are module-level, not parameters.
@@ -113,6 +162,12 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
     except Exception:  # noqa: BLE001 -- keep the verbatim body if desugar fails
         fn_ast = kir.tree
+    # dace has no runtime ``.shape`` and its symbols are immutable: rewrite
+    # ``arr.shape[k]`` to the symbolic dimension and drop any recompute of a size
+    # symbol (``M = A_indptr.shape[0] - 1``), which is redundant + illegal in dace.
+    fn_ast = _ShapeToSymbol(arr_shapes).visit(fn_ast)
+    fn_ast = _DropSymbolAssign(symbol_names).visit(fn_ast)
+    ast.fix_missing_locations(fn_ast)
     body = list(fn_ast.body)
     if (body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant)
             and isinstance(body[0].value.value, str)):
