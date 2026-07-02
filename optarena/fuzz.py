@@ -434,10 +434,12 @@ def large_shapes(parameters: Dict[str, Any],
                  constraints=None):
     """TIMED large-shape samples for one config namespace.
 
-    ``mode`` ``all_configs_3shapes`` (default) draws ``n`` large shapes from a FIXED
-    PUBLIC seed (reproducible leaderboard sizes); ``secret_1shape`` draws ONE large
-    shape from ``secret_seed`` (hidden from the agent). "Large" = the upper half of
-    each fuzz interval, so timing is stable. Returns ``(label, sample)`` pairs with
+    Both modes time ``n`` large shapes per config (``perf.n_large_shapes``, default
+    3) -- public vs secret only changes where the seeds come from:
+    ``all_configs_3shapes`` (default) draws them from a FIXED PUBLIC seed offset
+    (reproducible leaderboard sizes); ``secret_3shapes`` draws them from the
+    JUDGE-ONLY secret seed (hidden from the agent). "Large" = the upper half of each
+    fuzz interval, so timing is stable. Returns ``(label, sample)`` pairs with
     ``config`` merged in; falls back to the high bound when a draw is constraint-rejected.
     """
     mode = str(mode if mode is not None else perf_mode())
@@ -452,17 +454,20 @@ def large_shapes(parameters: Dict[str, Any],
         big[nm] = [lo + (hi - lo) // 2, hi]
     big_spec[FUZZED_PRESET] = big
 
-    if mode == "secret_1shape":
-        # ONE large shape from the JUDGE-ONLY secret seed, hidden from the agent.
-        seeds = [int(secret_seed if secret_seed is not None else secret_shape_seed())]
-        labels = ["secret"]
+    # n timed large shapes per config for BOTH modes (public or hidden doesn't
+    # matter -- same count). NB: the ``config`` parameter shadows the config module,
+    # so the seeds + default n are read via module-scope helpers.
+    n = int(n) if n is not None else _default_n_large_shapes()
+    n = max(1, n)
+    if mode.startswith("secret"):
+        # n large shapes from the JUDGE-ONLY secret seed, hidden from the agent.
+        base = int(secret_seed if secret_seed is not None else secret_shape_seed())
+        seeds = [base + i for i in range(n)]
+        labels = [f"secret{i}" for i in range(n)]
     else:
         # n large shapes from a FIXED PUBLIC seed offset (reproducible leaderboard).
-        # NB: the ``config`` parameter shadows the config module here, so the public
-        # seed + default n are read via module-scope helpers.
-        n = int(n) if n is not None else _default_n_large_shapes()
-        seeds = _public_large_seeds(max(1, n))
-        labels = [f"large{i}" for i in range(max(1, n))]
+        seeds = _public_large_seeds(n)
+        labels = [f"large{i}" for i in range(n)]
 
     out = []
     for label, sd in zip(labels, seeds):
@@ -504,9 +509,14 @@ def _default_n_large_shapes() -> int:
     return int(config.get("perf.n_large_shapes", 3))
 
 
+def public_large_seed_base() -> int:
+    """The FIXED PUBLIC base seed for the timed large shapes -- a dedicated offset
+    off ``seeds.fuzz``, DISCLOSED to the agent (the public-mode timed sizes are
+    reproducible) yet distinct from the correctness fuzz draws."""
+    return int(config.get("seeds.fuzz", 42)) + 10_000
+
+
 def _public_large_seeds(n: int):
-    """The FIXED PUBLIC seeds for mode ``all_configs_3shapes`` large shapes -- a
-    dedicated offset off ``seeds.fuzz`` so the leaderboard sizes are reproducible
-    yet distinct from the correctness fuzz draws."""
-    base = int(config.get("seeds.fuzz", 42)) + 10_000
+    """The FIXED PUBLIC seeds for mode ``all_configs_3shapes`` large shapes."""
+    base = public_large_seed_base()
     return [base + i for i in range(n)]

@@ -136,9 +136,10 @@ def _correctness_cells(params, configs, constraints, k):
 
 
 def _timed_cells(params, configs, constraints, mode):
-    """The timed set: every config x large shape (mode ``all_configs_3shapes`` =
-    3 fixed public large shapes per config; ``secret_1shape`` = one secret large
-    shape per config), as ``score_cells`` cell dicts (``timed=True``)."""
+    """The timed set: every config x large shape. Both modes time
+    ``perf.n_large_shapes`` (default 3) large shapes per config; ``all_configs_3shapes``
+    draws them from a fixed PUBLIC seed (reproducible), ``secret_3shapes`` from the
+    JUDGE-ONLY secret seed (hidden). Returned as ``score_cells`` cell dicts (``timed=True``)."""
     cells = []
     for ci, cfg in enumerate(fuzz.enumerate_configs(configs)):
         for label, sample in fuzz.large_shapes(params, cfg, mode=mode, constraints=constraints):
@@ -185,7 +186,7 @@ def score_task_fuzzed(submission: Submission,
 
     **Stage 2 (performance).** Only a solved task is timed; ``S_i`` is the clamped
     geomean of the credited speed-ups over the timed config x large-shape cells. The
-    perf mode (``perf.mode``: ``all_configs_3shapes`` | ``secret_1shape``) chooses the
+    perf mode (``perf.mode``: ``all_configs_3shapes`` | ``secret_3shapes``) chooses the
     timed shapes; the configured timing backend reduces each cell's repeats.
 
     Both stages run on ONE build of the submission (and one of the C reference) via

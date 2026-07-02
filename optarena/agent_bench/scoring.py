@@ -93,20 +93,35 @@ def _workspace_bytes(expr: Optional[str], binding: Binding, data: Dict) -> int:
         val = _safe_eval(str(expr), names)
     except Exception as exc:  # noqa: BLE001 -- surfaced as a scored error by the caller
         raise ValueError(f"invalid workspace_bytes {expr!r}: {exc}") from exc
+    # The result must be a real (non-bool) number: a comparison/boolean expression
+    # (-> bool, silently 0/1 bytes) or a container literal (-> list, a raw TypeError
+    # on the comparison below) is a malformed request, not a byte count.
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        raise ValueError(f"workspace_bytes {expr!r} must be a numeric byte count, got {type(val).__name__}")
     if val < 0:
         raise ValueError(f"workspace_bytes {expr!r} resolved to a negative size ({val})")
     return math.ceil(val)  # round up: never hand back fewer bytes than requested
 
 
-def _alloc_workspace(nbytes: int):
-    """A ``WORKSPACE_ALIGN``-aligned ``uint8`` scratch buffer of ``nbytes`` (a view
-    whose ``.base`` keeps the backing array alive), or ``None`` for 0 bytes (the
-    kernel then receives a NULL ``workspace``). Uninitialised: the contract is
-    write-before-read scratch."""
+def _scratch_ptr(ws, xp=np) -> int:
+    """Integer base address of a scratch view (``0`` / NULL when absent). Host
+    (numpy) exposes it via ``.ctypes.data``, device (cupy) via ``.data.ptr``."""
+    if ws is None:
+        return 0
+    return ws.ctypes.data if xp is np else int(ws.data.ptr)
+
+
+def _alloc_workspace(nbytes: int, xp=np):
+    """A ``WORKSPACE_ALIGN``-aligned ``uint8`` scratch buffer of ``nbytes`` in the
+    array module ``xp`` (``numpy`` host / ``cupy`` device), as a view whose ``.base``
+    keeps the backing array alive; ``None`` for 0 bytes (the kernel then receives a
+    NULL ``workspace``). Uninitialised: the contract is write-before-read scratch.
+    One implementation so the host and device paths cannot drift on alignment or the
+    NULL-for-zero rule."""
     if nbytes <= 0:
         return None
-    backing = np.empty(nbytes + WORKSPACE_ALIGN, dtype=np.uint8)
-    off = (-backing.ctypes.data) % WORKSPACE_ALIGN
+    backing = xp.empty(nbytes + WORKSPACE_ALIGN, dtype=xp.uint8)
+    off = (-_scratch_ptr(backing, xp)) % WORKSPACE_ALIGN
     return backing[off:off + nbytes]
 
 
@@ -547,7 +562,7 @@ def _call_native(lib_path,
     ws_bytes = _workspace_bytes(workspace_bytes, binding, data)
     ws = _alloc_workspace(ws_bytes)
     params.append(WORKSPACE_PTYPE)
-    c_args.append(ffi.cast(WORKSPACE_PTYPE, ws.ctypes.data if ws is not None else 0))
+    c_args.append(ffi.cast(WORKSPACE_PTYPE, _scratch_ptr(ws)))
     params.append("int64_t")
     c_args.append(ws_bytes)
 
@@ -616,20 +631,15 @@ def _call_native_device(lib_path,
     params.append("int64_t *")
     c_args.append(ffi.cast("int64_t *", time_buf.ctypes.data))
 
-    # §11 scratch pair: DEVICE-resident scratch (cupy), allocated outside the
-    # timed region and aligned to WORKSPACE_ALIGN like the host path (over-allocate
-    # + slice to an aligned base) so the 256-byte alignment the ABI promises holds
-    # regardless of cupy's allocator. NULL/0 unless requested; ``ws`` (and its
-    # ``.base`` backing) stays referenced across the call.
+    # §11 scratch pair: DEVICE-resident scratch (cupy), allocated outside the timed
+    # region through the SAME aligned/NULL helper as the host path (over-allocate +
+    # slice to a WORKSPACE_ALIGN base) so the 256-byte alignment the ABI promises
+    # holds regardless of cupy's allocator. ``ws`` (and its ``.base`` backing) stays
+    # referenced across the call.
     ws_bytes = _workspace_bytes(workspace_bytes, binding, data)
-    if ws_bytes > 0:
-        ws_backing = cp.empty(ws_bytes + WORKSPACE_ALIGN, dtype=cp.uint8)
-        ws_off = (-int(ws_backing.data.ptr)) % WORKSPACE_ALIGN
-        ws = ws_backing[ws_off:ws_off + ws_bytes]
-    else:
-        ws = None
+    ws = _alloc_workspace(ws_bytes, cp)
     params.append(WORKSPACE_PTYPE)
-    c_args.append(ffi.cast(WORKSPACE_PTYPE, int(ws.data.ptr) if ws is not None else 0))
+    c_args.append(ffi.cast(WORKSPACE_PTYPE, _scratch_ptr(ws, cp)))
     params.append("int64_t")
     c_args.append(ws_bytes)
 

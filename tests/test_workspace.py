@@ -59,6 +59,10 @@ def test_workspace_bytes_rejects_bad_request():
         _workspace_bytes("8*MISSING", b, data)  # unknown symbol
     with pytest.raises(ValueError):
         _workspace_bytes("N - 100", b, data)  # negative -> scored error, never a silent 0
+    with pytest.raises(ValueError):
+        _workspace_bytes("N > 0", b, data)  # bool result -> not a byte count (no silent 1-byte)
+    with pytest.raises(ValueError):
+        _workspace_bytes("[8, N]", b, data)  # list result -> clean error, not a raw TypeError
     # A non-integer result is rounded UP so the kernel never gets fewer bytes.
     assert _workspace_bytes("8*N/3", b, data) == 22  # ceil(64/3)=22
 
