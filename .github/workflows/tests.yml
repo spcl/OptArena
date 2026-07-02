@@ -239,9 +239,13 @@ jobs:
       - name: Install dependencies (translators + numba/pythran/jax)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest sympy jinja2 cffi tree-sitter-language-pack psutil py-cpuinfo
+          python -m pip install -r requirements.txt pytest pytest-xdist sympy jinja2 cffi tree-sitter-language-pack psutil py-cpuinfo
           python -m pip install numba pythran "jax[cpu]"
           python -m pip install -e .
       - name: Run the e2e sweep
+        # Every kernel x every backend at S. Parallelised across the runner's
+        # cores (-n auto) so the full serial ~80min sweep fits the CI budget; a
+        # real regression gate (e2e_known_failures.txt currently tracks none, so
+        # any new (kernel, backend) failure fails the job).
         run: |
-          python -m pytest -q -p no:cacheprovider tests/test_e2e_numerical.py
+          python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
