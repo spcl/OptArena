@@ -1132,6 +1132,46 @@ def test_inv_lowering_matches_numpy_complex():
     assert np.allclose(sc["out"], np.linalg.inv(A), rtol=1e-10, atol=1e-10)
 
 
+_EIGH_SRC = ("from scipy.linalg import eigh as _sci_eigh\n"
+             "def kernel(a, b, w, v):\n"
+             "    ww, vv = _sci_eigh(a, b, lower=False, subset_by_index=[0, 3])\n"
+             "    w[:] = ww\n"
+             "    v[:] = vv\n")
+_EIGH_ARRAYS = [("a", "complex128", ("N", "N")), ("b", "complex128", ("N", "N")), ("w", "float64", ("M", )),
+                ("v", "complex128", ("N", "M"))]
+
+
+def test_eigh_generalized_subset_matches_scipy():
+    """``w, v = scipy.linalg.eigh(a, b, subset_by_index=[0, k])`` (generalized
+    complex-Hermitian, aliased import) lowers to a Cholesky-reduced complex Jacobi
+    loop nest and matches scipy: same eigenvalues, and ``a v = w b v``."""
+    sci = pytest.importorskip("scipy.linalg")
+    rng = np.random.default_rng(0)
+    n, nvec = 8, 4
+    M = rng.random((n, n)) + 1j * rng.random((n, n))
+    A = M + M.conj().T
+    P = rng.random((n, n)) + 1j * rng.random((n, n))
+    B = P @ P.conj().T + n * np.eye(n)
+    sc = _exec_desugared(_EIGH_SRC, _EIGH_ARRAYS, ["a", "b", "w", "v"], {
+        "a": A.copy(), "b": B.copy(), "w": np.zeros(nvec), "v": np.zeros((n, nvec), np.complex128)})
+    wref, _ = sci.eigh(A, B, subset_by_index=[0, nvec - 1])
+    assert np.allclose(sc["w"], wref, rtol=1e-10, atol=1e-10)
+    resid = max(np.max(np.abs(A @ sc["v"][:, k] - sc["w"][k] * (B @ sc["v"][:, k]))) for k in range(nvec))
+    assert resid < 1e-9
+
+
+def test_eigh_gated_native_linalg_per_backend():
+    """The generalized reduction leans on cholesky/inv/@: numba and dace keep them
+    native (np.linalg), pythran lowers them. The eigh call itself is always lowered
+    to the Jacobi loop nest (no backend has a generalized complex-Hermitian eigh)."""
+    for be in ("numba", "dace"):
+        out = _desugar(_EIGH_SRC, _EIGH_ARRAYS, [], ["a", "b", "w", "v"], be)
+        assert "np.linalg.cholesky" in out and "np.hypot" in out    # native reduce + jacobi
+        assert "_sci_eigh(" not in out.split("def kernel")[1]        # the call is lowered
+    py = _desugar(_EIGH_SRC, _EIGH_ARRAYS, [], ["a", "b", "w", "v"], "pythran")
+    assert "np.linalg.cholesky" not in py and "np.hypot" in py       # cholesky lowered for pythran
+
+
 @pytest.mark.parametrize("src,arrays,args", [
     ("def kernel(v, out):\n    out[:] = np.linalg.cholesky(v)\n",
      [("v", "float64", ("N",)), ("out", "float64", ("N",))], ["v", "out"]),          # 1-D cholesky

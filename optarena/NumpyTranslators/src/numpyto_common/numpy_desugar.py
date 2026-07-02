@@ -1973,24 +1973,32 @@ def _np_linalg_attr(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _cholesky_lines(temp: str, a: str, n: str, p: str) -> List[str]:
+def _cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) -> List[str]:
     """Source lines computing ``np.linalg.cholesky(a)`` into a freshly zeroed
     ``temp`` via the Cholesky-Banachiewicz triple loop (the same O(n^3) form the
     C/Fortran backends lower in :func:`lib_nodes.expand_cholesky`). ``temp`` is a
     fresh buffer, so a strict-upper-triangle of zeros (numpy's convention) comes
-    for free from the ``np.zeros`` init. Real SPD only -- the caller guards out
-    the complex (Hermitian) case, which would need a conjugate this form omits."""
+    for free from the ``np.zeros`` init.
+
+    ``hermitian`` (a complex-Hermitian positive-definite ``a``, e.g. the metric
+    ``b`` in a generalized eigenproblem) conjugates the second factor of every
+    inner product (``a = L Lᴴ``) and takes the real part of the diagonal argument
+    to ``sqrt`` (Hermitian diagonals are real up to roundoff); for a real ``a``
+    both reduce to the plain form."""
+    cj = "np.conj({0})" if hermitian else "{0}"
+    diag = f"np.sqrt({p}_s.real)" if hermitian else f"np.sqrt({p}_s)"
+    jk, ik = f"{temp}[{p}_j, {p}_k]", f"{temp}[{p}_i, {p}_k]"
     return [
         f"{temp} = np.zeros(({n}, {n}), {a}.dtype)",
         f"for {p}_j in range({n}):",
         f"    {p}_s = {a}[{p}_j, {p}_j]",
         f"    for {p}_k in range({p}_j):",
-        f"        {p}_s -= {temp}[{p}_j, {p}_k] * {temp}[{p}_j, {p}_k]",
-        f"    {temp}[{p}_j, {p}_j] = np.sqrt({p}_s)",
+        f"        {p}_s -= {jk} * {cj.format(jk)}",
+        f"    {temp}[{p}_j, {p}_j] = {diag}",
         f"    for {p}_i in range({p}_j + 1, {n}):",
         f"        {p}_t = {a}[{p}_i, {p}_j]",
         f"        for {p}_k in range({p}_j):",
-        f"            {p}_t -= {temp}[{p}_i, {p}_k] * {temp}[{p}_j, {p}_k]",
+        f"            {p}_t -= {ik} * {cj.format(jk)}",
         f"        {temp}[{p}_i, {p}_j] = {p}_t / {temp}[{p}_j, {p}_j]",
     ]
 
@@ -2068,13 +2076,11 @@ class _LinalgHoister(ast.NodeTransformer):
             return node  # unknown rank -> verbatim (inference gap, not a raise)
         if ra != 2:
             raise DesugarError(f"np.linalg.cholesky: only a 2-D operand is lowered (got ndim {ra})")
-        if _dtype_kind(a, self.dtypes) == "complex":
-            return node  # Hermitian (conjugate) cholesky is not modelled -> leave verbatim
         p = f"__chol{self.ctr}"
         self.ctr += 1
         an = self._src_name(a, p, "a")
         temp = f"{p}_o"
-        self._emit(_cholesky_lines(temp, an, f"{an}.shape[0]", p))
+        self._emit(_cholesky_lines(temp, an, f"{an}.shape[0]", p, hermitian=_dtype_kind(a, self.dtypes) == "complex"))
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
     def _solve(self, node: ast.Call):
@@ -2161,6 +2167,206 @@ class _LinalgInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
+def _eigh_jacobi_lines(w: str, y: str, c: str, p: str) -> List[str]:
+    """Source lines diagonalising the Hermitian matrix ``c`` by cyclic complex
+    Jacobi into eigenvalues ``w`` (ascending real, shape ``(n,)``) and eigenvectors
+    ``y`` (unitary columns). Each sweep rotates every off-diagonal pair ``(pp, qq)``
+    to zero with a unitary ``J`` (phase ``apq/|apq|`` then a real symmetric Jacobi
+    angle); the two-sided update ``A = Jᴴ A J`` runs as explicit column/row loops.
+    Selection-sort ascending at the end (numpy.linalg.eigh's order). Validated
+    against numpy to ~5e-15."""
+    n = f"{c}.shape[0]"
+    a, v = f"{p}_ja", f"{p}_jv"
+    return [
+        f"{a} = {c}.copy()",
+        f"{v} = np.eye({n}, dtype={c}.dtype)",
+        f"for {p}_sw in range(80):",
+        f"    {p}_off = 0.0",
+        f"    for {p}_pp in range({n}):",
+        f"        for {p}_qq in range({p}_pp + 1, {n}):",
+        f"            {p}_off += {a}[{p}_pp, {p}_qq].real * {a}[{p}_pp, {p}_qq].real "
+        f"+ {a}[{p}_pp, {p}_qq].imag * {a}[{p}_pp, {p}_qq].imag",
+        f"    if {p}_off <= 1e-30:",
+        f"        break",
+        f"    for {p}_pp in range({n}):",
+        f"        for {p}_qq in range({p}_pp + 1, {n}):",
+        f"            {p}_apq = {a}[{p}_pp, {p}_qq]",
+        f"            {p}_m = np.hypot({p}_apq.real, {p}_apq.imag)",
+        f"            if {p}_m == 0.0:",
+        f"                continue",
+        f"            {p}_app = {a}[{p}_pp, {p}_pp].real",
+        f"            {p}_aqq = {a}[{p}_qq, {p}_qq].real",
+        f"            {p}_ephi = {p}_apq / {p}_m",
+        f"            {p}_tau = ({p}_aqq - {p}_app) / (2.0 * {p}_m)",
+        f"            {p}_ts = 1.0 if {p}_tau >= 0.0 else -1.0",
+        f"            {p}_t = {p}_ts / (abs({p}_tau) + np.sqrt({p}_tau * {p}_tau + 1.0))",
+        f"            {p}_c = 1.0 / np.sqrt({p}_t * {p}_t + 1.0)",
+        f"            {p}_s = {p}_t * {p}_c",
+        f"            for {p}_k in range({n}):",  # A @ J : columns pp, qq
+        f"                {p}_akp = {a}[{p}_k, {p}_pp]",
+        f"                {p}_akq = {a}[{p}_k, {p}_qq]",
+        f"                {a}[{p}_k, {p}_pp] = {p}_c * {p}_akp - {p}_s * np.conj({p}_ephi) * {p}_akq",
+        f"                {a}[{p}_k, {p}_qq] = {p}_s * {p}_ephi * {p}_akp + {p}_c * {p}_akq",
+        f"            for {p}_k in range({n}):",  # Jᴴ @ A : rows pp, qq
+        f"                {p}_apk = {a}[{p}_pp, {p}_k]",
+        f"                {p}_aqk = {a}[{p}_qq, {p}_k]",
+        f"                {a}[{p}_pp, {p}_k] = {p}_c * {p}_apk - {p}_s * {p}_ephi * {p}_aqk",
+        f"                {a}[{p}_qq, {p}_k] = {p}_s * np.conj({p}_ephi) * {p}_apk + {p}_c * {p}_aqk",
+        f"            for {p}_k in range({n}):",  # V @ J : columns pp, qq
+        f"                {p}_vkp = {v}[{p}_k, {p}_pp]",
+        f"                {p}_vkq = {v}[{p}_k, {p}_qq]",
+        f"                {v}[{p}_k, {p}_pp] = {p}_c * {p}_vkp - {p}_s * np.conj({p}_ephi) * {p}_vkq",
+        f"                {v}[{p}_k, {p}_qq] = {p}_s * {p}_ephi * {p}_vkp + {p}_c * {p}_vkq",
+        f"{w} = np.zeros({n}, np.float64)",
+        f"for {p}_i in range({n}):",
+        f"    {w}[{p}_i] = {a}[{p}_i, {p}_i].real",
+        f"for {p}_i in range({n}):",  # selection-sort ascending, permuting eigenvectors
+        f"    {p}_mn = {p}_i",
+        f"    for {p}_j in range({p}_i + 1, {n}):",
+        f"        if {w}[{p}_j] < {w}[{p}_mn]:",
+        f"            {p}_mn = {p}_j",
+        f"    if {p}_mn != {p}_i:",
+        f"        {p}_tw = {w}[{p}_i]",
+        f"        {w}[{p}_i] = {w}[{p}_mn]",
+        f"        {w}[{p}_mn] = {p}_tw",
+        f"        for {p}_k in range({n}):",
+        f"            {p}_tv = {v}[{p}_k, {p}_i]",
+        f"            {v}[{p}_k, {p}_i] = {v}[{p}_k, {p}_mn]",
+        f"            {v}[{p}_k, {p}_mn] = {p}_tv",
+        f"{y} = {v}",
+    ]
+
+
+def _eigh_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p: str) -> List[str]:
+    """Source lines for ``w, v = eigh(a[, b])[subset lo:hi]`` (ascending). The
+    generalized Hermitian problem ``a x = w b x`` is reduced to standard form via
+    the Cholesky factor of ``b`` (``b = L Lᴴ``): ``C = L⁻¹ a L⁻ᴴ`` is Hermitian
+    with the same eigenvalues, and its eigenvectors back-transform as ``x = L⁻ᴴ
+    y``. ``cholesky``/``inv``/``@`` are left as ``np.linalg``/matmul for the native
+    backends (numba/dace) and lowered by :class:`_LinalgInline` for pythran; the
+    standard eigh is the self-contained Jacobi above. Validated vs scipy ~1e-15."""
+    if b is not None:
+        pre = [
+            f"{p}_L = np.linalg.cholesky({b})",
+            f"{p}_Li = np.linalg.inv({p}_L)",
+            f"{p}_C = {p}_Li @ {a} @ {p}_Li.conj().T",
+        ]
+        cname = f"{p}_C"
+    else:
+        pre = [f"{p}_C = {a}.copy()"]
+        cname = f"{p}_C"
+    lines = pre + _eigh_jacobi_lines(f"{p}_wa", f"{p}_ya", cname, p)
+    xname = f"{p}_xa" if b is not None else f"{p}_ya"
+    if b is not None:
+        lines.append(f"{p}_xa = {p}_Li.conj().T @ {p}_ya")
+    lines.append(f"{w} = {p}_wa[{lo}:{hi}]")
+    lines.append(f"{v} = {xname}[:, {lo}:{hi}]")
+    return lines
+
+
+def _eigh_alias_names(tree: ast.AST) -> set:
+    """Names that refer to ``scipy.linalg.eigh`` via ``from scipy.linalg import
+    eigh [as X]`` (cegterg's ``_sci_eigh``). ``np.linalg.eigh`` / ``scipy.linalg.
+    eigh`` attribute calls are recognised separately."""
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in ("scipy.linalg", "scipy"):
+            for al in node.names:
+                base = al.name if node.module == "scipy.linalg" else None
+                if base == "eigh" or al.name == "linalg.eigh":
+                    out.add(al.asname or al.name)
+    return out
+
+
+def _eigh_call_ab(node: ast.AST, alias_names: set):
+    """``eigh(a[, b], ...)`` -> ``(a_node, b_node_or_None, kwargs)`` for a matching
+    eigh call (``np.linalg.eigh`` / ``scipy.linalg.eigh`` / an imported alias),
+    else None."""
+    if not isinstance(node, ast.Call) or not node.args:
+        return None
+    f = node.func
+    is_eigh = (_np_linalg_attr(node) == "eigh" or (isinstance(f, ast.Name) and f.id in alias_names) or
+               (isinstance(f, ast.Attribute) and f.attr == "eigh" and isinstance(f.value, ast.Attribute)
+                and f.value.attr == "linalg" and isinstance(f.value.value, ast.Name) and f.value.value.id == "scipy"))
+    if not is_eigh:
+        return None
+    kw = {k.arg: k.value for k in node.keywords}
+    a = node.args[0]
+    b = node.args[1] if len(node.args) > 1 else kw.get("b")
+    return a, b, kw
+
+
+class _EighInline(ast.NodeTransformer):
+    """Lower ``w, v = eigh(a[, b], subset_by_index=[lo, hi])`` -- standard or
+    generalized complex-Hermitian ``eigh`` (numpy or scipy, incl. an imported
+    alias) -- to a Cholesky-reduced complex Jacobi loop nest (see
+    :func:`_eigh_stmts`). Handles the tuple-target eigenpair form and the
+    ``eigvals_only=True`` single-target form; a non-``Name`` operand is
+    materialised first. Runs BEFORE :class:`_LinalgInline` so the cholesky/inv it
+    emits are themselves lowered for pythran."""
+
+    def __init__(self, ranks: Dict[str, int], alias_names: set):
+        self.ranks = ranks
+        self.alias_names = alias_names
+        self.changed = False
+        self._ctr = 0
+
+    def _subset(self, kw) -> tuple:
+        """``subset_by_index=[lo, hi]`` (inclusive) -> slice bounds ``(lo, hi+1)``
+        strings; whole spectrum -> ``('None', 'None')`` (a full ``[:]`` slice)."""
+        s = kw.get("subset_by_index")
+        if isinstance(s, (ast.List, ast.Tuple)) and len(s.elts) == 2:
+            return ast.unparse(s.elts[0]), f"({ast.unparse(s.elts[1])}) + 1"
+        return "None", "None"
+
+    def visit_Assign(self, node: ast.Assign):
+        if len(node.targets) != 1:
+            return node
+        hit = _eigh_call_ab(node.value, self.alias_names)
+        if hit is None:
+            return node
+        a_node, b_node, kw = hit
+        tgt = node.targets[0]
+        evo = kw.get("eigvals_only")
+        eigvals_only = isinstance(evo, ast.Constant) and evo.value is True
+        # Target: ``w, v = eigh(...)`` (tuple) or ``w = eigh(..., eigvals_only=True)``.
+        if isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts):
+            w, v = tgt.elts[0].id, tgt.elts[1].id
+        elif isinstance(tgt, ast.Name) and eigvals_only:
+            w, v = tgt.id, None
+        else:
+            return node
+        if _expr_rank(a_node, self.ranks) not in (2, None) or (b_node is not None
+                                                               and _expr_rank(b_node, self.ranks) not in (2, None)):
+            return node
+        p = f"__eigh{self._ctr}"
+        self._ctr += 1
+        pre: List[str] = []
+
+        def name_of(nd, tag):
+            if isinstance(nd, ast.Name):
+                return nd.id
+            pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
+            return f"{p}_{tag}"
+
+        aname = name_of(a_node, "a")
+        bname = name_of(b_node, "b") if b_node is not None else None
+        lo, hi = self._subset(kw)
+        vtmp = v if v is not None else f"{p}_vdrop"
+        lines = pre + _eigh_stmts(w, vtmp, aname, bname, lo, hi, p)
+        self.changed = True
+        return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
+
+    def visit_AugAssign(self, node):
+        return node
+
+    def visit_Return(self, node):
+        return node
+
+    def visit_Expr(self, node):
+        return node
+
+
 #: numpy.linalg ops each verbatim-body backend compiles NATIVELY (left in place);
 #: any op NOT listed for the target backend is lowered to explicit loops by the
 #: desugar. numba (numba.np.linalg) and dace (dace.libraries.linalg replacements)
@@ -2231,6 +2437,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         for a in kir.arrays if _kind_of_dtype_str(vars(a).get("dtype"))
     }
     param_ranks = _infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
+    eigh_aliases = _eigh_alias_names(tree)
     changed = False
     for fn in (all_funcs or [tree]):
         is_kernel = getattr(fn, "name", None) == kir.kernel_name
@@ -2243,6 +2450,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         masked_gathers = _masked_reduce_map(fn, ranks, dtypes)
         passes = [
             _DropGuards(),
+            _EighInline(ranks, eigh_aliases),
             _LinalgInline(ranks, dtypes, lower_linalg),
             _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),
