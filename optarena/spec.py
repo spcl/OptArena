@@ -628,7 +628,7 @@ class BenchSpec:
             array_args = derive_array_args(input_args, init_spec)
             if array_args is None:
                 raise ValueError(f"{source}: 'array_args' is absent and cannot be inferred -- "
-                                 f"declare it, or give the kernel a declarative 'init.shapes' block "
+                                 f"declare it, or give the kernel a declarative 'init.arrays' block "
                                  f"so its array inputs can be derived.")
             # Arrays are identified by HAVING a shape, so every input must be
             # accounted for -- otherwise a forgotten ``init.shapes`` entry would
@@ -641,9 +641,9 @@ class BenchSpec:
             unknown = [a for a in input_args if a not in classified]
             if unknown:
                 raise ValueError(f"{source}: input(s) {unknown} are undeclared. With 'array_args' inferred, every "
-                                 f"input must be an array (give it a shape in init.shapes), a scalar value "
+                                 f"input must be an array (give it a shape in init.arrays), a scalar value "
                                  f"(init.scalars), or a size symbol (parameters). If {unknown} are arrays, add "
-                                 f"them to init.shapes.")
+                                 f"them to init.arrays.")
         # ``output_args`` is required (see the ``required`` tuple above): the
         # contributor states the graded / written-in-place buffers explicitly.
         output_args = tuple(bench["output_args"])

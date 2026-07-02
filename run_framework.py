@@ -121,7 +121,7 @@ if __name__ == "__main__":
                               "dwarf (e.g. dense_linear_algebra), a directory "
                               "prefix, or a single kernel short-name."))
     parser.add_argument("-f", "--framework", type=str, nargs="?", default="numpy")
-    parser.add_argument("-p", "--preset", choices=['S', 'M', 'L', 'paper'], nargs="?", default='S')
+    parser.add_argument("-p", "--preset", choices=['S', 'M', 'L', 'XL', 'paper'], nargs="?", default='S')
     parser.add_argument("-m", "--mode", type=str, nargs="?", default="main")
     parser.add_argument("-v", "--validate", type=util.str2bool, nargs="?", default=True)
     parser.add_argument("-r", "--repeat", type=int, nargs="?", default=10)

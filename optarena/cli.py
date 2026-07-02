@@ -413,7 +413,7 @@ def build_parser() -> argparse.ArgumentParser:
                    default="c",
                    help="comma-separated languages (c,cpp,fortran,cuda,hip) "
                    "or 'all'; default 'c'")
-    a.add_argument("--preset", default="S", choices=["S", "M", "L", "XL"], help="data-size preset (default S)")
+    a.add_argument("--preset", default="S", choices=["S", "M", "L", "XL", "paper"], help="data-size preset (default S)")
     a.add_argument("--datatype",
                    default="float64",
                    choices=["float64", "float32"],
@@ -485,7 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="what POST /oracle accepts (default from config service.input_mode)")
     sv.add_argument("--preset",
                     default=None,
-                    choices=["S", "M", "L", "XL"],
+                    choices=["S", "M", "L", "XL", "paper"],
                     help="data-size preset the judge scores at (default from config)")
     sv.add_argument("--repeat", type=int, default=None, help="timed reps; best kept (default from config)")
     sv.set_defaults(func=cmd_serve)

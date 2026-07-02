@@ -1,7 +1,7 @@
 # optarena dependency list (hand-maintained).
 # --pre required for: apache-tvm
 --pre
-numpy
+numpy>=2,<3
 scipy
 pandas
 matplotlib
