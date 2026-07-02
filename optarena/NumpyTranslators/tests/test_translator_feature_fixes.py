@@ -1227,6 +1227,26 @@ def test_drop_guards_replaces_raise_and_assert_with_pass():
     assert "raise" not in out and "assert" not in out and "ValueError" not in out
 
 
+@pytest.mark.parametrize("dtype,category,vanishes", [
+    ("int64", "integer", True),      # int idx IS integer -> `not True` guard drops
+    ("float64", "integer", False),   # float idx is NOT integer -> guard body (raise) runs -> kept-then-dropped
+])
+def test_issubdtype_folds_from_known_dtype(dtype, category, vanishes):
+    """``np.issubdtype(x.dtype, np.<category>)`` folds to a compile-time bool from
+    x's known dtype kind (the isinstance-style check); the validation guard it
+    feeds then resolves and disappears. numba/pythran/dace cannot evaluate it."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = (f"def k(idx, out):\n"
+           f"    if not np.issubdtype(idx.dtype, np.{category}):\n"
+           f"        raise TypeError('need integer index')\n"
+           f"    out[0] = idx[0]\n")
+    out = desugar_for_python_backend(
+        src, _py_kir("k", src, [("idx", dtype, ("N", )), ("out", "float64", ("N", ))], [], ["idx", "out"]),
+        backend="pythran")
+    assert "issubdtype" not in out          # folded away regardless
+    assert "raise" not in out and "TypeError" not in out
+
+
 def test_asarray_lowers_like_copy_for_c():
     """``np.asarray`` / ``np.ascontiguousarray`` of a materialised array lower like
     ``np.copy`` (a shape-preserving copy) in the C pipeline (dbcsr / minife)."""

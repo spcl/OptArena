@@ -209,16 +209,26 @@ class _CBodyEmitter(BaseEmitter):
                 f"{indent}}}")
 
     def _emit_if(self, node: ast.If, indent: str) -> str:
-        cond = self.emit_expr(node.test)
         then = self.emit_block(node.body, indent + "  ")
+        chained = bool(node.orelse) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
+        else_str = ""
+        if node.orelse:
+            else_str = self._emit_if(node.orelse[0], indent) if chained else self.emit_block(node.orelse, indent + "  ")
+        # A guard whose branches are both empty (``if bad: raise ...`` after the
+        # raise is dropped -- minife's ``if not np.issubdtype(...): raise``,
+        # lavamd's ``if np.any(...): raise``) has no effect; drop the whole ``if``
+        # so its condition (a pure validation predicate the backend may not be able
+        # to emit) is never emitted.
+        if not then.strip() and not else_str.strip():
+            return ""
+        cond = self.emit_expr(node.test)
         out = [f"{indent}if ({cond}) {{", then, f"{indent}}}"]
         if node.orelse:
-            if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
-                out.append(f"{indent}else " + self._emit_if(node.orelse[0], indent).lstrip())
+            if chained:
+                out.append(f"{indent}else " + else_str.lstrip())
             else:
-                else_body = self.emit_block(node.orelse, indent + "  ")
                 out.append(f"{indent}else {{")
-                out.append(else_body)
+                out.append(else_str)
                 out.append(f"{indent}}}")
         return "\n".join(out)
 

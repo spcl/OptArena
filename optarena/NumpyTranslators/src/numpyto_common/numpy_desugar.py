@@ -1802,6 +1802,50 @@ class _DropGuards(ast.NodeTransformer):
         return ast.copy_location(ast.Pass(), node)
 
 
+#: ``np.<name>`` abstract dtype category -> the concrete dtype KINDS it covers.
+#: Used to fold ``np.issubdtype(x.dtype, np.<name>)`` to a compile-time bool.
+_ISSUBDTYPE_CATEGORY: Dict[str, set] = {
+    "integer": {"int"},
+    "signedinteger": {"int"},
+    "unsignedinteger": {"int"},
+    "floating": {"float"},
+    "complexfloating": {"complex"},
+    "inexact": {"float", "complex"},
+    "number": {"int", "float", "complex"},
+    "bool_": {"bool"},
+    "bool": {"bool"},
+}
+
+
+class _IssubdtypeFold(ast.NodeTransformer):
+    """Fold ``np.issubdtype(<expr>.dtype, np.<category>)`` -- and a bare concrete
+    ``np.issubdtype(np.int32, np.integer)`` -- to a ``True``/``False`` constant from
+    the known dtype KIND of the operand (bool/int/float/complex). numba/pythran/dace
+    cannot evaluate ``np.issubdtype``, but the answer is a compile-time property of
+    the (statically known) dtype, so the guard/branch it feeds resolves and (with
+    dead-branch elim) disappears -- the isinstance-style check the C++/C backends
+    would do. Left verbatim when the operand kind or the category is unknown."""
+
+    def __init__(self, dtypes: Dict[str, str]):
+        self.dtypes = dtypes
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)
+        if _np_attr(node) != "issubdtype" or len(node.args) != 2:
+            return node
+        a = node.args[0]
+        kind = _dtype_kind(a.value, self.dtypes) if (isinstance(a, ast.Attribute)
+                                                     and a.attr == "dtype") else _dtype_arg_kind(a)
+        cat = node.args[1]
+        catname = cat.attr if isinstance(cat, ast.Attribute) else (cat.id if isinstance(cat, ast.Name) else None)
+        kinds = _ISSUBDTYPE_CATEGORY.get(catname)
+        if kind is None or kinds is None:
+            return node
+        self.changed = True
+        return ast.copy_location(ast.Constant(value=(kind in kinds)), node)
+
+
 class _DeadBranchElim(ast.NodeTransformer):
     """Constant-fold boolean guards (``X and False`` -> ``False``, etc.) and drop
     the unreachable branch of ``if <const bool>:``. After the desugar folds a
@@ -1815,6 +1859,9 @@ class _DeadBranchElim(ast.NodeTransformer):
     def _const_bool(self, node: ast.AST):
         if isinstance(node, ast.Constant) and isinstance(node.value, bool):
             return node.value
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            v = self._const_bool(node.operand)
+            return None if v is None else (not v)  # ``not issubdtype(...)`` folds too
         if isinstance(node, ast.BoolOp):
             vals = [self._const_bool(v) for v in node.values]
             if isinstance(node.op, ast.And):
@@ -2207,6 +2254,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _ReduceAxisInline(ranks),
             _MaskedReduceInline(masked_gathers, ranks),
             _CallFixups(ranks),
+            _IssubdtypeFold(dtypes),
             _DeadBranchElim(),
             _UfuncOuterInline(ranks),
             _MaskedAssignToLoop(ranks, dtypes),
