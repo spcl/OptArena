@@ -109,7 +109,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     fn_ast = copy.deepcopy(kir.tree)
     fn_ast.name = kir.kernel_name
     try:
-        desugared = desugar_for_python_backend(ast.unparse(fn_ast), kir)
+        desugared = desugar_for_python_backend(ast.unparse(fn_ast), kir, backend="dace")
         fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
     except Exception:  # noqa: BLE001 -- keep the verbatim body if desugar fails
         fn_ast = kir.tree

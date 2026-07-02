@@ -19,6 +19,7 @@ The end-to-end correctness of these on the real kernels is asserted in
 """
 import ast
 
+import numpy as np
 import pytest
 
 from numpyto_c.lib_nodes import expand_arange, expand_fromfunction
@@ -1038,3 +1039,122 @@ def test_reshape_of_transpose_forced_contiguous():
     out = desugar_for_python_backend(src, _py_kir("k", src, [("y", "float64", ("A", "B")),
                                                             ("out", "float64", ("N",))], ["N"], ["y", "out"]))
     assert "ascontiguousarray(perm)" in out
+
+
+# --------------------------------------------------------------------------- #
+# P. np.linalg.{cholesky,solve,inv} lowering. pythran has NO numpy.linalg, so  #
+#    these lower to explicit loops (Cholesky-Banachiewicz / Gauss-Jordan with  #
+#    partial pivoting) -- but ONLY for pythran: numba (numba.np.linalg) and     #
+#    dace (dace.libraries.linalg) implement them natively and keep the          #
+#    intrinsic. The loops match numpy to rounding (validated below).           #
+# --------------------------------------------------------------------------- #
+def _desugar(src, arrays, syms, input_args, backend):
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    return desugar_for_python_backend(src, _py_kir("kernel", src, arrays, syms, input_args), backend=backend)
+
+
+def test_cholesky_lowers_for_pythran_only():
+    """``np.linalg.cholesky(A)`` -> a Cholesky-Banachiewicz loop nest for pythran;
+    numba / dace keep the native intrinsic (backend-capability gated)."""
+    src = "def kernel(A):\n    A[:] = np.linalg.cholesky(A) + np.triu(A, k=1)\n"
+    arrays = [("A", "float64", ("N", "N"))]
+    py = _desugar(src, arrays, [], ["A"], "pythran")
+    assert "np.linalg.cholesky" not in py and "np.sqrt(" in py and "for " in py
+    # The cholesky temp is computed BEFORE A is overwritten (in-place read safe).
+    assert py.index("np.sqrt(") < py.index("A[:] =")
+    for be in ("numba", "dace", None):
+        assert "np.linalg.cholesky" in _desugar(src, arrays, [], ["A"], be)
+
+
+def test_solve_and_inv_lower_for_pythran_only():
+    """``np.linalg.solve`` / ``np.linalg.inv`` -> Gauss-Jordan with partial
+    pivoting for pythran; numba / dace keep the intrinsics."""
+    src = ("def kernel(A, b, x):\n"
+           "    x[:] = np.linalg.solve(A, b)\n")
+    arrays = [("A", "float64", ("N", "N")), ("b", "float64", ("N",)), ("x", "float64", ("N",))]
+    py = _desugar(src, arrays, [], ["A", "b", "x"], "pythran")
+    assert "np.linalg.solve" not in py and "np.abs(" in py     # pivot search
+    assert "np.linalg.solve" in _desugar(src, arrays, [], ["A", "b", "x"], "numba")
+
+    isrc = "def kernel(A, o):\n    o[:] = np.linalg.inv(A)\n"
+    iarr = [("A", "complex128", ("N", "N")), ("o", "complex128", ("N", "N"))]
+    ipy = _desugar(isrc, iarr, [], ["A", "o"], "pythran")
+    assert "np.linalg.inv" not in ipy and "np.zeros(" in ipy   # identity RHS
+    assert "np.linalg.inv" in _desugar(isrc, iarr, [], ["A", "o"], "dace")
+
+
+def _exec_desugared(src, arrays, input_args, scope, backend="pythran"):
+    """Desugar ``src`` for ``backend`` and exec it against numpy ``scope`` buffers
+    -- the strongest correctness check (matches numpy, no tolerance games)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    out = desugar_for_python_backend(src, _py_kir("kernel", src, arrays, [], input_args), backend=backend)
+    fn = next(n for n in ast.parse(out).body if isinstance(n, ast.FunctionDef))
+    ns = {"np": np}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "<lin>", "exec"), ns)
+    ns["kernel"](*[scope[a] for a in input_args])
+    return scope
+
+
+def test_cholesky_lowering_matches_numpy():
+    rng = np.random.default_rng(0)
+    n = 7
+    M = rng.random((n, n))
+    A = M @ M.T + n * np.eye(n)            # SPD
+    src = "def kernel(A, out):\n    out[:] = np.linalg.cholesky(A)\n"
+    arrays = [("A", "float64", ("N", "N")), ("out", "float64", ("N", "N"))]
+    sc = _exec_desugared(src, arrays, ["A", "out"], {"A": A.copy(), "out": np.zeros((n, n))})
+    assert np.allclose(sc["out"], np.linalg.cholesky(A), rtol=1e-12, atol=1e-12)
+
+
+def test_solve_lowering_matches_numpy_1d_and_2d():
+    rng = np.random.default_rng(1)
+    n, k = 6, 3
+    A = rng.random((n, n)) + n * np.eye(n)
+    b1 = rng.random(n)
+    B2 = rng.random((n, k))
+    s1 = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
+    a1 = [("A", "float64", ("N", "N")), ("b", "float64", ("N",)), ("x", "float64", ("N",))]
+    sc1 = _exec_desugared(s1, a1, ["A", "b", "x"], {"A": A.copy(), "b": b1.copy(), "x": np.zeros(n)})
+    assert np.allclose(sc1["x"], np.linalg.solve(A, b1), rtol=1e-11, atol=1e-11)
+    s2 = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
+    a2 = [("A", "float64", ("N", "N")), ("b", "float64", ("N", "K")), ("x", "float64", ("N", "K"))]
+    sc2 = _exec_desugared(s2, a2, ["A", "b", "x"], {"A": A.copy(), "b": B2.copy(), "x": np.zeros((n, k))})
+    assert np.allclose(sc2["x"], np.linalg.solve(A, B2), rtol=1e-11, atol=1e-11)
+
+
+def test_inv_lowering_matches_numpy_complex():
+    rng = np.random.default_rng(2)
+    n = 5
+    A = rng.random((n, n)) + 1j * rng.random((n, n)) + n * np.eye(n)
+    src = "def kernel(A, out):\n    out[:] = np.linalg.inv(A)\n"
+    arrays = [("A", "complex128", ("N", "N")), ("out", "complex128", ("N", "N"))]
+    sc = _exec_desugared(src, arrays, ["A", "out"], {"A": A.copy(), "out": np.zeros((n, n), np.complex128)})
+    assert np.allclose(sc["out"], np.linalg.inv(A), rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("src,arrays,args", [
+    ("def kernel(v, out):\n    out[:] = np.linalg.cholesky(v)\n",
+     [("v", "float64", ("N",)), ("out", "float64", ("N",))], ["v", "out"]),          # 1-D cholesky
+    ("def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n",
+     [("A", "float64", ("N", "N")), ("b", "float64", ("N", "K", "L")), ("x", "float64", ("N", "K", "L"))],
+     ["A", "b", "x"]),                                                                # 3-D rhs
+])
+def test_linalg_desugar_raises_on_unsupported_shape(src, arrays, args):
+    """An owned-but-unhandled operand shape raises DesugarError (never a silent
+    miscompile); an unknown-rank operand instead stays verbatim (a clean skip)."""
+    from numpyto_common.numpy_desugar import DesugarError
+    with pytest.raises(DesugarError):
+        _desugar(src, arrays, [], args, "pythran")
+
+
+@pytest.mark.parametrize("kernel", ["cholesky2", "contour_integral"])
+def test_cholesky2_contour_pythran_e2e(kernel):
+    """cholesky2 (np.linalg.cholesky) and contour_integral (np.linalg.solve + a
+    dead-but-type-checked np.linalg.inv branch) run bit-close to numpy on pythran
+    once the linalg intrinsics lower to loops."""
+    no = _oracle()
+    status = no.run_kernel(kernel, preset="S", precision="fp64", seed=0)
+    s = status.get("pythran")
+    if s == "skip:not-installed":
+        pytest.skip("pythran not installed")
+    assert s == "ok", f"{kernel} pythran: {s}"

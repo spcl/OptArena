@@ -92,7 +92,7 @@ def emit_pythran(numpy_source: str, kir: KernelIR) -> str:
     # Expand ops pythran cannot template-instantiate verbatim (batched >=3-D
     # ``@``) into plain loops; a no-op for kernels that do not use them.
     from numpyto_common.numpy_desugar import desugar_for_python_backend
-    numpy_source = desugar_for_python_backend(numpy_source, kir)
+    numpy_source = desugar_for_python_backend(numpy_source, kir, backend="pythran")
     numpy_source = _clean_for_pythran(numpy_source, kir)
 
     sym_by_name = {s.name: s for s in kir.symbols}

@@ -1748,6 +1748,217 @@ class _ReshapeMatmulInline(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body] + [node]
 
 
+def _np_linalg_attr(node: ast.AST) -> Optional[str]:
+    """``np.linalg.<attr>(...)`` / ``numpy.linalg.<attr>(...)`` call -> ``attr``
+    (``cholesky``/``solve``/``inv``), else None. Like :func:`_np_fft_attr` but for
+    the two-level ``np.linalg`` prefix the single-level ``_np_attr`` misses."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "linalg"
+            and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id in ("np", "numpy")):
+        return node.func.attr
+    return None
+
+
+def _cholesky_lines(temp: str, a: str, n: str, p: str) -> List[str]:
+    """Source lines computing ``np.linalg.cholesky(a)`` into a freshly zeroed
+    ``temp`` via the Cholesky-Banachiewicz triple loop (the same O(n^3) form the
+    C/Fortran backends lower in :func:`lib_nodes.expand_cholesky`). ``temp`` is a
+    fresh buffer, so a strict-upper-triangle of zeros (numpy's convention) comes
+    for free from the ``np.zeros`` init. Real SPD only -- the caller guards out
+    the complex (Hermitian) case, which would need a conjugate this form omits."""
+    return [
+        f"{temp} = np.zeros(({n}, {n}), {a}.dtype)",
+        f"for {p}_j in range({n}):",
+        f"    {p}_s = {a}[{p}_j, {p}_j]",
+        f"    for {p}_k in range({p}_j):",
+        f"        {p}_s -= {temp}[{p}_j, {p}_k] * {temp}[{p}_j, {p}_k]",
+        f"    {temp}[{p}_j, {p}_j] = np.sqrt({p}_s)",
+        f"    for {p}_i in range({p}_j + 1, {n}):",
+        f"        {p}_t = {a}[{p}_i, {p}_j]",
+        f"        for {p}_k in range({p}_j):",
+        f"            {p}_t -= {temp}[{p}_i, {p}_k] * {temp}[{p}_j, {p}_k]",
+        f"        {temp}[{p}_i, {p}_j] = {p}_t / {temp}[{p}_j, {p}_j]",
+    ]
+
+
+def _gauss_jordan_lines(aw: str, o: str, n: str, m: Optional[str], p: str) -> List[str]:
+    """Source lines for Gauss-Jordan elimination with partial pivoting reducing
+    ``(aw | o)`` in place so ``aw`` -> identity and ``o`` -> ``aw^-1 @ o``. ``m``
+    marks a 2-D ``o`` (whole-row ops on it) vs ``None`` for a 1-D vector ``o``
+    (scalar ops). This is the shared core of both ``np.linalg.solve`` (``o`` = a
+    copy of ``b``) and ``np.linalg.inv`` (``o`` = the identity).
+
+    Row-vectorized (``aw[r] -= g * aw[k]`` etc.) rather than an inner column loop:
+    the per-element form is arithmetically identical but leaves a scalar temp
+    aliasing an array element, which pythran mis-types as an ndarray in a larger
+    function. Whole-row ops sidestep that and match numpy's LU-with-partial-pivot
+    solve/inv to rounding for well-conditioned systems (validated ~1e-17)."""
+    k, r = f"{p}_k", f"{p}_r"
+    # A 2-D ``o`` swaps whole rows (a fresh row .copy()); a 1-D ``o`` swaps a scalar.
+    o_swap = [f"        {p}_to = {o}[{k}].copy()"] if m is not None else [f"        {p}_to = {o}[{k}]"]
+    o_swap += [f"        {o}[{k}] = {o}[{p}_pv]", f"        {o}[{p}_pv] = {p}_to"]
+    return [
+        f"for {k} in range({n}):",
+        f"    {p}_pv = {k}",
+        f"    for {r} in range({k} + 1, {n}):",
+        f"        if np.abs({aw}[{r}, {k}]) > np.abs({aw}[{p}_pv, {k}]):",
+        f"            {p}_pv = {r}",
+        f"    if {p}_pv != {k}:",
+        f"        {p}_tr = {aw}[{k}].copy()",
+        f"        {aw}[{k}] = {aw}[{p}_pv]",
+        f"        {aw}[{p}_pv] = {p}_tr",
+    ] + o_swap + [
+        f"    {p}_f = {aw}[{k}, {k}]",
+        f"    {aw}[{k}] = {aw}[{k}] / {p}_f",
+        f"    {o}[{k}] = {o}[{k}] / {p}_f",
+        f"    for {r} in range({n}):",
+        f"        if {r} != {k}:",
+        f"            {p}_g = {aw}[{r}, {k}]",
+        f"            {aw}[{r}] -= {p}_g * {aw}[{k}]",
+        f"            {o}[{r}] -= {p}_g * {o}[{k}]",
+    ]
+
+
+class _LinalgHoister(ast.NodeTransformer):
+    """Replace each lowerable ``np.linalg.cholesky/solve/inv(...)`` inside one
+    statement with a fresh temp Name, emitting its loop nest into ``self.pre``.
+    Only ops in ``lower_ops`` are touched (a backend whose native ``np.linalg``
+    handles an op leaves it verbatim). Owned-but-unhandled variants (a >2-D
+    operand) raise :class:`DesugarError`; an unknown-rank operand is left verbatim
+    (an inference gap, a clean backend skip). A non-Name operand is materialised
+    to a temp first so the loop body can index it."""
+
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str], lower_ops: set, ctr: int):
+        self.ranks = ranks
+        self.dtypes = dtypes
+        self.lower_ops = lower_ops
+        self.ctr = ctr
+        self.pre: List[ast.stmt] = []
+
+    def _src_name(self, node: ast.AST, p: str, tag: str) -> str:
+        """A Name operand is used directly; an expression is materialised to a
+        contiguous temp (so the loop body can index it repeatedly)."""
+        if isinstance(node, ast.Name):
+            return node.id
+        nm = f"{p}_{tag}"
+        self.pre.append(ast.parse(f"{nm} = np.ascontiguousarray({ast.unparse(node)})").body[0])
+        return nm
+
+    def _emit(self, lines: List[str]) -> None:
+        self.pre.extend(ast.parse("\n".join(lines)).body)
+
+    def _chol(self, node: ast.Call):
+        a = node.args[0]
+        ra = _expr_rank(a, self.ranks)
+        if ra is None:
+            return node  # unknown rank -> verbatim (inference gap, not a raise)
+        if ra != 2:
+            raise DesugarError(f"np.linalg.cholesky: only a 2-D operand is lowered (got ndim {ra})")
+        if _dtype_kind(a, self.dtypes) == "complex":
+            return node  # Hermitian (conjugate) cholesky is not modelled -> leave verbatim
+        p = f"__chol{self.ctr}"
+        self.ctr += 1
+        an = self._src_name(a, p, "a")
+        temp = f"{p}_o"
+        self._emit(_cholesky_lines(temp, an, f"{an}.shape[0]", p))
+        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+
+    def _solve(self, node: ast.Call):
+        if len(node.args) < 2:
+            return node
+        a, b = node.args[0], node.args[1]
+        ra, rb = _expr_rank(a, self.ranks), _expr_rank(b, self.ranks)
+        if ra is None or rb is None:
+            return node
+        if ra != 2:
+            raise DesugarError(f"np.linalg.solve: A must be 2-D (got ndim {ra})")
+        if rb not in (1, 2):
+            raise DesugarError(f"np.linalg.solve: b must be 1-D or 2-D (got ndim {rb})")
+        p = f"__solv{self.ctr}"
+        self.ctr += 1
+        an, bn = self._src_name(a, p, "a"), self._src_name(b, p, "b")
+        temp = f"{p}_o"
+        self._emit([f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"]
+                   + _gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]",
+                                         (f"{bn}.shape[1]" if rb == 2 else None), p))
+        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+
+    def _inv(self, node: ast.Call):
+        a = node.args[0]
+        ra = _expr_rank(a, self.ranks)
+        if ra is None:
+            return node
+        if ra != 2:
+            raise DesugarError(f"np.linalg.inv: only a 2-D operand is lowered (got ndim {ra})")
+        p = f"__inv{self.ctr}"
+        self.ctr += 1
+        an = self._src_name(a, p, "a")
+        temp, n = f"{p}_o", f"{an}.shape[0]"
+        self._emit([
+            f"{p}_aw = {an}.copy()", f"{temp} = np.zeros(({n}, {n}), {an}.dtype)",
+            f"for {p}_d in range({n}):", f"    {temp}[{p}_d, {p}_d] = 1"
+        ] + _gauss_jordan_lines(f"{p}_aw", temp, n, n, p))
+        return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)  # inner linalg calls first
+        op = _np_linalg_attr(node)
+        if op not in self.lower_ops or not node.args:
+            return node
+        return {"cholesky": self._chol, "solve": self._solve, "inv": self._inv}[op](node)
+
+
+class _LinalgInline(ast.NodeTransformer):
+    """Hoist ``np.linalg.cholesky/solve/inv`` out of any value-bearing statement
+    into its preceding loop nest (cholesky2's ``A[:] = np.linalg.cholesky(A) +
+    np.triu(A, k=1)`` -- the cholesky is computed into a fresh temp BEFORE ``A`` is
+    overwritten, so the in-place read is safe; contour_integral's ``X =
+    np.linalg.solve(Tz, Y)`` nested in a for-loop). Only backends lacking a native
+    ``np.linalg`` (pythran) enable this; numba / dace keep the intrinsic."""
+
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str], lower_ops: set):
+        self.ranks = ranks
+        self.dtypes = dtypes
+        self.lower_ops = lower_ops
+        self.changed = False
+        self._ctr = 0
+
+    def _hoist(self, node):
+        if node.value is None:
+            return node
+        h = _LinalgHoister(self.ranks, self.dtypes, self.lower_ops, self._ctr)
+        node.value = h.visit(node.value)
+        self._ctr = h.ctr
+        if h.pre:
+            self.changed = True
+            return h.pre + [node]
+        return node
+
+    def visit_Assign(self, node):
+        return self._hoist(node)
+
+    def visit_AugAssign(self, node):
+        return self._hoist(node)
+
+    def visit_Return(self, node):
+        return self._hoist(node)
+
+    def visit_Expr(self, node):
+        return self._hoist(node)
+
+
+#: numpy.linalg ops each verbatim-body backend compiles NATIVELY (left in place);
+#: any op NOT listed for the target backend is lowered to explicit loops by the
+#: desugar. numba (numba.np.linalg) and dace (dace.libraries.linalg replacements)
+#: implement cholesky/solve/inv directly; pythran has no numpy.linalg at all.
+_LINALG_LOWERABLE = {"cholesky", "solve", "inv"}
+_NATIVE_LINALG: Dict[Optional[str], set] = {
+    "numba": {"cholesky", "solve", "inv"},
+    "dace": {"cholesky", "solve", "inv"},
+    "pythran": set(),
+}
+
+
 def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
                        kir_seed: Dict[str, int]) -> Dict[str, Dict[str, int]]:
     """Per-function ``{param: ndim}`` seeds. The kernel's array params come from
@@ -1781,9 +1992,9 @@ def _infer_param_ranks(funcs: List[ast.FunctionDef], kernel_name: str,
     return seeds
 
 
-def desugar_for_python_backend(source: str, kir) -> str:
-    """Rewrite ``source`` so numba / pythran can compile it: expand the numpy
-    ops they do not support (batched ``@`` / ``np.matmul``, ``np.pad``,
+def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) -> str:
+    """Rewrite ``source`` so numba / pythran / dace can compile it: expand the
+    numpy ops they do not support (batched ``@`` / ``np.matmul``, ``np.pad``,
     ``np.einsum``, ``np.fft.*``, ``np.mgrid``, axis reductions, ufunc.outer,
     multi-array fancy gather, 2-D boolean-mask assignment, ``np.ndarray`` /
     ``np.linspace(dtype=)`` / ``abs(array)``) into plain loops / broadcasts /
@@ -1791,7 +2002,13 @@ def desugar_for_python_backend(source: str, kir) -> str:
     masked updates live in getAcc/getEnergy), each with its own rank table seeded
     from the kernel arrays (kir) or inferred call-site param ranks. Every pass is
     pattern-guarded and the original ``source`` is returned byte-for-byte when none
-    fire, so a kernel that needs no rewrite keeps its verbatim body."""
+    fire, so a kernel that needs no rewrite keeps its verbatim body.
+
+    ``backend`` selects the target's native-``np.linalg`` capability: an op the
+    backend implements natively (numba / dace do cholesky/solve/inv) is left
+    verbatim; one it lacks (pythran has no np.linalg) is lowered to explicit loops.
+    ``None`` (the default) lowers no linalg -- the safe backwards-compatible base."""
+    lower_linalg = _LINALG_LOWERABLE - _NATIVE_LINALG.get(backend, _LINALG_LOWERABLE)
     tree = ast.parse(source)
     all_funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
     kir_seed: Dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
@@ -1810,6 +2027,7 @@ def desugar_for_python_backend(source: str, kir) -> str:
         dtypes = _dtype_table(fn, kir_dtype_seed if is_kernel else {})
         noncontig = _noncontig_names(fn)
         passes = [
+            _LinalgInline(ranks, dtypes, lower_linalg),
             _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),
             _PadInline(ranks),
