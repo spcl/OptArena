@@ -5,8 +5,7 @@ is written once in NumPy (the ground-truth *reference*); an optimizer — an AI 
 an autotuner, or a human — then produces a fast implementation in C / C++ / Fortran /
 CUDA / … and is **scored by its speedup over a baseline while staying numerically
 correct**. The harness generates the language bindings, compiles the submission,
-times it, and grades it against the reference — so "how good is this agent at making
-this kernel fast?" gets a single, reproducible number.
+times it, and grades it against the reference — one reproducible number per kernel.
 
 > **Timing unit:** all results are in **milliseconds** (`time` / `native_time` in
 > `optarena.db`).
@@ -20,7 +19,7 @@ problem it is*:
 
 | Track | What it is | Carries |
 |---|---|---|
-| **`foundation`** | TSVC-style vectorization/loop puzzles — small kernels that each isolate one classical compiler optimization (vectorize, wavefront, anti-dependency, prefix-scan, …). The unit test of an agent's compiler-level reasoning. | `domain: classical compiler optimizations` + `foundation.source` (no dwarf) |
+| **`foundation`** | TSVC-style vectorization/loop puzzles — small kernels that each isolate one classical compiler optimization (vectorize, wavefront, anti-dependency, prefix-scan, …). | `domain: classical compiler optimizations` + `foundation.source` (no dwarf) |
 | **`hpc`** | Real HPC kernels grouped by **Berkeley dwarf** — the folder *is* the dwarf (`dense_linear_algebra`, `sparse_linear_algebra`, `structured_grids`, …). | a `dwarf` + a `scale` (`micro`/`proxy`) |
 | **`ml`** | Deep-learning kernels (conv, lenet, mlp, softmax, …). | (no dwarf) |
 
@@ -80,7 +79,7 @@ see the hidden tests or tamper with the clock.
    └──────────────────────────────┘           └──────────────────────────────┘
 ```
 
-**Two equally-supported ways to run it — pick by what you need, not by capability:**
+**Two equally-supported ways to run it:**
 
 - **Local (pip).** Install with `pip`, start the judge, point the agent at it. The
   judge is a pure-stdlib socket webapp, so the whole loop runs in a plain Python
@@ -98,8 +97,8 @@ see the hidden tests or tamper with the clock.
   **Apptainer** (sudoless, for shared/HPC machines) and **Docker** (needs sudo).
   See `containers/agentbench.compose.yml`.
 
-Use **Local (pip)** to develop and run; reach for **Containers** only when you need
-timing that is identical across *different* machines. Both run the same judge code.
+Both run the same judge code; use containers only when you need timing that is
+identical across *different* machines.
 
 ---
 
@@ -115,9 +114,9 @@ python -m pip install -r requirements/amd.txt      # + ROCm wheels (AMD)
 python -m pip install .                             # the optarena package itself
 ```
 
-That is the whole story — no per-language or per-framework sub-installs. To drive
-the loop with a model backend, add one opt-in file on top
-(`requirements/agent-anthropic.txt`, `…-aider.txt`, `…-local.txt`).
+No per-language or per-framework sub-installs. To drive the loop with a model
+backend, add one opt-in file on top (`requirements/agent-anthropic.txt`,
+`…-aider.txt`, `…-local.txt`).
 
 Inside a container the same `pip` line is used (Docker/Apptainer just run it in the
 image). Native toolchains (`gcc`/`g++`/`gfortran`/`nvcc`/`hipcc`) come from the
@@ -344,11 +343,10 @@ it:
 ```
 
 **This is symmetric across `input_mode`.** In `source` mode the judge folds your
-`link`/`preload` (in order) into the compile+link command it runs; in `library`
-(ABI) mode you ship the prebuilt `.so` and the judge loads it with the *same*
-preload/link order — so the dependency resolution and timing are identical either
-way. You specify the order once; the harness produces the correct command for
-whichever mode is active.
+`link`/`preload` (in order) into the compile+link command; in `library` (ABI) mode
+you ship the prebuilt `.so` and the judge loads it with the *same* preload/link
+order — so dependency resolution and timing are identical either way. You specify
+the order once.
 
 > **⚠️ Still open (security boundary):** the workspace makes *agent-built* libraries
 > first-class, but **fetching arbitrary libraries from the internet** (an allow-list
@@ -486,8 +484,7 @@ allowed-optimization list, and the response envelope. The **config-dependent** p
 are the `oracle`/`baseline` names, the `input_mode` block (compile-from-source vs
 deliver-a-`.so`), the `rtol`/`atol` from the manifest, the per-language notes, and,
 in the batch (non-service) prompt, the concrete compilers, libraries, and exact
-compile commands in place of the judge-API loop. No optimization hint is ever
-revealed — discovering the transform is the agent's job.
+compile commands in place of the judge-API loop.
 
 ---
 
