@@ -198,6 +198,15 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     _NewaxisToNone().visit(fn)
     ast.fix_missing_locations(fn)
 
+    # ``np.multiply(a, b, out=c)`` and the other binary-ufunc ``out=`` forms ->
+    # ``c = a <op> b`` (the native backends have no ufunc dispatch; minife axpby).
+    from numpyto_common.numpy_desugar import _DropValidationGuards, _UfuncOutInline
+    _UfuncOutInline().visit(fn)
+    # Drop input-validation guards (``if array.ndim != 1: raise ...``) whole, so their
+    # unemittable ``.ndim`` / ``.flags`` conditions do not reach a native emitter.
+    _DropValidationGuards().visit(fn)
+    ast.fix_missing_locations(fn)
+
     # Fold static ``None is None`` / ``None is not None`` comparisons (an inlined
     # helper's unsupplied optional parameter defaults to None) and DCE the dead
     # IfExp / if branches, so a backend never meets a bare None literal at emit.

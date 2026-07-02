@@ -1506,6 +1506,42 @@ class _HistogramHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
+#: binary arithmetic ufuncs whose ``out=`` form maps to a plain BinOp.
+_UFUNC_OUT_OPS = {
+    "add": ast.Add, "subtract": ast.Sub, "multiply": ast.Mult, "divide": ast.Div,
+    "true_divide": ast.Div, "power": ast.Pow, "floor_divide": ast.FloorDiv,
+    "remainder": ast.Mod, "mod": ast.Mod,
+}
+
+
+class _UfuncOutInline(ast.NodeTransformer):
+    """``np.multiply(a, b, out=c)`` (and the other binary arithmetic ufuncs) -> the
+    explicit assignment ``c = a <op> b``. The C/Fortran backends have no ufunc
+    dispatch, so the ``out=`` form must be lowered to a store (minife's axpby).
+    ``c`` may be a slice (``wcoefs[:n]``) -- the assignment target is that slice."""
+
+    def _rewrite(self, call: ast.AST):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy")):
+            return None
+        op = _UFUNC_OUT_OPS.get(call.func.attr)
+        if op is None or len(call.args) != 2:
+            return None
+        out = next((kw.value for kw in call.keywords if kw.arg == "out"), None)
+        if out is None:
+            return None
+        target = copy.deepcopy(out)
+        for n in ast.walk(target):
+            if isinstance(n, (ast.Name, ast.Subscript, ast.Attribute)):
+                n.ctx = ast.Store()
+        return ast.copy_location(
+            ast.Assign(targets=[target], value=ast.BinOp(left=call.args[0], op=op(), right=call.args[1])), call)
+
+    def visit_Expr(self, node: ast.Expr):
+        rw = self._rewrite(node.value)
+        return rw if rw is not None else node
+
+
 class _HistogramInline(ast.NodeTransformer):
     """Hoist ``np.histogram(...)[0]`` out of any value-bearing statement into its
     preceding binning loop (azimint's ``histw = np.histogram(r, n, weights=d)[0]``)."""
@@ -1800,6 +1836,23 @@ class _DropGuards(ast.NodeTransformer):
     def visit_Assert(self, node: ast.Assert):
         self.changed = True
         return ast.copy_location(ast.Pass(), node)
+
+
+class _DropValidationGuards(ast.NodeTransformer):
+    """Remove an input-validation guard ``if <cond>: raise/assert`` ENTIRELY -- the
+    condition included -- so a ``.ndim`` / ``.flags.c_contiguous`` / ``.dtype`` check
+    the native backends cannot emit disappears with the guard, not just the raise
+    (which the emitter already skips, leaving the unemittable condition behind).
+    Fires only when the whole if-body is raise/assert/pass and there is no else, so a
+    real branch is never touched. OptArena kernels run on oracle-validated inputs, so
+    the guard never fires (minife's ``_require_float_vector`` rank/contiguity checks)."""
+
+    def visit_If(self, node: ast.If):
+        self.generic_visit(node)
+        if (not node.orelse and node.body
+                and all(isinstance(s, (ast.Raise, ast.Assert, ast.Pass)) for s in node.body)):
+            return None
+        return node
 
 
 #: ``np.<name>`` abstract dtype category -> the concrete dtype KINDS it covers.
