@@ -157,11 +157,45 @@ jobs:
             tests/test_optimizer_plugin.py \
             tests/test_agent_bench.py
 
+      - name: Build Pluto (polyhedral source-to-source) against LLVM/clang 17
+        # Enables the `pluto` framework in test_frameworks.py: polycc runs the
+        # translator-emitted <base>_pluto_input.c through the polyhedral pipeline.
+        # Pluto's pet submodule links libclang, so it is pinned to LLVM 17 here
+        # (--with-clang-prefix). This whole step is best-effort: it must not fail
+        # the job -- if the build breaks, polycc stays absent and test_pluto_executes
+        # self-skips (the pytest step below runs with -rs so the skip is visible).
+        continue-on-error: true
+        env:
+          # bondhugula/pluto @ 0.12.0-33-gdc46216 -- the commit the local build uses.
+          # Pin for reproducibility; bump deliberately.
+          PLUTO_COMMIT: dc462163c8b4fc97d378a4d245d1a64741cb4111
+        run: |
+          set -euo pipefail
+          # LLVM/clang 17: clang-17/clang++-17 are the compilers (CC/CXX); the
+          # llvm-17-dev + libclang-17-dev headers/libs under /usr/lib/llvm-17 feed
+          # pet via --with-clang-prefix. autoconf/automake/libtool: dev-tree bootstrap
+          # (autogen.sh). libgmp-dev/flex/bison/texinfo/libltdl-dev: isl/cloog/clan.
+          sudo apt-get install -y --no-install-recommends \
+            clang-17 llvm-17 llvm-17-dev libclang-17-dev \
+            autoconf automake libtool libgmp-dev flex bison texinfo libltdl-dev
+          git clone --recursive https://github.com/bondhugula/pluto.git "$RUNNER_TEMP/pluto"
+          cd "$RUNNER_TEMP/pluto"
+          git checkout "$PLUTO_COMMIT"
+          git submodule update --init --recursive
+          ./autogen.sh
+          # Same invocation as the reference local build.
+          ./configure --with-clang-prefix=/usr/lib/llvm-17 \
+            CC=clang-17 CXX=clang++-17 CXXFLAGS='-std=c++17 -include cstdint'
+          make -j"$(nproc)"
+          sudo make install          # polycc + pluto -> /usr/local/bin
+          sudo ldconfig
+          command -v polycc && polycc --version || true
+
       - name: Codegen frameworks + fp16 (build+run+validate a kernel)
         # cc (gcc) / llvm (clang) / tvm_cpu and the fp16-via-jax kernels run here;
-        # polly (needs a Polly-enabled clang), pluto (needs the pluto tool built),
-        # and the GPU frameworks (triton, tvm-gpu) self-skip when their toolchain
-        # /GPU is absent. The GPU ones run in agentbench-gpu.yml.
+        # pluto (built in the previous step) exercises polycc; polly (needs a
+        # Polly-enabled clang) and the GPU frameworks (triton, tvm-gpu) self-skip
+        # when their toolchain / GPU is absent. The GPU ones run in agentbench-gpu.yml.
         env:
           OPTARENA_TVM_NOTUNE: "1"
           OPTARENA_TVM_METASCHEDULE_TRIALS: "2"
