@@ -29,7 +29,9 @@ def main():
             stems.append(stem)
     for i, stem in enumerate(stems):
         try:
-            res = run_kernel(stem, "S")
+            # pluto is opt-in in run_kernel; request the full gated set explicitly so
+            # its FAIL pairs are recorded (matches how test_e2e_numerical calls it).
+            res = run_kernel(stem, "S", only_backends=frozenset(E2E_BACKENDS))
         except Exception as exc:  # noqa: BLE001
             res = {b: f"FAIL:{type(exc).__name__}" for b in E2E_BACKENDS}
         for backend in E2E_BACKENDS:

@@ -33,7 +33,7 @@ from tests.numerical_oracle import run_kernel
 
 # Backends gated here. cupy is intentionally excluded -- it needs a GPU and would
 # only ever ``skip:not-installed`` on a CPU CI runner.
-E2E_BACKENDS = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+E2E_BACKENDS = ("c", "cpp", "fortran", "numba", "pythran", "jax", "pluto")
 
 _HERE = pathlib.Path(__file__).resolve().parent
 _KNOWN_FAIL_FILE = _HERE / "e2e_known_failures.txt"
@@ -71,7 +71,6 @@ def _foundation_hpc_stems():
 # per-backend test items for a kernel share a single (expensive) oracle run.
 _CACHE: dict = {}
 
-
 # Eager JAX dispatches each scalar op to XLA, so work-heavy kernels (the
 # backtracking subset_sum DFS is ~10^6 nodes at N=20) TIME OUT at the standard
 # preset even though the result is correct (verified: subset_sum jax == numpy at
@@ -86,7 +85,9 @@ _JAX_E2E_MAX_SIZE = 12
 
 def _result(stem: str) -> dict:
     if stem not in _CACHE:
-        res = run_kernel(stem, "S")
+        # Request the gated set explicitly -- pluto is opt-in in run_kernel, so it runs
+        # only when named here.
+        res = run_kernel(stem, "S", only_backends=frozenset(E2E_BACKENDS))
         if res.get("jax", "") == "FAIL:timeout:jax":
             jres = run_kernel(stem, "S", max_size=_JAX_E2E_MAX_SIZE, only_backends={"jax"})
             if jres.get("jax"):
