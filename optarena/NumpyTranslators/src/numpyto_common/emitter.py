@@ -46,8 +46,12 @@ class BaseEmitter:
             return self._emit_augassign(node, indent)
         if isinstance(node, ast.Expr):
             v = node.value
-            # Drop bare docstrings.
-            if isinstance(v, ast.Constant) and isinstance(v.value, str):
+            # Drop bare docstrings AND no-op bare-name / constant expression
+            # statements: an inlined in-place helper leaves its unused return temp
+            # as ``x_hcall1`` on its own line -- a harmless no-op in C but an
+            # unclassifiable statement in Fortran (minife's ``_matvec_std_arrays``).
+            # A Call statement (real side effect) still falls through and is emitted.
+            if isinstance(v, (ast.Constant, ast.Name)):
                 return ""
             return f"{indent}{self.emit_expr(v)}{self._STMT_TERM}"
         if isinstance(node, ast.Break):
