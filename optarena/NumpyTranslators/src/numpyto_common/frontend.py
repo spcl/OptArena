@@ -742,14 +742,33 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
                     val = _const_value(v)
                     if val is not None and sub.id not in shadowed:
                         consts[sub.id] = val
-    if not consts:
+    # Module-level DTYPE constants (``FLOAT_DTYPE = np.float64``, ``INDEX_DTYPE =
+    # np.int32``) -- substitute the dtype EXPRESSION so a ``dtype=FLOAT_DTYPE`` kwarg
+    # resolves like a literal ``np.float64`` instead of leaking as a free parameter
+    # (minife). Store the attr name and rebuild ``np.<attr>`` at each reference.
+    _DTYPE_ATTRS = {"float64", "float32", "float16", "int64", "int32", "int16", "int8", "uint64", "uint32", "uint16",
+                    "uint8", "complex128", "complex64", "bool_", "intp", "int_", "float_", "double"}
+    dtype_consts: Dict[str, str] = {}
+    for stmt in tree.body:
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            continue
+        v = stmt.value
+        if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id in ("np", "numpy")
+                and v.attr in _DTYPE_ATTRS and stmt.targets[0].id not in shadowed):
+            dtype_consts[stmt.targets[0].id] = v.attr
+    if not consts and not dtype_consts:
         return
 
     class _Sub(ast.NodeTransformer):
 
         def visit_Name(self, node: ast.Name):
-            if isinstance(node.ctx, ast.Load) and node.id in consts:
-                return ast.copy_location(ast.Constant(value=consts[node.id]), node)
+            if isinstance(node.ctx, ast.Load):
+                if node.id in consts:
+                    return ast.copy_location(ast.Constant(value=consts[node.id]), node)
+                if node.id in dtype_consts:
+                    return ast.copy_location(
+                        ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype_consts[node.id],
+                                      ctx=ast.Load()), node)
             return node
 
     _Sub().visit(fn)
