@@ -733,6 +733,13 @@ class _FortranBodyEmitter(BaseEmitter):
             return (f"merge({self._emit_merge_branch(node.body, node.orelse)}, "
                     f"{self._emit_merge_branch(node.orelse, node.body)}, "
                     f"{self.emit_expr(node.test)})")
+        # ``z.real`` / ``z.imag`` accessor on a complex scalar -> Fortran
+        # ``real(z, kind)`` / ``aimag(z)`` (the complex-Hermitian eigh Jacobi uses
+        # them only on complex operands). ``real(z, rk)`` is also the identity on a
+        # real operand.
+        if isinstance(node, ast.Attribute) and node.attr in ("real", "imag"):
+            x = self.emit_expr(node.value)
+            return f"real({x}, {self._rk})" if node.attr == "real" else f"aimag({x})"
         raise NotImplementedError(f"expression {type(node).__name__} (line {getattr(node, 'lineno', '?')})")
 
     def _emit_merge_branch(self, branch: ast.AST, partner: ast.AST) -> str:
@@ -1845,6 +1852,18 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
     inline_alloc_locals: Dict[str, Tuple[List[str], str]] = {}
     for name_, shape in body_emitter.local_arrays.items():
         if name_.lower() in seen_ci:
+            # A param-array re-harvested into ``local_arrays`` is already declared
+            # (same entity) -- skipping its local declaration is correct. But an
+            # array whose lowercased name clashes with an already-declared SCALAR
+            # / int-local / other-case array is a genuine conflict: Fortran is
+            # case-insensitive, so both would bind to one symbol and indexing the
+            # "array" hits a scalar -> the body is unclassifiable. Fail loudly
+            # (rename the local at its source) instead of silently dropping the
+            # declaration and miscompiling.
+            if name_.lower() not in param_names_ci:
+                raise NotImplementedError(
+                    f"local array {name_!r} clashes case-insensitively with an "
+                    "already-declared name; rename it (Fortran is case-insensitive)")
             continue
         seen_ci.add(name_.lower())
         # REVERSED shape for col-major / row-major interop -- see

@@ -61,6 +61,13 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
 
     src = numpy_py.read_text()
     tree = ast.parse(src, filename=str(numpy_py))
+    # Rewrite ``w, v = eigh(a[, b], ...)`` (np.linalg / scipy.linalg / the
+    # ``_sci_eigh`` alias) to a self-contained complex-Hermitian eigh loop nest
+    # BEFORE helper inlining, so the module-level alias import is still in scope
+    # and the eigh in a helper (cegterg's ``_diaghg``) is lowered before it inlines.
+    from numpyto_common.numpy_desugar import _EighLoopRewriter, _eigh_alias_names
+    _EighLoopRewriter(_eigh_alias_names(tree)).visit(tree)
+    ast.fix_missing_locations(tree)
     fn = _find_function(tree, func_name)
     if fn is None:
         raise ValueError(f"{numpy_py}: no function named {func_name!r}")

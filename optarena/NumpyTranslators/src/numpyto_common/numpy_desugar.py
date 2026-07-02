@@ -2167,19 +2167,28 @@ class _LinalgInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
-def _eigh_jacobi_lines(w: str, y: str, c: str, p: str) -> List[str]:
-    """Source lines diagonalising the Hermitian matrix ``c`` by cyclic complex
-    Jacobi into eigenvalues ``w`` (ascending real, shape ``(n,)``) and eigenvectors
-    ``y`` (unitary columns). Each sweep rotates every off-diagonal pair ``(pp, qq)``
-    to zero with a unitary ``J`` (phase ``apq/|apq|`` then a real symmetric Jacobi
-    angle); the two-sided update ``A = Jᴴ A J`` runs as explicit column/row loops.
-    Selection-sort ascending at the end (numpy.linalg.eigh's order). Validated
+def _eigh_jacobi_lines(w: str, y: str, c: str, n: str, p: str) -> List[str]:
+    """Source lines diagonalising the ``n``-by-``n`` Hermitian matrix ``c`` by
+    cyclic complex Jacobi into eigenvalues ``w`` (ascending real, shape ``(n,)``)
+    and eigenvectors ``y`` (unitary columns). Each sweep rotates every off-diagonal
+    pair ``(pp, qq)`` to zero with a unitary ``J`` (phase ``apq/|apq|`` then a real
+    symmetric Jacobi angle); the two-sided update ``A = Jᴴ A J`` runs as explicit
+    column/row loops. Selection-sort ascending at the end (numpy.linalg.eigh's
+    order). ``n`` is passed explicitly (not ``c.shape[0]``) so the C/Fortran
+    backends see the resolved dimension symbol, not a temp's ``.shape``. Validated
     against numpy to ~5e-15."""
-    n = f"{c}.shape[0]"
-    a, v = f"{p}_ja", f"{p}_jv"
+    # Diagonalise ``c`` IN PLACE -- the caller always passes a fresh, disposable
+    # matrix (the reduced ``L⁻¹ a L⁻ᴴ`` or an ``ascontiguousarray`` copy), so no
+    # extra working copy is needed (and the C/Fortran backends need not infer a
+    # copy-temp's complex dtype).
+    a, v = c, f"{p}_jv"
     return [
-        f"{a} = {c}.copy()",
-        f"{v} = np.eye({n}, dtype={c}.dtype)",
+        # eigenvector accumulator V = I, as zeros + a diagonal loop (``np.eye``'s
+        # C/Fortran expansion does not carry the complex dtype the way ``np.zeros``
+        # does, so the accumulator would otherwise declare real).
+        f"{v} = np.zeros(({n}, {n}), {c}.dtype)",
+        f"for {p}_di in range({n}):",
+        f"    {v}[{p}_di, {p}_di] = 1",
         f"for {p}_sw in range(80):",
         f"    {p}_off = 0.0",
         f"    for {p}_pp in range({n}):",
@@ -2260,14 +2269,128 @@ def _eigh_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p: s
         pre = [f"{p}_C = {a}.copy()"]
         cname = f"{p}_C"
     std = ([f"{p}_wa, {p}_ya = np.linalg.eigh({cname})"] if native_std else _eigh_jacobi_lines(
-        f"{p}_wa", f"{p}_ya", cname, p))
+        f"{p}_wa", f"{p}_ya", cname, f"{a}.shape[0]", p))
     lines = pre + std
     xname = f"{p}_xa" if b is not None else f"{p}_ya"
     if b is not None:
         lines.append(f"{p}_xa = {p}_Li.conj().T @ {p}_ya")
-    lines.append(f"{w} = {p}_wa[{lo}:{hi}]")
-    lines.append(f"{v} = {xname}[:, {lo}:{hi}]")
+    if lo == "None":  # whole spectrum -> bare name (a ``[None:None]`` slice trips the C lowering)
+        lines += [f"{w} = {p}_wa", f"{v} = {xname}"]
+    else:
+        lines += [f"{w} = {p}_wa[{lo}:{hi}]", f"{v} = {xname}[:, {lo}:{hi}]"]
     return lines
+
+
+def _eigh_c_stmts(w: str, v: str, a: str, b: Optional[str], lo: str, hi: str, p: str) -> List[str]:
+    """Fully self-contained loop lowering of standard/generalized complex-Hermitian
+    ``eigh`` for the C/Fortran backends, which have no ``np.linalg`` and no matmul
+    lowering for the ``L⁻ᴴ`` conjugate-transpose operand. Emits explicit loops
+    only: complex-Hermitian Cholesky ``b = L Lᴴ``, the lower-triangular inverse
+    ``L⁻¹`` by forward substitution, the two matmuls ``C = L⁻¹ a L⁻ᴴ``, the cyclic
+    complex Jacobi, and the back-transform ``x = L⁻ᴴ y``. Matmul outputs are
+    pre-zeroed and ``+=``-accumulated (no complex literal needed); a complex zero
+    is ``z - z``. Validated vs scipy ~1e-15."""
+    n = f"{a}.shape[0]"
+    lines: List[str] = []
+    if b is not None:
+        L, Li = f"{p}_L", f"{p}_Li"
+        lines += _cholesky_lines(L, b, n, f"{p}c", hermitian=True)
+        lines += [  # explicit lower-triangular inverse L^-1 by forward substitution
+            f"{Li} = np.zeros(({n}, {n}), {b}.dtype)",
+            f"for {p}_ij in range({n}):",
+            f"    {Li}[{p}_ij, {p}_ij] = 1.0 / {L}[{p}_ij, {p}_ij]",
+            f"    for {p}_ii in range({p}_ij + 1, {n}):",
+            f"        {p}_acc = {L}[{p}_ii, {p}_ii] - {L}[{p}_ii, {p}_ii]",
+            f"        for {p}_ik in range({p}_ij, {p}_ii):",
+            f"            {p}_acc += {L}[{p}_ii, {p}_ik] * {Li}[{p}_ik, {p}_ij]",
+            f"        {Li}[{p}_ii, {p}_ij] = -{p}_acc / {L}[{p}_ii, {p}_ii]",
+        ]
+        # ``Tm`` / ``Cm`` (not ``T`` / ``C``): Fortran is case-insensitive, so a
+        # matrix named ``T`` would collide with the Jacobi rotation scalar ``t``
+        # (tangent) and ``C`` with ``c`` (cosine) -- the emitter would silently
+        # drop one declaration and the body would index a scalar.
+        T, C = f"{p}_Tm", f"{p}_Cm"
+        lines += [  # Tm = Li @ a
+            f"{T} = np.zeros(({n}, {n}), {b}.dtype)",
+            f"for {p}_ti in range({n}):",
+            f"    for {p}_tj in range({n}):",
+            f"        for {p}_tk in range({n}):",
+            f"            {T}[{p}_ti, {p}_tj] += {Li}[{p}_ti, {p}_tk] * {a}[{p}_tk, {p}_tj]",
+        ]
+        lines += [  # C = T @ Li^H  (Li^H[k, l] = conj(Li[l, k]))
+            f"{C} = np.zeros(({n}, {n}), {b}.dtype)",
+            f"for {p}_ci in range({n}):",
+            f"    for {p}_cj in range({n}):",
+            f"        for {p}_ck in range({n}):",
+            f"            {C}[{p}_ci, {p}_cj] += {T}[{p}_ci, {p}_ck] * np.conj({Li}[{p}_cj, {p}_ck])",
+        ]
+        cname = C
+    else:
+        cname = f"{p}_C"
+        lines += [f"{cname} = np.ascontiguousarray({a})"]
+    lines += _eigh_jacobi_lines(f"{p}_wa", f"{p}_ya", cname, n, p)
+    if b is not None:
+        X = f"{p}_X"
+        lines += [  # back-transform x = Li^H @ ya
+            f"{X} = np.zeros(({n}, {n}), {b}.dtype)",
+            f"for {p}_xi in range({n}):",
+            f"    for {p}_xj in range({n}):",
+            f"        for {p}_xk in range({n}):",
+            f"            {X}[{p}_xi, {p}_xj] += np.conj({Li}[{p}_xk, {p}_xi]) * {p}_ya[{p}_xk, {p}_xj]",
+        ]
+        xname = X
+    else:
+        xname = f"{p}_ya"
+    if lo == "None":  # whole spectrum -> bare name (a ``[None:None]`` slice trips the C lowering)
+        lines += [f"{w} = {p}_wa", f"{v} = {xname}"]
+    else:
+        lines += [f"{w} = {p}_wa[{lo}:{hi}]", f"{v} = {xname}[:, {lo}:{hi}]"]
+    return lines
+
+
+class _EighLoopRewriter(ast.NodeTransformer):
+    """Rewrite ``w, v = eigh(a[, b], subset_by_index=[lo, hi])`` (np.linalg /
+    scipy.linalg / an imported alias) to the fully self-contained loop lowering
+    (:func:`_eigh_c_stmts`) for the C/Fortran frontend, which has no ``np.linalg``.
+    Applied to the whole module tree (helpers included) BEFORE kernel inlining, so
+    the ``_sci_eigh`` alias import is still in scope. A non-Name operand is
+    materialised first."""
+
+    def __init__(self, alias_names: set):
+        self.alias_names = alias_names
+        self._ctr = 0
+
+    def visit_Assign(self, node: ast.Assign):
+        self.generic_visit(node)
+        if len(node.targets) != 1:
+            return node
+        hit = _eigh_call_ab(node.value, self.alias_names)
+        if hit is None:
+            return node
+        a_node, b_node, kw = hit
+        tgt = node.targets[0]
+        if not (isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts)):
+            return node
+        w, v = tgt.elts[0].id, tgt.elts[1].id
+        p = f"__eigh{self._ctr}"
+        self._ctr += 1
+        pre: List[str] = []
+
+        def name_of(nd, tag):
+            if isinstance(nd, ast.Name):
+                return nd.id
+            pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
+            return f"{p}_{tag}"
+
+        aname = name_of(a_node, "a")
+        bname = name_of(b_node, "b") if b_node is not None else None
+        s = kw.get("subset_by_index")
+        if isinstance(s, (ast.List, ast.Tuple)) and len(s.elts) == 2:
+            lo, hi = ast.unparse(s.elts[0]), f"({ast.unparse(s.elts[1])}) + 1"
+        else:
+            lo, hi = "None", "None"
+        lines = pre + _eigh_c_stmts(w, v, aname, bname, lo, hi, p)
+        return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
 
 
 def _eigh_alias_names(tree: ast.AST) -> set:

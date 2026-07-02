@@ -435,6 +435,14 @@ class _CBodyEmitter(BaseEmitter):
             return (f"({self.emit_expr(node.test)} ? "
                     f"{self.emit_expr(node.body)} : "
                     f"{self.emit_expr(node.orelse)})")
+        # ``z.real`` / ``z.imag`` accessor on a complex scalar -> ``creal``/
+        # ``cimag`` (C99 <complex.h>); on a real operand ``.real`` is the value and
+        # ``.imag`` is 0. Used by the complex-Hermitian eigh Jacobi.
+        if isinstance(node, ast.Attribute) and node.attr in ("real", "imag"):
+            x = self.emit_expr(node.value)
+            if self._is_complex_operand(node.value):
+                return f"creal({x})" if node.attr == "real" else f"cimag({x})"
+            return f"({x})" if node.attr == "real" else "0.0"
         raise NotImplementedError(
             f"expression {type(node).__name__} "
             f"(line {getattr(node, 'lineno', '?')}): {ast.unparse(node)[:120]}")
@@ -633,6 +641,11 @@ class _CBodyEmitter(BaseEmitter):
                 if attr == "fabs" or self._is_float_operand(x):
                     return f"fabs({self.emit_expr(x)})"
                 return f"abs({self.emit_expr(x)})"
+            # ``np.hypot(a, b)`` -> C99 ``hypot`` (both operands real -- the
+            # eigh Jacobi's ``np.hypot(z.real, z.imag)`` = |z|).
+            if (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
+                    and attr == "hypot" and len(node.args) == 2):
+                return f"hypot({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
         raise NotImplementedError(f"call to {ast.unparse(node.func)} not supported")
 
     def _is_int_operand(self, node: ast.AST) -> bool:

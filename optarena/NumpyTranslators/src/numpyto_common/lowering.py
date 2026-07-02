@@ -2799,6 +2799,44 @@ def _infer_complex_dtype(expr: ast.AST,
     return None
 
 
+def _ctor_complex_tag(call: ast.Call, local_dtypes: Dict[str, str]) -> Optional[str]:
+    """``np.zeros/ones/empty/eye(shape, <dtype>)`` -> a ``complexNN`` tag when the
+    constructor's dtype arg is a complex array's ``Y.dtype`` or a bare
+    ``np.complexNN`` (else None). The eigh reduction allocates its complex work
+    matrices this way; without this they default to real."""
+    if not (isinstance(call.func, ast.Attribute) and call.func.attr in ("zeros", "ones", "empty", "eye")):
+        return None
+    kw = {k.arg: k.value for k in call.keywords}
+    da = kw.get("dtype")
+    if da is None and call.func.attr != "eye" and len(call.args) > 1:
+        da = call.args[1]
+    if isinstance(da, ast.Attribute) and da.attr == "dtype" and isinstance(da.value, ast.Name):
+        dt = local_dtypes.get(da.value.id)
+        return dt if dt and dt.startswith("complex") else None
+    if isinstance(da, ast.Attribute) and da.attr in ("complex128", "complex64"):
+        return da.attr
+    return None
+
+
+def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
+    """True iff a SCALAR arithmetic ``expr`` is complex, by its DIRECT operands
+    (recursing only through BinOp/UnaryOp). It deliberately does NOT descend into
+    ``.real``/``.imag`` accessors or calls (``hypot``/``abs`` produce a real from a
+    complex), so ``tau = (aqq - app) / (2 * m)`` over real parts stays real while
+    ``ephi = apq / m`` / ``acc = L[i, i] - L[i, i]`` over complex values is complex."""
+    if isinstance(expr, ast.Constant):
+        return isinstance(expr.value, complex)
+    if isinstance(expr, ast.Name):
+        return (local_dtypes.get(expr.id) or "").startswith("complex")
+    if isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name):
+        return (local_dtypes.get(expr.value.id) or "").startswith("complex")
+    if isinstance(expr, ast.BinOp):
+        return _scalar_expr_complex(expr.left, local_dtypes) or _scalar_expr_complex(expr.right, local_dtypes)
+    if isinstance(expr, ast.UnaryOp):
+        return _scalar_expr_complex(expr.operand, local_dtypes)
+    return False
+
+
 class _TupleSubscriptFolder(ast.NodeTransformer):
     """Fold ``(t1, t2, ..., tn)[K]`` to ``tk`` at lowering time so
     downstream passes don''t see Tuple subscripts. Comes up when
@@ -3570,6 +3608,33 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             src_dt = self.local_dtypes.get(node.value.value.id)
             if src_dt is not None:
                 self.local_dtypes[target.id] = src_dt
+        # ``X = np.zeros/ones/empty/eye(shape, Y.dtype | np.complexNN)`` -- a fresh
+        # complex work array (the eigh reduction's L / Li / C / V). The shape is
+        # tracked elsewhere; here we tag the complex element type.
+        if (isinstance(target, ast.Name) and target.id not in self.local_dtypes
+                and isinstance(node.value, ast.Call)):
+            ctag = _ctor_complex_tag(node.value, self.local_dtypes)
+            if ctag is not None:
+                self.local_dtypes[target.id] = ctag
+        # ``X = Y.copy()`` / ``np.copy(Y)`` / ``np.ascontiguousarray(Y)`` -- inherit
+        # the source's (complex) dtype (the Jacobi copies its working matrix).
+        if (isinstance(target, ast.Name) and target.id not in self.local_dtypes
+                and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)):
+            f = node.value.func
+            src = (f.value.id if f.attr == "copy" and isinstance(f.value, ast.Name) else
+                   node.value.args[0].id if f.attr in ("copy", "ascontiguousarray", "asarray", "array")
+                   and node.value.args and isinstance(node.value.args[0], ast.Name) else None)
+            dt = self.local_dtypes.get(src) if src else None
+            if dt and dt.startswith("complex"):
+                self.local_dtypes[target.id] = dt
+        # ``X = <scalar complex arithmetic>`` (``ephi = apq / m``) -- a scalar
+        # BinOp/UnaryOp over complex operands. The array-BinOp branch below only
+        # fires when the value is a whole-array expr (``_iter_extent_of`` non-None);
+        # a scalar complex temp needs its own tag or the emit declares it real.
+        if (isinstance(target, ast.Name) and target.id not in self.local_dtypes
+                and isinstance(node.value, (ast.BinOp, ast.UnaryOp))
+                and _scalar_expr_complex(node.value, self.local_dtypes)):
+            self.local_dtypes[target.id] = "complex128"
         # ``x = BinOp(array, array)`` where ``x`` is a Name: infer
         # x's shape from the broadcast extent of the RHS and treat as
         # whole-array assignment. ``_iter_extent_of`` returns ``None``
