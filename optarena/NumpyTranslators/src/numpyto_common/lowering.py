@@ -1367,8 +1367,9 @@ def _harvest_local_shapes(tree: ast.AST,
             if ext is not None:
                 shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
         # ``np.copy(other)`` (function form) / np.transpose / np.triu /
-        # np.flip / np.linalg.cholesky / np.linalg.inv -> share shape.
-        elif attr in {"copy", "triu", "flip"} and rhs.args and isinstance(rhs.args[0], ast.Name):
+        # np.flip / np.asarray / np.ascontiguousarray / np.linalg.* -> share shape.
+        elif attr in {"copy", "asarray", "ascontiguousarray", "triu", "flip"} and rhs.args and isinstance(
+                rhs.args[0], ast.Name):
             src_shape = shape_table.get(rhs.args[0].id)
             if src_shape:
                 shape_table[target.id] = tuple(src_shape)

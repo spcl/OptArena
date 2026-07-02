@@ -448,6 +448,14 @@ class _CBodyEmitter(BaseEmitter):
         return cur, chain
 
     def _emit_subscript(self, node: ast.Subscript) -> str:
+        # Fold a constant-index subscript of a tuple literal: ``(n,)[0]`` -> ``n``.
+        # This arises when a 1-D ``x.shape`` is substituted to its tuple form and
+        # then indexed (``int(x.shape[0])`` in xsbench's ``n = x.shape[0]``).
+        if isinstance(node.value, ast.Tuple) and isinstance(node.slice, ast.Constant) and isinstance(
+                node.slice.value, int):
+            elts = node.value.elts
+            if -len(elts) <= node.slice.value < len(elts):
+                return self.emit_expr(elts[node.slice.value])
         base_node, indices = self._unchain_subscript(node)
         base = self.emit_expr(base_node)
         # Flatten multi-D indexing using the array's shape symbols.

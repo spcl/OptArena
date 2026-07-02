@@ -1212,6 +1212,29 @@ def test_pythran_renames_res_parameter():
     assert "res_[0] = data[0] + data[1]" in out           # body reference renamed consistently
 
 
+def test_drop_guards_replaces_raise_and_assert_with_pass():
+    """Validation guards (``if bad: raise ...`` / ``assert ...``) are dropped to
+    ``pass`` for the verbatim backends -- they never fire on oracle-valid inputs
+    and their f-string messages / exception types are unlowerable."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(x, out):\n"
+           "    if x.shape[0] < 0:\n"
+           "        raise ValueError(f'bad {x.shape[0]}')\n"
+           "    assert x.shape[0] > 0\n"
+           "    out[0] = x[0]\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("x", "float64", ("N",)), ("out", "float64", ("N",))], [],
+                                                 ["x", "out"]), backend="pythran")
+    assert "raise" not in out and "assert" not in out and "ValueError" not in out
+
+
+def test_asarray_lowers_like_copy_for_c():
+    """``np.asarray`` / ``np.ascontiguousarray`` of a materialised array lower like
+    ``np.copy`` (a shape-preserving copy) in the C pipeline (dbcsr / minife)."""
+    from numpyto_c.lib_nodes import NP_CALL_EXPANDERS, expand_copy
+    assert NP_CALL_EXPANDERS[("np", "asarray")] is expand_copy
+    assert NP_CALL_EXPANDERS[("np", "ascontiguousarray")] is expand_copy
+
+
 def test_pythran_export_dtypes_parses_2d_types():
     """The oracle marshals pythran args to the export's declared dtypes; the
     export parser must split on top-level commas only -- a 2-D ``int64[:,:]`` type

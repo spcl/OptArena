@@ -4488,6 +4488,12 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "count_nonzero"): expand_count_nonzero,
     # Memory / shape
     ("np", "copy"):      expand_copy,
+    # ``np.asarray`` / ``np.ascontiguousarray`` of an already-materialised numpy
+    # array is a copy (contiguity/dtype already hold for our buffers), so they
+    # lower exactly like ``np.copy`` (dbcsr / minife pass their inputs through
+    # np.asarray before indexing).
+    ("np", "asarray"):   expand_copy,
+    ("np", "ascontiguousarray"): expand_copy,
     ("np", "reshape"):   expand_reshape,
     ("np", "repeat"):    expand_repeat,
     ("np", "eye"):       expand_eye,
@@ -5597,8 +5603,8 @@ class _CallHoister(ast.NodeTransformer):
             # / ``transpose`` / ``flip``) inherit the source array''s
             # dtype: ``Xiv = np.reshape(Xi, (xn * yn,))`` where ``Xi``
             # is int64 must keep Xiv as int64, not the default double.
-            SHAPE_PRESERVING = {"reshape", "repeat", "copy",
-                                 "transpose", "flip"}
+            SHAPE_PRESERVING = {"reshape", "repeat", "copy", "asarray",
+                                 "ascontiguousarray", "transpose", "flip"}
             if (key[1] in SHAPE_PRESERVING and node.args
                     and temp not in self.local_dtypes):
                 first = node.args[0]

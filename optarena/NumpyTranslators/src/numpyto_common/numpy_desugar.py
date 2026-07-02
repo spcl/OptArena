@@ -1782,6 +1782,26 @@ class _RepeatAxisInline(ast.NodeTransformer):
         return self._hoist(node)
 
 
+class _DropGuards(ast.NodeTransformer):
+    """Replace ``raise ...`` / ``assert ...`` statements with ``pass``. These are
+    input-validation guards (``if bad: raise ValueError(f"...")``); OptArena kernels
+    run on oracle-validated inputs so the guard never fires. Dropping them also
+    removes the f-string messages pythran cannot parse and the exception types
+    numba/pythran/dace need not express. ``pass`` (not deletion) keeps an
+    otherwise-empty ``if`` body syntactically valid."""
+
+    def __init__(self):
+        self.changed = False
+
+    def visit_Raise(self, node: ast.Raise):
+        self.changed = True
+        return ast.copy_location(ast.Pass(), node)
+
+    def visit_Assert(self, node: ast.Assert):
+        self.changed = True
+        return ast.copy_location(ast.Pass(), node)
+
+
 class _DeadBranchElim(ast.NodeTransformer):
     """Constant-fold boolean guards (``X and False`` -> ``False``, etc.) and drop
     the unreachable branch of ``if <const bool>:``. After the desugar folds a
@@ -2175,6 +2195,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
         noncontig = _noncontig_names(fn)
         masked_gathers = _masked_reduce_map(fn, ranks, dtypes)
         passes = [
+            _DropGuards(),
             _LinalgInline(ranks, dtypes, lower_linalg),
             _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),

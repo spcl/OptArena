@@ -492,8 +492,8 @@ def _emit_body(body: List[ast.stmt], live_out: Set[str], indent: str) -> List[st
         elif isinstance(s, (ast.Assign, ast.AugAssign)):
             for fs in _functionalize_stmt(s):
                 lines.append(indent + _u(fs))
-        elif isinstance(s, (ast.Import, ast.ImportFrom, ast.Pass)):
-            continue
+        elif isinstance(s, (ast.Import, ast.ImportFrom, ast.Pass, ast.Raise, ast.Assert)):
+            continue  # input-validation guards never fire on oracle-valid inputs
         elif isinstance(s, ast.FunctionDef):
             # Nested helper def (velocity_tendencies' ``gat``). JAX is Python,
             # so emit it as a real nested function (np->jnp applied in the body);
@@ -1008,8 +1008,8 @@ def _emit_eager_body(body: List[ast.stmt], indent: str) -> List[str]:
             if fs is None:
                 raise EmitError("bare expression statement (possible in-place op)")
             lines.append(indent + _u(fs))
-        elif isinstance(s, (ast.Import, ast.ImportFrom)):
-            continue
+        elif isinstance(s, (ast.Import, ast.ImportFrom, ast.Raise, ast.Assert)):
+            continue  # input-validation guards never fire on oracle-valid inputs
         elif isinstance(s, ast.FunctionDef):
             # Nested helper def (velocity_tendencies' ``gat``) -- emit as a
             # nested Python function (np->jnp applied), in scope for later calls.

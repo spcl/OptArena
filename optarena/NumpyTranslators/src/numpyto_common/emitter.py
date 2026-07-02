@@ -56,6 +56,13 @@ class BaseEmitter:
             return f"{indent}{self._KW_CONTINUE}"
         if isinstance(node, ast.Pass):
             return ""
+        if isinstance(node, (ast.Raise, ast.Assert)):
+            # Input-validation guards (``if bad: raise ValueError(...)`` /
+            # ``assert n > 0``). OptArena kernels run on oracle-validated inputs, so
+            # the guard never fires; drop it (an empty ``if`` body is valid C/
+            # Fortran). Dropping -- not lowering -- because the message is a Python
+            # string/f-string the backends cannot express and need not.
+            return ""
         if isinstance(node, ast.Return):
             return self._emit_return(node, indent)
         raise NotImplementedError(
