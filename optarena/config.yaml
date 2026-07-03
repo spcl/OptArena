@@ -12,7 +12,7 @@ seeds:
   reverify: 777          # fresh seed for the judge's independent re-verify (never
                          # returned to the agent, so a fixed constant is safe)
   secret_shape: 31337    # JUDGE-ONLY persistent secret -- selects the TIMED shape of the
-                         # secret performance mode (perf.mode=secret_1shape). It lives in
+                         # secret performance mode (perf.mode=secret_3shapes). It lives in
                          # config so it is PERSISTENT/reproducible across runs, yet stays
                          # hidden from the agent: the agent image carries NO optarena
                          # package (containers/cpu.def), so config.yaml never reaches it --
@@ -87,9 +87,10 @@ measurement:
 # Both modes time EVERY config; they differ only on the shape axis.
 perf:
   mode: all_configs_3shapes   # all_configs_3shapes (default; n_large_shapes fixed+public
-                              # large shapes per config) | secret_1shape (one large shape
-                              # per config, drawn from seeds.secret_shape, hidden from agent)
-  n_large_shapes: 3           # mode all_configs_3shapes: timed large shapes per config
+                              # large shapes per config) | secret_3shapes (n_large_shapes
+                              # shapes per config drawn from seeds.secret_shape, hidden)
+  n_large_shapes: 3           # timed large shapes per config -- applies to BOTH modes
+                              # (public or hidden, always this many)
   max_configs: 5              # cap on configs evaluated per kernel (deterministic seeded
                               # subset when a config space exceeds it -> bounded cost)
 

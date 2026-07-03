@@ -41,7 +41,7 @@ def emit_numba(numpy_source: str, flavor: Flavor = "njit", fastmath: bool = Fals
         raise ValueError(f"unknown numba flavor: {flavor!r}")
     if kir is not None:
         from numpyto_common.numpy_desugar import desugar_for_python_backend
-        numpy_source = desugar_for_python_backend(numpy_source, kir)
+        numpy_source = desugar_for_python_backend(numpy_source, kir, backend="numba")
     opts = list(_BASE_OPTS[flavor])
     if fastmath:
         opts.append("fastmath=True")

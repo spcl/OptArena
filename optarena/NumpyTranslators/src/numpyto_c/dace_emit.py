@@ -20,10 +20,11 @@ truth shared with the C/Fortran emitters.
 """
 
 import ast
+import copy
 from typing import List
 
 from numpyto_c.ir import KernelIR
-
+from numpyto_common.numpy_desugar import desugar_for_python_backend
 
 #: numpy dtype tag -> dace type expression. Floats route through the
 #: precision-driven ``dc_float`` / ``dc_complex_float`` globals the dace
@@ -73,9 +74,8 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
             params.append(f"{arg}: {_dace_dtype(scalars[arg].dtype)}")
         # symbols: skip (declared at module scope below)
 
-    needs_complex = any(
-        _dace_dtype(a.dtype) == "dc_complex_float" for a in kir.arrays
-    ) or any(_dace_dtype(s.dtype) == "dc_complex_float" for s in kir.scalars)
+    needs_complex = any(_dace_dtype(a.dtype) == "dc_complex_float"
+                        for a in kir.arrays) or any(_dace_dtype(s.dtype) == "dc_complex_float" for s in kir.scalars)
 
     out: List[str] = []
     out.append('"""DaCe program auto-generated from the numpy reference '
@@ -99,11 +99,22 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     out.append("@dc.program")
     out.append(f"def {name}({', '.join(params)}):")
 
-    # Body: every statement of the source function except its docstring
-    # (a string-literal Expr first statement), re-indented under the def.
-    body = list(kir.tree.body)
-    if (body and isinstance(body[0], ast.Expr)
-            and isinstance(getattr(body[0], "value", None), ast.Constant)
+    # Body: the numpy reference desugared for the verbatim-body backends -- the
+    # SAME pass numba/pythran use, so dace gains feature parity (np.fft, fancy
+    # multi-index gather, np.add.at scatter, axis reductions, boolean-mask
+    # assignment, ... lower to the plain loops a @dc.program traces). The
+    # function is renamed to kir.kernel_name first so the desugar seeds its rank/
+    # dtype tables from the kir arrays; falls back to the verbatim body if the
+    # desugar cannot parse (it never should for a valid kernel).
+    fn_ast = copy.deepcopy(kir.tree)
+    fn_ast.name = kir.kernel_name
+    try:
+        desugared = desugar_for_python_backend(ast.unparse(fn_ast), kir, backend="dace")
+        fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
+    except Exception:  # noqa: BLE001 -- keep the verbatim body if desugar fails
+        fn_ast = kir.tree
+    body = list(fn_ast.body)
+    if (body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant)
             and isinstance(body[0].value.value, str)):
         body = body[1:]
     if not body:

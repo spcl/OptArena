@@ -233,10 +233,13 @@ implementation, scored by the judge.
 - **How it is measured:**
   - **Correctness oracle** — your output must match the reference on **5 fuzzed
     input sizes**, each run **once** (so you can't special-case one shape).
-  - **Performance oracle** — timed on **1 fuzzed input** (size from the global
-    config), taking the **median** runtime over repeats. The denominator is the
-    **baseline** run on that *same input with a fixed seed*, so the baseline number
-    is computed once and reused across all submissions for that kernel.
+  - **Performance oracle** — timed on **3 large fuzzed shapes per configuration**
+    (`perf.n_large_shapes`, the same count whether the shapes are public or secret),
+    taking the **median** runtime over repeats. The denominator is the **baseline**
+    run on those *same shapes*, computed once and reused across all submissions for
+    that kernel. The prompt states the sampling rule: in the public mode it lists the
+    sampled shapes (and the public seed); in the secret mode it gives only the size
+    ranges, so you must be fast across the whole range.
 - **Any semantics-preserving optimization is allowed** — dead-code elimination,
   loop-invariant code motion, tiling/scheduling/unrolling, data-layout transforms,
   vectorization, parallelism, algebraic rewrites — within the reference's tolerance.
@@ -307,11 +310,11 @@ Two **performance modes** and two **timing backends** are config-selectable:
 
 | Key | Values | Effect |
 |---|---|---|
-| `perf.mode` | `all_configs_3shapes` \| `secret_1shape` | timed shapes: 3 fixed **public** large shapes per config, or **one** large shape from a server-side **secret** seed (anti-overfit) |
-| `perf.n_large_shapes` / `perf.max_configs` | int (`3` / `5`) | timed large shapes per config; cap on configs evaluated per kernel |
+| `perf.mode` | `all_configs_3shapes` \| `secret_3shapes` | timed shapes per config — the SAME count (`perf.n_large_shapes`) either way; **public** = fixed public seed (the prompt lists the sampled shapes), **secret** = server-side hidden seed (the prompt gives only the ranges) |
+| `perf.n_large_shapes` / `perf.max_configs` | int (`3` / `5`) | timed large shapes per config (both modes); cap on configs evaluated per kernel |
 | `measurement.timing_backend` | `min_of_k` \| `mannwhitney_delta` | reduce repeats to one speed-up: best-of-`repeat` (default), or a Mann-Whitney U test (`p`) + pessimistic-δ |
 | `measurement.runtime_cap_x` / `c_max` | float (`1` / `100`) | floor (slower-than-baseline earns no speed-up) and clamp ceiling on `S_i` |
-| `seeds.secret_shape` | int | JUDGE-ONLY seed selecting the `secret_1shape` timed shape — persistent in config (reproducible) but withheld from the agent image (the hidden-test firewall rejects any agent image that ships it) |
+| `seeds.secret_shape` | int | JUDGE-ONLY seed selecting the `secret_3shapes` timed shapes — persistent in config (reproducible) but withheld from the agent image (the hidden-test firewall rejects any agent image that ships it) |
 
 The fuzz **ranges and flag sets are public** (shipped with the task) so an agent optimizes
 for the distribution; the sampling **seeds** are server-side, so the realized draw stays

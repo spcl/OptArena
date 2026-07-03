@@ -19,6 +19,7 @@ The end-to-end correctness of these on the real kernels is asserted in
 """
 import ast
 
+import numpy as np
 import pytest
 
 from numpyto_c.lib_nodes import expand_arange, expand_fromfunction
@@ -879,3 +880,359 @@ def test_reduce_axis_method_form_and_helper_function():
                                                             ("out", "bool", ("C",))], [], ["mask", "out"]))
     assert ".any(axis" not in out and "np.any" not in out   # method-form reduction lowered in the helper
     assert "for " in out
+
+
+def test_histogram_desugar_to_binning_loop():
+    """np.histogram(a, bins[, weights=w])[0] -> a min/max scan + a binning loop
+    (numba has no np.histogram); matches the C/Fortran lowering."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(radius, data, npt, hu, hw):\n"
+           "    hu[:] = np.histogram(radius, npt)[0]\n"
+           "    hw[:] = np.histogram(radius, npt, weights=data)[0]\n")
+    arrays = [("radius", "float64", ("N",)), ("data", "float64", ("N",)), ("hu", "float64", ("B",)),
+              ("hw", "float64", ("B",))]
+    out = desugar_for_python_backend(src, _py_kir("k", src, arrays, ["npt"], ["radius", "data", "npt", "hu", "hw"]))
+    assert "np.histogram" not in out
+    assert "int(" in out and "np.zeros(" in out and "+= " in out   # binning loop
+
+
+def test_int_matmul_lowers_but_float_matmul_kept():
+    """An INTEGER a @ b lowers to a loop (numba's @ is float-only); a float a @ b
+    is left for numba's fast BLAS path."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    isrc = ("def k(frontier, graph, reach):\n"
+            "    reach[:] = frontier @ graph\n")
+    iout = desugar_for_python_backend(isrc, _py_kir("k", isrc, [("frontier", "int64", ("N",)),
+                                                               ("graph", "int64", ("N", "N")),
+                                                               ("reach", "int64", ("N",))], [], ["frontier", "graph", "reach"]))
+    assert "@" not in iout and "for " in iout                 # int matmul -> loop
+    fsrc = ("def k(a, b, c):\n"
+            "    c[:] = a @ b\n")
+    fout = desugar_for_python_backend(fsrc, _py_kir("k", fsrc, [("a", "float64", ("N", "N")),
+                                                              ("b", "float64", ("N", "N")),
+                                                              ("c", "float64", ("N", "N"))], [], ["a", "b", "c"]))
+    assert "@" in fout                                        # float matmul untouched
+
+
+def test_reshape_batched_matmul_lowers():
+    """doitgen's reshape(reshape(A,(NR,NQ,1,NP)) @ C4, (NR,NQ,NP)) -> contraction."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(A, C4):\n"
+           "    A[:] = np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("A", "float64", ("NR", "NQ", "NP")),
+                                                            ("C4", "float64", ("NP", "NP"))], ["NR", "NQ", "NP"],
+                                                 ["A", "C4"]))
+    assert "@" not in out and "reshape" not in out and "for " in out
+
+
+# --------------------------------------------------------------------------- #
+# P. Loud failure: a desugar that OWNS a construct but hits a variant it cannot #
+#    lower correctly raises DesugarError (never emits silently-wrong code). A   #
+#    construct it does NOT own is left verbatim (a clean skip) -- not asserted   #
+#    here. (An unknown *rank* is an inference gap, also left verbatim.)         #
+# --------------------------------------------------------------------------- #
+def test_int_matmul_unsupported_rank_raises():
+    from numpyto_common.numpy_desugar import _int_matmul_stmts, DesugarError
+    with pytest.raises(DesugarError):
+        _int_matmul_stmts("out", "a", "b", 3, 2, 0)   # >2-D integer matmul: no lowering
+
+
+def test_reshape_matmul_non_2d_right_operand_raises():
+    """Matched the unit-dim reshape-matmul form but the right operand is not 2-D
+    -> raise rather than emit a wrong contraction."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend, DesugarError
+    src = ("def k(A, C4, out):\n"
+           "    out[:] = np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))\n")
+    kir = _py_kir("k", src, [("A", "float64", ("NR", "NQ", "NP")), ("C4", "float64", ("NP", "NP", "NP")),
+                             ("out", "float64", ("NR", "NQ", "NP"))], ["NR", "NQ", "NP"], ["A", "C4", "out"])
+    with pytest.raises(DesugarError):
+        desugar_for_python_backend(src, kir)
+
+
+def test_add_at_mismatched_value_rank_raises():
+    """np.add.at with values whose ndim is neither scalar nor the index ndim ->
+    raise (broadcast alignment we do not model)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend, DesugarError
+    src = ("def k(A, i2, vals):\n"
+           "    np.add.at(A, (i2, i2), vals)\n")
+    kir = _py_kir("k", src, [("A", "float64", ("M", "M")), ("i2", "int64", ("P", "Q")),
+                             ("vals", "float64", ("P", "Q", "R"))], [], ["A", "i2", "vals"])
+    with pytest.raises(DesugarError):
+        desugar_for_python_backend(src, kir)
+
+
+def test_issparse_folds_to_false_for_dense_abi():
+    """``sp.issparse(x)`` -> ``False`` (the dense-only ABI): numba/pythran cannot
+    type scipy.sparse, and the sparse branch is dead -- exactly as C/Fortran prune
+    it statically (banded_mmt). Dead-branch elimination then drops it entirely."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(A, B, out):\n"
+           "    if sp.issparse(A):\n"
+           "        out[:] = (A @ B).toarray()\n"
+           "        return\n"
+           "    out[:] = A + B\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("A", "float64", ("N", "N")),
+                                                            ("B", "float64", ("N", "N")),
+                                                            ("out", "float64", ("N", "N"))], [], ["A", "B", "out"]))
+    assert "issparse" not in out and "toarray" not in out   # sparse branch folded away and eliminated
+
+
+def test_dead_branch_elim_removes_folded_issparse_branch():
+    """After ``sp.issparse(x)`` folds to False, the dead sparse branch (with its
+    ``.toarray()``) is removed -- pythran statically types even a dead branch."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(A, B, out):\n"
+           "    if sp.issparse(A) and sp.issparse(B):\n"
+           "        out[:] = (A @ B).toarray()\n"
+           "        return\n"
+           "    out[:] = A + B\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("A", "float64", ("N", "N")),
+                                                            ("B", "float64", ("N", "N")),
+                                                            ("out", "float64", ("N", "N"))], [], ["A", "B", "out"]))
+    assert "toarray" not in out and "issparse" not in out
+
+
+def test_pythran_clean_strips_imports_and_substitutes_precision():
+    """The pythran module drops imports it cannot resolve (optarena framework,
+    scipy) and substitutes the np_float / np_complex precision globals."""
+    from numpyto_pythran.emit import _clean_for_pythran
+    src = ("from optarena.infrastructure.framework import np_float, np_complex\n"
+           "import scipy.sparse as sp\n"
+           "import numpy as np\n"
+           "def k(x, out):\n"
+           "    out[:] = np.zeros(x.shape, dtype=np_complex)\n")
+    kir = _py_kir("k", src, [("x", "float64", ("N",)), ("out", "complex128", ("N",))], [], ["x", "out"])
+    cleaned = _clean_for_pythran(src, kir)
+    assert "optarena" not in cleaned and "scipy" not in cleaned
+    assert "np_float" not in cleaned and "np_complex" not in cleaned and "np.complex128" in cleaned
+
+
+def test_np_flip_lowers_to_reverse_slice():
+    """np.flip(x[, axis]) -> a reverse-step slice (pythran's np.flip fails type
+    deduction -- durbin); no axis reverses every axis."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(x, out):\n"
+           "    out[:] = np.flip(x)\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("x", "float64", ("N",)),
+                                                            ("out", "float64", ("N",))], [], ["x", "out"]))
+    assert "np.flip" not in out and "::-1" in out
+
+
+def test_repeat_axis_lowers_to_gather_loop():
+    """np.repeat(x, m, axis=k) -> out[..., j, ...] = x[..., j // m, ...] (numba
+    rejects the axis= kwarg on np.repeat -- stockham)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(x, out):\n"
+           "    out[:] = np.repeat(x, M, axis=2)\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("x", "float64", ("A", "B", "C")),
+                                                            ("out", "float64", ("A", "B", "D"))], ["M"], ["x", "out"]))
+    assert "np.repeat" not in out and "// " in out and "for " in out
+
+
+def test_reshape_of_transpose_forced_contiguous():
+    """np.reshape of a transpose (non-contiguous) gets np.ascontiguousarray;
+    numba's reshape requires contiguous (stockham's reshape(tmp_perm, (N,)))."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    src = ("def k(y, out):\n"
+           "    perm = np.transpose(y, axes=(1, 0))\n"
+           "    out[:] = np.reshape(perm, (N,))\n")
+    out = desugar_for_python_backend(src, _py_kir("k", src, [("y", "float64", ("A", "B")),
+                                                            ("out", "float64", ("N",))], ["N"], ["y", "out"]))
+    assert "ascontiguousarray(perm)" in out
+
+
+# --------------------------------------------------------------------------- #
+# P. np.linalg.{cholesky,solve,inv} lowering. pythran has NO numpy.linalg, so  #
+#    these lower to explicit loops (Cholesky-Banachiewicz / Gauss-Jordan with  #
+#    partial pivoting) -- but ONLY for pythran: numba (numba.np.linalg) and     #
+#    dace (dace.libraries.linalg) implement them natively and keep the          #
+#    intrinsic. The loops match numpy to rounding (validated below).           #
+# --------------------------------------------------------------------------- #
+def _desugar(src, arrays, syms, input_args, backend):
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    return desugar_for_python_backend(src, _py_kir("kernel", src, arrays, syms, input_args), backend=backend)
+
+
+def test_cholesky_lowers_for_pythran_only():
+    """``np.linalg.cholesky(A)`` -> a Cholesky-Banachiewicz loop nest for pythran;
+    numba / dace keep the native intrinsic (backend-capability gated)."""
+    src = "def kernel(A):\n    A[:] = np.linalg.cholesky(A) + np.triu(A, k=1)\n"
+    arrays = [("A", "float64", ("N", "N"))]
+    py = _desugar(src, arrays, [], ["A"], "pythran")
+    assert "np.linalg.cholesky" not in py and "np.sqrt(" in py and "for " in py
+    # The cholesky temp is computed BEFORE A is overwritten (in-place read safe).
+    assert py.index("np.sqrt(") < py.index("A[:] =")
+    for be in ("numba", "dace", None):
+        assert "np.linalg.cholesky" in _desugar(src, arrays, [], ["A"], be)
+
+
+def test_solve_and_inv_lower_for_pythran_only():
+    """``np.linalg.solve`` / ``np.linalg.inv`` -> Gauss-Jordan with partial
+    pivoting for pythran; numba / dace keep the intrinsics."""
+    src = ("def kernel(A, b, x):\n"
+           "    x[:] = np.linalg.solve(A, b)\n")
+    arrays = [("A", "float64", ("N", "N")), ("b", "float64", ("N",)), ("x", "float64", ("N",))]
+    py = _desugar(src, arrays, [], ["A", "b", "x"], "pythran")
+    assert "np.linalg.solve" not in py and "np.abs(" in py     # pivot search
+    assert "np.linalg.solve" in _desugar(src, arrays, [], ["A", "b", "x"], "numba")
+
+    isrc = "def kernel(A, o):\n    o[:] = np.linalg.inv(A)\n"
+    iarr = [("A", "complex128", ("N", "N")), ("o", "complex128", ("N", "N"))]
+    ipy = _desugar(isrc, iarr, [], ["A", "o"], "pythran")
+    assert "np.linalg.inv" not in ipy and "np.zeros(" in ipy   # identity RHS
+    assert "np.linalg.inv" in _desugar(isrc, iarr, [], ["A", "o"], "dace")
+
+
+def _exec_desugared(src, arrays, input_args, scope, backend="pythran"):
+    """Desugar ``src`` for ``backend`` and exec it against numpy ``scope`` buffers
+    -- the strongest correctness check (matches numpy, no tolerance games)."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+    out = desugar_for_python_backend(src, _py_kir("kernel", src, arrays, [], input_args), backend=backend)
+    fn = next(n for n in ast.parse(out).body if isinstance(n, ast.FunctionDef))
+    ns = {"np": np}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "<lin>", "exec"), ns)
+    ns["kernel"](*[scope[a] for a in input_args])
+    return scope
+
+
+def test_cholesky_lowering_matches_numpy():
+    rng = np.random.default_rng(0)
+    n = 7
+    M = rng.random((n, n))
+    A = M @ M.T + n * np.eye(n)            # SPD
+    src = "def kernel(A, out):\n    out[:] = np.linalg.cholesky(A)\n"
+    arrays = [("A", "float64", ("N", "N")), ("out", "float64", ("N", "N"))]
+    sc = _exec_desugared(src, arrays, ["A", "out"], {"A": A.copy(), "out": np.zeros((n, n))})
+    assert np.allclose(sc["out"], np.linalg.cholesky(A), rtol=1e-12, atol=1e-12)
+
+
+def test_solve_lowering_matches_numpy_1d_and_2d():
+    rng = np.random.default_rng(1)
+    n, k = 6, 3
+    A = rng.random((n, n)) + n * np.eye(n)
+    b1 = rng.random(n)
+    B2 = rng.random((n, k))
+    s1 = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
+    a1 = [("A", "float64", ("N", "N")), ("b", "float64", ("N",)), ("x", "float64", ("N",))]
+    sc1 = _exec_desugared(s1, a1, ["A", "b", "x"], {"A": A.copy(), "b": b1.copy(), "x": np.zeros(n)})
+    assert np.allclose(sc1["x"], np.linalg.solve(A, b1), rtol=1e-11, atol=1e-11)
+    s2 = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
+    a2 = [("A", "float64", ("N", "N")), ("b", "float64", ("N", "K")), ("x", "float64", ("N", "K"))]
+    sc2 = _exec_desugared(s2, a2, ["A", "b", "x"], {"A": A.copy(), "b": B2.copy(), "x": np.zeros((n, k))})
+    assert np.allclose(sc2["x"], np.linalg.solve(A, B2), rtol=1e-11, atol=1e-11)
+
+
+def test_inv_lowering_matches_numpy_complex():
+    rng = np.random.default_rng(2)
+    n = 5
+    A = rng.random((n, n)) + 1j * rng.random((n, n)) + n * np.eye(n)
+    src = "def kernel(A, out):\n    out[:] = np.linalg.inv(A)\n"
+    arrays = [("A", "complex128", ("N", "N")), ("out", "complex128", ("N", "N"))]
+    sc = _exec_desugared(src, arrays, ["A", "out"], {"A": A.copy(), "out": np.zeros((n, n), np.complex128)})
+    assert np.allclose(sc["out"], np.linalg.inv(A), rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("src,arrays,args", [
+    ("def kernel(v, out):\n    out[:] = np.linalg.cholesky(v)\n",
+     [("v", "float64", ("N",)), ("out", "float64", ("N",))], ["v", "out"]),          # 1-D cholesky
+    ("def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n",
+     [("A", "float64", ("N", "N")), ("b", "float64", ("N", "K", "L")), ("x", "float64", ("N", "K", "L"))],
+     ["A", "b", "x"]),                                                                # 3-D rhs
+])
+def test_linalg_desugar_raises_on_unsupported_shape(src, arrays, args):
+    """An owned-but-unhandled operand shape raises DesugarError (never a silent
+    miscompile); an unknown-rank operand instead stays verbatim (a clean skip)."""
+    from numpyto_common.numpy_desugar import DesugarError
+    with pytest.raises(DesugarError):
+        _desugar(src, arrays, [], args, "pythran")
+
+
+# --------------------------------------------------------------------------- #
+# Q. masked-gather reduction: ``v = data[mask]; res[i] = v.mean()`` -- the      #
+#    boolean select is a dynamic-length array pythran can't type (auto-before-  #
+#    deduction) and dace can't shape, so the select is dropped and the mean     #
+#    inlined as an accumulate loop (azimint_naive).                            #
+# --------------------------------------------------------------------------- #
+_AZIMINT_SRC = ("def kernel(data, radius, npt, res):\n"
+                "    rmax = radius.max()\n"
+                "    for i in range(npt):\n"
+                "        r1 = rmax * i / npt\n"
+                "        r2 = rmax * (i + 1) / npt\n"
+                "        mask_r12 = np.logical_and((r1 <= radius), (radius < r2))\n"
+                "        values_r12 = data[mask_r12]\n"
+                "        res[i] = values_r12.mean()\n")
+_AZIMINT_ARRAYS = [("data", "float64", ("N",)), ("radius", "float64", ("N",)), ("res", "float64", ("npt",))]
+
+
+def test_masked_mean_lowers_to_accumulate_loop():
+    """The dynamic ``data[mask]`` select is dropped; its ``.mean()`` becomes a
+    mask-guarded accumulate loop with numpy's empty -> nan semantics."""
+    out = _desugar(_AZIMINT_SRC, _AZIMINT_ARRAYS, [], ["data", "radius", "npt", "res"], "pythran")
+    assert "values_r12" not in out                       # dynamic masked select gone
+    assert "mask_r12 = np.logical_and" in out            # the bool mask itself is kept
+    assert "+= data[" in out and "np.nan" in out         # accumulate loop + empty guard
+
+
+def test_masked_mean_matches_numpy():
+    rng = np.random.default_rng(0)
+    n, npt = 200, 17
+    data = rng.random(n)
+    radius = rng.random(n)
+    res = np.zeros(npt)
+    sc = _exec_desugared(_AZIMINT_SRC, _AZIMINT_ARRAYS, ["data", "radius", "npt", "res"],
+                         {"data": data.copy(), "radius": radius.copy(), "npt": npt, "res": res})
+    rmax = radius.max()
+    ref = np.empty(npt)
+    for i in range(npt):
+        m = np.logical_and(rmax * i / npt <= radius, radius < rmax * (i + 1) / npt)
+        ref[i] = data[m].mean() if m.any() else np.nan
+    assert np.allclose(sc["res"], ref, rtol=1e-12, atol=1e-12, equal_nan=True)
+
+
+def test_masked_gather_used_non_reduction_stays_verbatim():
+    """A masked select whose result is used any way OTHER than a supported
+    reduction is left verbatim (the drop would be unsound) -- a clean skip."""
+    src = ("def kernel(data, mask, out):\n"
+           "    v = data[mask]\n"
+           "    out[0] = v[0]\n")            # indexed, not reduced
+    out = _desugar(src, [("data", "float64", ("N",)), ("mask", "bool", ("N",)), ("out", "float64", ("N",))], [],
+                   ["data", "mask", "out"], "pythran")
+    assert "v = data[mask]" in out           # not dropped
+
+
+def test_pythran_renames_res_parameter():
+    """A kernel parameter named ``res`` collides with pythran's return-capture
+    variable, so the pythran emit renames it (signature + body)."""
+    from numpyto_pythran.emit import emit_pythran
+    src = "def k(data, res):\n    res[0] = data[0] + data[1]\n"
+    kir = _py_kir("k", src, [("data", "float64", ("N",)), ("res", "float64", ("N",))], [], ["data", "res"])
+    out = emit_pythran(src, kir)
+    fn = next(n for n in ast.parse(out).body if isinstance(n, ast.FunctionDef))
+    assert "res" not in {a.arg for a in fn.args.args}     # reserved param renamed
+    assert "res_[0] = data[0] + data[1]" in out           # body reference renamed consistently
+
+
+def test_pythran_export_dtypes_parses_2d_types():
+    """The oracle marshals pythran args to the export's declared dtypes; the
+    export parser must split on top-level commas only -- a 2-D ``int64[:,:]`` type
+    carries an inner comma (compute's TypeError was a mis-split here)."""
+    no = _oracle()
+    sig = "#pythran export f(int64[:,:], int64[:,:], float64, float64, float64, int64[:,:])\n"
+    dts = no._pythran_export_dtypes(sig)
+    assert dts == [np.int64, np.int64, np.float64, np.float64, np.float64, np.int64]
+    assert no._coerce_to_dtype(np.int64(4), np.float64).dtype == np.float64          # scalar cast
+    assert no._coerce_to_dtype(np.zeros(3, np.uint8), np.int64).dtype == np.int64    # array cast
+
+
+@pytest.mark.parametrize("kernel", ["cholesky2", "contour_integral", "azimint_naive", "crc16", "compute"])
+def test_cholesky2_contour_pythran_e2e(kernel):
+    """Kernels reclaimed for pythran: cholesky2 (np.linalg.cholesky),
+    contour_integral (np.linalg.solve + dead-but-typed np.linalg.inv), azimint_naive
+    (masked-mean loop + 'res' param rename), crc16 (uint8-vs-int64 export marshal),
+    compute (int64-scalar-vs-float64 export marshal). All bit-close to numpy."""
+    no = _oracle()
+    status = no.run_kernel(kernel, preset="S", precision="fp64", seed=0)
+    s = status.get("pythran")
+    if s == "skip:not-installed":
+        pytest.skip("pythran not installed")
+    assert s == "ok", f"{kernel} pythran: {s}"
