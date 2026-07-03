@@ -17,7 +17,6 @@ quasi_affine_reduce_even::pluto
 quasi_affine_reduce_odd::pluto
 reroll_gather::pluto
 reroll_saxpy7::pluto
-srad::pluto
 stencil_4d_vc::pluto
 thomas_solve::pluto
 tsvc_2_s111::pluto

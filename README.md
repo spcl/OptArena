@@ -719,7 +719,6 @@ OptArena adapts scientific Python/NumPy codes from many sources:
 - Needleman-Wunsch alignment adapted from [OpenDwarfs](https://github.com/vtsynergy/OpenDwarfs) / [Rodinia](https://github.com/yuhc/gpu-rodinia)
 - GEM molecular electrostatics adapted from [OpenDwarfs](https://github.com/vtsynergy/OpenDwarfs) (gemnoui)
 - Breadth-first search adapted from [OpenDwarfs](https://github.com/vtsynergy/OpenDwarfs) / [Rodinia](https://github.com/yuhc/gpu-rodinia) (bfs)
-- SRAD anisotropic diffusion adapted from [OpenDwarfs](https://github.com/vtsynergy/OpenDwarfs) / [Rodinia](https://github.com/yuhc/gpu-rodinia) (srad)
 - CFD Euler solver adapted from [OpenDwarfs](https://github.com/vtsynergy/OpenDwarfs) / [Rodinia](https://github.com/yuhc/gpu-rodinia) (cfd)
 - k-means clustering adapted from [OpenDwarfs](https://github.com/vtsynergy/OpenDwarfs) / [Rodinia](https://github.com/yuhc/gpu-rodinia) (kmeans)
 - Smith-Waterman local alignment adapted from [OpenDwarfs](https://github.com/vtsynergy/OpenDwarfs) (swat)
@@ -728,7 +727,6 @@ OptArena adapts scientific Python/NumPy codes from many sources:
 - 2-D discrete wavelet transform adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (dwt2d)
 - HotSpot 3D thermal simulation adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (hotspot3D)
 - Gaussian elimination adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (gaussian)
-- lavaMD cell-list molecular dynamics adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (lavaMD)
 - Band-parallel exact-exchange (Fock) operator adapted from [Quantum ESPRESSO](https://www.quantum-espresso.org/) (vexx_k)
 
 Each adapted kernel retains the license of its original source (all GPLv3-compatible);

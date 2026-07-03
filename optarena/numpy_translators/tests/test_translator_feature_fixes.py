@@ -376,7 +376,6 @@ def _oracle():
 #: Kernels unblocked by this batch, with the feature each exercises. All three
 #: native backends (C / C++ / Fortran) must reproduce numpy.
 _E2E = [
-    ("srad", "np.var/np.mean full reduction nested in expr"),
     ("edge_laplacian", "np.add.at scatter + fancy-index gather x[src]"),
     ("gem", "3D broadcast + axis reduction + sqrt-of-reduction local decl"),
     ("dfa", "rng.integers 2-D shape recovery + dynamic gather flatten"),
