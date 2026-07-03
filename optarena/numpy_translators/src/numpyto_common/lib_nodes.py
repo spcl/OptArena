@@ -4928,7 +4928,7 @@ for _np_name, _c_name in {"arctan2": "atan2", "hypot": "hypot",
 #: rewriter at the lower() level translates these into a local-array
 #: declaration the existing ``_ZerosRewriter`` already understands.
 NP_ZEROS_ALIASES: Tuple[str, ...] = (
-    "zeros", "empty", "zeros_like", "empty_like", "ones",
+    "zeros", "empty", "zeros_like", "empty_like", "ones", "ones_like",
     "ndarray",  # ``np.ndarray((I, J, K), dtype=...)`` -- raw uninitialised
                 # allocator used by gt4py-derived weather kernels (vadv).
                 # Same shape harvest as ``np.empty``.

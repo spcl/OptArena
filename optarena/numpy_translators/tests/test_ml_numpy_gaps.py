@@ -99,3 +99,23 @@ def test_reshape_neg1_on_intermediate_local():
     ok, res = _run("import numpy as np\ndef f(a, out):\n t = a * 2.0\n b = t.reshape(-1)\n out[:] = b\n",
                    {"a": _A}, {"out": (24, )}, {"M": 4, "N": 6}, {"a": "(M, N)", "out": "(M*N,)"})
     assert ok, res
+
+
+# --- np.ones_like (was missing from NP_ZEROS_ALIASES) ---------------------- #
+
+
+def test_ones_like():
+    ok, res = _run("import numpy as np\ndef f(a, out):\n b = np.ones_like(a)\n out[:] = a + b\n",
+                   {"a": np.arange(6, dtype=np.float64)}, {"out": (6, )}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
+    assert ok, res
+
+
+def test_ones_like_2d_filled():
+    src = ("import numpy as np\n"
+           "def f(a, out):\n"
+           "    b = np.ones_like(a)\n"
+           "    for i in range(a.shape[0]):\n"
+           "        for j in range(a.shape[1]):\n"
+           "            out[i, j] = b[i, j] * 3.0\n")
+    ok, res = _run(src, {"a": np.ones((2, 3))}, {"out": (2, 3)}, {"M": 2, "N": 3}, {"a": "(M, N)", "out": "(M, N)"})
+    assert ok, res
