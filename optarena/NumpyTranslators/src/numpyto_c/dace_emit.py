@@ -64,6 +64,57 @@ class _DropSymbolAssign(ast.NodeTransformer):
             return None
         return node
 
+
+class _ResolveZeros(ast.NodeTransformer):
+    """A LOWERED kir marks each allocation-init intermediate with ``<name> =
+    __optarena_zeros__()`` (a placeholder the C emitter turns into malloc + fill). For
+    dace, resolve it to ``<name> = np.zeros/np.ones((<shape>,), dtype=<dctype>)`` from
+    the kir's ``zeros_locals`` shape map and ``zeros_fills`` kind map (np/dace need an
+    explicit shape + dtype). The marker is shared by every allocator alias, so pick the
+    constructor from the recorded fill kind: ``ones``/``ones_like`` -> ``np.ones``,
+    everything else (``zeros``/``empty``/``ndarray``) -> ``np.zeros`` (a safe defined
+    value for the uninitialised ``empty`` too). Used when a logical sparse ``A @ x`` was
+    lowered to CSR loops over a fixed-shape accumulator (the Krylov solvers, spmm).
+
+    Fill semantics match the C emit's ``is_reassign`` branch, keyed on the marker arg:
+    * a ``'__reassign__'`` marker (call carries an arg) is a self-referential update --
+      the lowered ``r = r - alpha * Ap`` reads ``r`` while writing it -- so ALLOCATE
+      ONCE: emit the first (which creates the buffer) and DROP every later one (an
+      in-place reuse; re-filling would clear the buffer before the read and corrupt it);
+    * a genuine reset marker (no arg, e.g. a fresh ``__mm`` matmul accumulator) is
+      ALWAYS emitted, so one sitting inside a loop re-fills every iteration.
+    A marker on a name the lowering did NOT register as a zeros-local is a reassignment
+    of an EXISTING buffer -- an output param, e.g. spmm's C in ``C[:] = alpha*(A@B) +
+    beta*C`` -- and is dropped (never allocated, so a live input like ``beta*C`` is not
+    clobbered)."""
+
+    def __init__(self, zeros_locals: Dict[str, tuple], zeros_fills: Dict[str, str], local_dtypes: Dict[str, str],
+                 default_dtype: str):
+        self.zeros_locals = zeros_locals
+        self.zeros_fills = zeros_fills
+        self.local_dtypes = local_dtypes
+        self.default_dtype = default_dtype
+        self.allocated: set = set()
+
+    def visit_Assign(self, node: ast.Assign):
+        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name) and node.value.func.id == "__optarena_zeros__"):
+            return node
+        name = node.targets[0].id
+        if name not in self.zeros_locals:
+            return None  # a reassigned param (spmm's output C): update in place, never allocate
+        # A reassign that already has a buffer is an in-place reuse -> drop. A genuine
+        # reset (no arg) is always emitted, so an in-loop one re-fills each iteration.
+        if node.value.args and name in self.allocated:
+            return None
+        self.allocated.add(name)
+        shape = self.zeros_locals[name] or ("1",)
+        ctor = "np.ones" if self.zeros_fills.get(name) in ("ones", "ones_like") else "np.zeros"
+        dtype = _dace_dtype(self.local_dtypes.get(name, self.default_dtype))
+        elts = ", ".join(str(s) for s in shape) + ("," if len(shape) == 1 else "")
+        return ast.copy_location(ast.parse(f"{name} = {ctor}(({elts}), dtype={dtype})").body[0], node)
+
+
 #: numpy dtype tag -> dace type expression. Floats route through the
 #: precision-driven ``dc_float`` / ``dc_complex_float`` globals the dace
 #: framework rebinds per run; integers carry a fixed width.
@@ -133,7 +184,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     out.append("import dace as dc")
     imp = "dc_float, dc_complex_float" if needs_complex else "dc_float"
     out.append(f"from optarena.infrastructure.dace_framework import {imp}")
-    out.append("from math import sin, cos, log, exp, pow")
+    out.append("from math import sin, cos, log, exp, pow, sqrt")
     out.append("")
     if symbol_names:
         names = ", ".join(symbol_names)
@@ -162,6 +213,15 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
     except Exception:  # noqa: BLE001 -- keep the verbatim body if desugar fails
         fn_ast = kir.tree
+    # A logical sparse ``A @ x`` lowered to CSR loops leaves ``<acc> =
+    # __optarena_zeros__()`` markers for its fixed-shape accumulators -- turn them into
+    # ``np.zeros`` / ``np.ones`` (per the recorded fill kind) so the @dc.program
+    # allocates the transient with its declared initial value.
+    zeros_locals = vars(kir.tree).get("zeros_locals", {}) or {}
+    zeros_fills = vars(kir.tree).get("zeros_fills", {}) or {}
+    local_dtypes = vars(kir.tree).get("local_dtypes", {}) or {}
+    default_dtype = vars(kir.tree).get("float_precision") or "float64"
+    fn_ast = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype).visit(fn_ast)
     # dace has no runtime ``.shape`` and its symbols are immutable: rewrite
     # ``arr.shape[k]`` to the symbolic dimension and drop any recompute of a size
     # symbol (``M = A_indptr.shape[0] - 1``), which is redundant + illegal in dace.

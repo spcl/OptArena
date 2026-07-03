@@ -80,18 +80,21 @@ def test_sparse_kernel_jax_matches_scipy(kernel, seed):
 @pytest.mark.parametrize("kernel", _KERNELS, ids=_IDS)
 def test_sparse_kernel_dace_matches_scipy(kernel):
     """dace validates -- via a real SDFG build + run -- every sparse kernel it can build.
-    Buffer-style CSR (spmv) builds and matches scipy: dace's SYMBOLIC array shapes make
-    the data-dependent slice ``A_indices[A_indptr[i]:A_indptr[i+1]]`` expressible, once
-    the emit declares the shape symbols and drops the ``.shape`` recompute (the
-    dace_emit symbolic-shape fix). The logical-matrix kernels (spmm + the Krylov
-    solvers) currently fail to BUILD -- the kir unpacks the matrix into CSR buffers but
-    the body still writes a logical ``A @ x``, which emit_dace does not yet lower to the
-    buffer loops; those skip with the build reason surfaced (a numpyto_dace follow-up).
-    A build SUCCESS must validate numerically; only a build FAILURE may skip."""
+    Buffer-style CSR (spmv) builds from the UN-lowered kir: dace's SYMBOLIC array shapes
+    make the data-dependent slice ``A_indices[A_indptr[i]:A_indptr[i+1]]`` expressible,
+    once the emit declares the shape symbols and drops the ``.shape`` recompute (the
+    dace_emit symbolic-shape fix). The logical-matrix kernels (spmm + the Krylov solvers
+    cg / bicgstab / minres) build from the LOWERED kir: a logical ``A @ x`` is flattened
+    to CSR buffer loops, and the ``__optarena_zeros__`` allocation markers resolve to
+    np.zeros / np.ones (allocate-once, matching the C emit -- a re-marked local is an
+    in-place reuse, not a re-zero). gmres still fails to build (its Q / H workspace has a
+    data-dependent 2-D shape ``(n, restart + 1)`` -- the scalar restart is not a dace
+    symbol) and skips with the build reason surfaced. A build SUCCESS must validate
+    numerically; only a build FAILURE may skip."""
     pytest.importorskip("dace")
     res = so.run_kernel(kernel, backend="dace")
     if not res.ok and "build failed" in res.detail:
-        pytest.skip(f"{kernel.short} dace build gap (logical A@x lowering): {res.detail[:80]}")
+        pytest.skip(f"{kernel.short} dace build gap (symbolic 2-D workspace): {res.detail[:80]}")
     assert res.ok, f"{kernel.short} dace: {res.detail}"
 
 

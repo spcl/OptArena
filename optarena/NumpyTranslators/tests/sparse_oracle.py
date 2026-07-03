@@ -422,8 +422,8 @@ def run_kernel(k: SparseKernel,
     # signature (no ABI marshalling): the kernel takes the same args as the numpy
     # ref and returns its outputs, mapped onto output_args in order.
     if backend != "c":
-        return _run_module_backend(backend, k, info, sparse_logical, phys, dense_inputs, scalars, env, expected, rtol,
-                                   atol)
+        return _run_module_backend(backend, k, info, sparse_logical, phys, dense_inputs, scalars, env, config_name,
+                                   expected, rtol, atol)
 
     # 6. emit + compile.
     import tempfile
@@ -514,7 +514,8 @@ def run_kernel(k: SparseKernel,
 
 def _run_module_backend(backend: str, k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, Any],
                         phys: Dict[str, np.ndarray], dense_inputs: Dict[str, np.ndarray], scalars: Dict[str, Any],
-                        env: Dict[str, int], expected: Dict[str, np.ndarray], rtol: float, atol: float) -> OracleResult:
+                        env: Dict[str, int], config_name: str, expected: Dict[str, np.ndarray], rtol: float,
+                        atol: float) -> OracleResult:
     """Validate a MODULE backend (jax / dace) on the reference-style signature. The
     emitted module takes the same args as the numpy ref -- a sparse LOGICAL matrix
     passed dense (neither has scipy sparse; ``A @ p`` on a dense array matches the ref),
@@ -522,7 +523,7 @@ def _run_module_backend(backend: str, k: SparseKernel, info: Dict[str, Any], spa
     in order. jax runs eagerly (dynamic CSR slice + gather on concrete arrays); dace
     builds an SDFG (its symbolic shapes make the same slice expressible)."""
     if backend == "dace":
-        return _run_dace(k, info, sparse_logical, phys, dense_inputs, scalars, env, expected, rtol, atol)
+        return _run_dace(k, info, sparse_logical, phys, dense_inputs, scalars, env, config_name, expected, rtol, atol)
     if backend != "jax":
         raise NotImplementedError(f"sparse backend {backend!r}")
     import os
@@ -575,13 +576,15 @@ def _compare_outputs(k, backend, out_names, got, expected, rtol, atol) -> Oracle
 
 
 def _run_dace(k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, Any], phys: Dict[str, np.ndarray],
-              dense_inputs: Dict[str, np.ndarray], scalars: Dict[str, Any], env: Dict[str, int],
+              dense_inputs: Dict[str, np.ndarray], scalars: Dict[str, Any], env: Dict[str, int], config_name: str,
               expected: Dict[str, np.ndarray], rtol: float, atol: float) -> OracleResult:
-    """Build + run the emitted dace ``@dc.program`` (SDFG) and compare vs scipy. dace's
-    symbolic array shapes make the data-dependent CSR slice expressible; the emit (see
-    numpyto_c.dace_emit) declares the shape symbols + drops the ``.shape`` recompute so
-    the program is standalone. Outputs are the ``@dc.program`` return (Krylov solvers'
-    ``x``) or the in-place-mutated buffer (spmv/spmm's ``y``), mapped onto output_args."""
+    """Build + run the emitted dace ``@dc.program`` (SDFG) and compare vs scipy. Emitted
+    from the LOWERED kir (config-flattened) so a logical sparse ``A @ x`` is already
+    lowered to the CSR buffer loops -- dace then sees only unpacked buffers, no logical
+    matrix. dace's symbolic array shapes make the data-dependent slice expressible; the
+    emit (numpyto_c.dace_emit) declares the shape symbols + drops the ``.shape``
+    recompute so the program is standalone. Outputs are the ``@dc.program`` return
+    (solvers' ``x``) or the in-place-mutated buffer (spmv/spmm's ``y``)."""
     import importlib.util
     import os
     import tempfile
@@ -592,10 +595,22 @@ def _run_dace(k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, A
         return OracleResult(k.short, False, float("nan"), "dace not installed")
     import optarena.infrastructure.dace_framework as dace_fw
     dace_fw.dc_float = dc.float64  # bind the precision placeholder (float64 oracle)
+    import ast
+
     import _bench_yaml
     from numpyto_c.dace_emit import emit_dace
     try:
-        src = emit_dace(_bench_yaml.kir_for(k.short, do_lower=False))
+        # Buffer-style kernels (spmv) keep their source's data-dependent SLICE, which dace
+        # expresses via symbolic shapes -> UN-lowered kir. Logical-matrix kernels (spmm +
+        # the Krylov solvers) write a logical ``A @ x`` dace can't trace -> LOWERED kir,
+        # which flattens it to CSR buffer loops. Lower only when the source still names the
+        # logical matrix (lowering spmv's fixed slice would make a variable-length copy
+        # dace can't allocate).
+        raw = _bench_yaml.kir_for(k.short, do_lower=False)
+        body_names = {n.id for n in ast.walk(raw.tree) if isinstance(n, ast.Name)}
+        needs_lower = any(nm in body_names for nm in sparse_logical)
+        kir = _bench_yaml.kir_for(k.short, config=config_name, do_lower=True) if needs_lower else raw
+        src = emit_dace(kir)
         d = pathlib.Path(tempfile.mkdtemp())
         f = d / f"{info['func_name']}_dace.py"
         f.write_text(src)
@@ -606,8 +621,14 @@ def _run_dace(k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, A
         compiled = prog.to_sdfg(simplify=True).compile()
     except Exception as exc:  # noqa: BLE001
         return OracleResult(k.short, False, float("nan"), f"dace build failed: {type(exc).__name__}: {exc}")
+    free_syms = set(map(str, compiled.sdfg.free_symbols))
     call: Dict[str, Any] = {}
-    for a in info["input_args"]:
+    # Iterate the PROGRAM's args (kir.input_args = the emitted signature) rather than the
+    # logical bench_info args: a lowered kernel's matrix is unpacked into CSR buffers
+    # (A_data / A_indices / A_indptr), so the SDFG expects those, not the logical ``A``.
+    for a in kir.input_args:
+        if a in free_syms:
+            continue  # a dace SYMBOL (dataset dim, or a solver's max_iter promoted to a loop bound)
         if a in sparse_logical:
             call[a] = np.ascontiguousarray(sparse_logical[a].toarray())
         elif a in phys:
@@ -616,7 +637,10 @@ def _run_dace(k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, A
             call[a] = np.ascontiguousarray(dense_inputs[a].copy())
         elif a in scalars:
             call[a] = scalars[a]
-    syms = {s: int(env[s]) for s in map(str, compiled.sdfg.free_symbols) if s in env}
+    # symbols resolve from the dataset dims (env) or an int scalar the kir promoted to a
+    # symbol (a solver's max_iter, used as a loop bound).
+    sym_vals = {**{n: v for n, v in scalars.items() if isinstance(v, (int, np.integer))}, **env}
+    syms = {s: int(sym_vals[s]) for s in free_syms if s in sym_vals}
     try:
         ret = compiled(**call, **syms)
     except Exception as exc:  # noqa: BLE001
