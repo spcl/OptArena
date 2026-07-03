@@ -220,12 +220,17 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
 
-      - name: Phase 6a -- build the agent-bench image (unprivileged fakeroot)
+      - name: Phase 6a -- build + smoke-test the cpu agent-bench image (unprivileged fakeroot)
         run: |
           # uidmap provides newuidmap/newgidmap that --fakeroot needs to map the runner
           # user's /etc/subuid range without root.
           sudo apt-get install -y uidmap
           apptainer build --fakeroot optarena-cpu.sif containers/cpu.def
+          # The cpu image must import its numeric deps and carry the CPU-only torch
+          # build: a bare ``torch`` would drag in the ~2 GB CUDA stack (see cpu.def).
+          # Assert the ``+cpu`` local version (cuda_available is False on any GPU-less
+          # runner regardless, so it is not a reliable check).
+          apptainer exec optarena-cpu.sif python3 -c "import numpy, scipy, dace, jax, numba, pythran, xgboost, h5py, netCDF4; import torch; assert '+cpu' in torch.__version__, 'cpu image has non-CPU torch: ' + torch.__version__; print('cpu image OK: deps import, torch', torch.__version__)"
 
       - name: Phase 6b -- container functionality (sudoless two-container launch)
         env:
