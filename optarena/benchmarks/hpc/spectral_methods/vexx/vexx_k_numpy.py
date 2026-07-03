@@ -1,6 +1,17 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Flat-SoA numpy port of Quantum ESPRESSO's band-parallel exact-exchange operator
+"""Attribution
+This module is a NumPy adaptation of a computational kernel from Quantum ESPRESSO
+(https://www.quantum-espresso.org/), extracted for numerical validation and
+benchmarking. It reproduces the extracted kernel's physics while omitting the
+surrounding application/runtime infrastructure (MPI, I/O, the SCF driver).
+
+    Original project:  Quantum ESPRESSO
+    Extracted kernel:  band-parallel exact exchange -- module ``exx_bp``,
+                       subroutine ``vexx_bp_k`` (generic k-point CPU path)
+    Original license:  GNU GPL v2 or later
+
+Flat-SoA numpy port of Quantum ESPRESSO's band-parallel exact-exchange operator
 ``exx_bp::vexx_bp_k`` (generic k-point CPU path) -- the Fock exchange applied to a
 set of trial bands. (The CPU ``vexx_bp_k`` and the GPU ``vexx_bp_k_gpu`` compute
 identical physics; this port is cross-checked against C++ lowered from the inlined
