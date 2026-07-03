@@ -610,6 +610,48 @@ class _NpAliasRewriter(ast.NodeTransformer):
         return node
 
 
+class _ConditionalNoneAllocRewriter(ast.NodeTransformer):
+    """``X = <expr> if cond else None`` (and the mirror ``X = None if cond else <expr>``)
+    -> ``X = <expr>``.
+
+    An array that is a value in one branch and ``None`` in the other is a
+    CONDITIONALLY-ALLOCATED buffer (QE vexx_k's ``deexx``; an ML optional
+    residual/bias accumulator). The backends have no ``None``, and a *valid* kernel
+    only reads ``X`` where it was allocated -- reading it on the ``None`` branch would be a
+    ``None``-index error -- so unconditionally taking the allocated branch is sound: the
+    extra buffer is written/read only under the same guard, and is otherwise never
+    observed. Left untouched when ``X`` is later tested with ``is None`` / ``is not None``
+    (there its None-ness is observable, so allocating unconditionally would flip the
+    guard); that case is the separate is-None allocation-check handling."""
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        # Names whose None-ness is observed (``x is None`` / ``x is not None``): a
+        # conditional alloc into one of these must NOT be forced, so record them first.
+        checked = set()
+        for cmp in ast.walk(node):
+            if (isinstance(cmp, ast.Compare) and isinstance(cmp.left, ast.Name)
+                    and any(isinstance(op, (ast.Is, ast.IsNot)) for op in cmp.ops)
+                    and any(isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators)):
+                checked.add(cmp.left.id)
+        self._none_checked = checked
+        self.generic_visit(node)
+        return node
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.IfExp)
+                and node.targets[0].id not in getattr(self, "_none_checked", set())):
+            return node
+        ifexp = node.value
+        body_none = isinstance(ifexp.body, ast.Constant) and ifexp.body.value is None
+        orelse_none = isinstance(ifexp.orelse, ast.Constant) and ifexp.orelse.value is None
+        if orelse_none and not body_none:
+            node.value = ifexp.body  # X = A if cond else None -> X = A
+        elif body_none and not orelse_none:
+            node.value = ifexp.orelse  # X = None if cond else A -> X = A
+        return node
+
+
 class _MatmulCallRewriter(ast.NodeTransformer):
     """Normalize ``np.matmul(a, b)`` to the ``a @ b`` BinOp so the call reuses
     the existing matmul machinery (the ``_MatmulHoister`` loop lowering and the
@@ -4427,6 +4469,10 @@ def lower(kir: KernelIR) -> KernelIR:
     # before any slice-aware pass runs (lulesh ``a[..., k]``).
     _EllipsisExpander(arrays_shapes).visit(lowered.tree)
     _NpAliasRewriter().visit(lowered.tree)
+    # ``X = alloc(...) if cond else None`` -> ``X = alloc(...)`` before the zeros
+    # harvester runs, so the conditionally-allocated buffer is seen as a plain local
+    # (the backends have no ``None``; reads are guarded by the same ``cond``).
+    _ConditionalNoneAllocRewriter().visit(lowered.tree)
     _FullLikeRewriter().visit(lowered.tree)
     _MatmulCallRewriter().visit(lowered.tree)
     _ScatterAtRewriter(arrays_shapes).visit(lowered.tree)
