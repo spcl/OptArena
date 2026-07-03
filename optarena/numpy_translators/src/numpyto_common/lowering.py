@@ -2059,7 +2059,14 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         iters = self._slice_iter_names[-len(shape):]
         starts = lhs_slice_starts[-len(shape):]
         elts: List[ast.AST] = []
-        for iv, start in zip(iters, starts):
+        for dim, iv, start in zip(shape, iters, starts):
+            # A size-1 axis broadcasts: pin it to index 0 rather than consuming
+            # the (larger) result-axis iter. ``w.reshape(1, -1)`` multiplied
+            # against an (N, N) array is (1, N) -- dim 0 must read row 0, not the
+            # row iter (which would run off the single-row temp -> OOB).
+            if str(dim).strip() == "1":
+                elts.append(_const(0))
+                continue
             ivar = ast.Name(id=iv, ctx=ast.Load())
             if isinstance(start, ast.Constant) and start.value == 0:
                 elts.append(ivar)
