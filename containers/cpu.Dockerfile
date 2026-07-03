@@ -50,5 +50,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libucx-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements/cpu.txt /tmp/reqs.txt
-RUN python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/reqs.txt
+# CPU-only torch first (see cpu.def): a bare ``torch`` pulls the ~2 GB CUDA stack
+# (nvidia-cudnn / nccl / cusparselt / nvshmem + triton) into a CPU image. Install
+# from the CPU wheel index so the requirements step never resolves the CUDA build.
+RUN python3 -m pip install --break-system-packages --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/reqs.txt
 WORKDIR /work
