@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from optarena.agent_bench.envelope import Submission
-from optarena.agent_bench.scoring import (_alloc_workspace, _call_native, _workspace_bytes, WORKSPACE_ALIGN)
+from optarena.agent_bench.native_call import (_alloc_workspace, _call_native, _workspace_bytes, WORKSPACE_ALIGN)
 from optarena.bindings.contract import Arg, Binding, RESERVED_ARG_NAMES
 from optarena.bindings.glue import gen_host_glue
 from optarena.bindings.stubs import LANGS, gen_call_stub

@@ -530,7 +530,7 @@ def test_cli_tasks_residency_sweep(capsys):
 
 def test_residency_invariant_all_or_nothing_scalars_host():
     """abi_contract §10: pointers share residency uniformly; scalars ALWAYS host."""
-    from optarena.agent_bench.scoring import _arg_residence
+    from optarena.agent_bench.native_call import _arg_residence
     from optarena.bindings import binding_from_spec
     from optarena.spec import BenchSpec
     b = binding_from_spec(BenchSpec.load("gemm"))
