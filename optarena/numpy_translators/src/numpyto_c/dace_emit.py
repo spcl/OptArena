@@ -76,13 +76,22 @@ class _ResolveZeros(ast.NodeTransformer):
     value for the uninitialised ``empty`` too). Used when a logical sparse ``A @ x`` was
     lowered to CSR loops over a fixed-shape accumulator (the Krylov solvers, spmm).
 
-    Fill semantics match the C emit's ``is_reassign`` branch, keyed on the marker arg:
-    * a ``'__reassign__'`` marker (call carries an arg) is a self-referential update --
-      the lowered ``r = r - alpha * Ap`` reads ``r`` while writing it -- so ALLOCATE
-      ONCE: emit the first (which creates the buffer) and DROP every later one (an
-      in-place reuse; re-filling would clear the buffer before the read and corrupt it);
-    * a genuine reset marker (no arg, e.g. a fresh ``__mm`` matmul accumulator) is
+    Fill semantics match the C emit's ``is_reassign`` branch, detected the same way it is
+    there -- the FIRST marker arg is the ``'__reassign__'`` string constant, not merely
+    "the call carries an arg":
+    * a ``'__reassign__'`` marker is a whole-array assignment (the lowered ``r = r - alpha
+      * Ap``). Once a buffer of that shape exists, a re-marked reassign is an in-place
+      reuse whose following loop may READ the old values (``r`` on both sides), so DROP it
+      -- re-zeroing would clear the buffer before that read and corrupt it. The FIRST
+      marker for a name still allocates: a self-referential reassign can never BE the first
+      occurrence (Python must define the name before reading it, so its allocating write
+      -- e.g. ``r = b - A@x`` -- came earlier), so a first-seen reassign is always a full
+      overwrite (``Ap = A@p``) and zeroing the fresh buffer is correct even inside a loop;
+    * a genuine reset marker (no sentinel, e.g. a fresh ``__mm`` matmul accumulator) is
       ALWAYS emitted, so one sitting inside a loop re-fills every iteration.
+    The drop is keyed on the SHAPE, not just the name: a same-name local re-bound to a
+    different shape (a reshape/transpose transient) is a real re-allocation, and dace
+    rebinds the transient, so it re-emits rather than keeping the stale first shape.
     A marker on a name the lowering did NOT register as a zeros-local is a reassignment
     of an EXISTING buffer -- an output param, e.g. spmm's C in ``C[:] = alpha*(A@B) +
     beta*C`` -- and is dropped (never allocated, so a live input like ``beta*C`` is not
@@ -94,7 +103,7 @@ class _ResolveZeros(ast.NodeTransformer):
         self.zeros_fills = zeros_fills
         self.local_dtypes = local_dtypes
         self.default_dtype = default_dtype
-        self.allocated: set = set()
+        self.allocated: Dict[str, tuple] = {}  # name -> the shape it was last allocated with
 
     def visit_Assign(self, node: ast.Assign):
         if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Call)
@@ -103,14 +112,18 @@ class _ResolveZeros(ast.NodeTransformer):
         name = node.targets[0].id
         if name not in self.zeros_locals:
             return None  # a reassigned param (spmm's output C): update in place, never allocate
-        # A reassign that already has a buffer is an in-place reuse -> drop. A genuine
-        # reset (no arg) is always emitted, so an in-loop one re-fills each iteration.
-        if node.value.args and name in self.allocated:
+        # Detect the self-referential sentinel exactly as the C/Fortran emitters do (first
+        # arg is the ``"__reassign__"`` constant), so the three backends agree.
+        is_reassign = any(isinstance(a, ast.Constant) and a.value == "__reassign__" for a in node.value.args)
+        shape = self.zeros_locals[name] or ("1", )
+        prev_shape = self.allocated.get(name)
+        # An in-place reuse (same buffer, same shape) whose following loop reads the OLD
+        # values -> drop the re-zero. A shape change (or first sight) still allocates.
+        if is_reassign and prev_shape == shape:
             return None
-        self.allocated.add(name)
-        shape = self.zeros_locals[name] or ("1",)
+        self.allocated[name] = shape
         ctor = "np.ones" if self.zeros_fills.get(name) in ("ones", "ones_like") else "np.zeros"
-        dtype = _dace_dtype(self.local_dtypes.get(name, self.default_dtype))
+        dtype = _dace_dtype(self.local_dtypes.get(name) or self.default_dtype)
         elts = ", ".join(str(s) for s in shape) + ("," if len(shape) == 1 else "")
         return ast.copy_location(ast.parse(f"{name} = {ctor}(({elts}), dtype={dtype})").body[0], node)
 
