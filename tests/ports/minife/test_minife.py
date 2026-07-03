@@ -13,7 +13,9 @@ from pathlib import Path
 import sys
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))
+# This port test lives in tests/ports/minife/; the numpy reference stays with the
+# benchmark. Put the benchmark dir on the path so ``import minife_numpy`` resolves.
+sys.path.insert(0, str(HERE.parents[2] / "optarena" / "benchmarks" / "hpc" / "sparse_linear_algebra" / "minife"))
 
 import numpy as np
 from numpy.ctypeslib import ndpointer
@@ -551,6 +553,11 @@ def main():
 
     assert_invalid_cpp_statuses(cpp)
     print("MiniFE NumPy/C++/independent validation: OK")
+
+
+def test_minife_port():
+    """pytest entry: numpy reference vs the standalone C++ reference (port fidelity)."""
+    main()
 
 
 if __name__ == "__main__":
