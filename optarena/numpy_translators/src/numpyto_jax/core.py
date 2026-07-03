@@ -196,7 +196,7 @@ def _np_to_jnp(tree: ast.AST) -> ast.AST:
 # unrolled into a Python loop -- because each step depends on the previous one
 # and unrolling a long trip count blows up the trace. The classification is the
 # shared source-form rule in :mod:`numpyto_common.parallelism`, now that JAX
-# lives under the common ``NumpyTranslators`` src and can import it directly.
+# lives under the common ``numpy_translators`` src and can import it directly.
 from numpyto_common.parallelism import is_timestep_loop as _is_timestep_loop  # noqa: E402
 
 

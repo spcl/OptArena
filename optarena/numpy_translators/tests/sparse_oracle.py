@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - scipy gated by the caller
     sp = None  # type: ignore
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
-SRC = REPO / "optarena" / "NumpyTranslators" / "src"
+SRC = REPO / "optarena" / "numpy_translators" / "src"
 
 # ---------------------------------------------------------------------------
 # discovery

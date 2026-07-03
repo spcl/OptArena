@@ -9,7 +9,7 @@ at rtol/atol 1e-12. This pins the numpy kernel without any backend dependency.
 
 C/C++/Fortran EMISSION is NOT validated here: it depends on the einsum / batched
 contraction translator extension being finalized (a parallel workstream that owns
-the NumpyTranslators source -- not touched here). The emission probe is marked
+the numpy_translators source -- not touched here). The emission probe is marked
 pending, not failed.
 """
 import importlib.util
@@ -75,7 +75,7 @@ def test_kdivm_order7_sparsity_is_real():
 
 
 @pytest.mark.skip(reason="einsum / batched contraction translator extension "
-                  "pending (parallel workstream owns NumpyTranslators src); "
+                  "pending (parallel workstream owns numpy_translators src); "
                   "validate C/C++/Fortran emission once np.einsum lands")
 def test_emission_pending():
     pass

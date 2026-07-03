@@ -21,7 +21,7 @@ import numpy as np
 
 _HERE = pathlib.Path(__file__).resolve()
 _REPO = _HERE.parents[3]
-_SRC = _REPO / "optarena" / "NumpyTranslators" / "src"
+_SRC = _REPO / "optarena" / "numpy_translators" / "src"
 for _p in (str(_REPO), str(_SRC)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

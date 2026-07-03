@@ -48,7 +48,7 @@ optarena/
 │   │   └── sparse/               sparse generators + SpMV backends (used by hpc/sparse_*)
 │   ├── agent_bench/              the optimize → compile → score loop + judge service
 │   │   └── prompts/              Jinja prompt fragments (the agent-facing prompt)
-│   ├── NumpyTranslators/src/     numpyto_c · numpyto_fortran · numpyto_jax · …  (NumPy→language emitters)
+│   ├── numpy_translators/src/     numpyto_c · numpyto_fortran · numpyto_jax · …  (NumPy→language emitters)
 │   ├── autogen.py  emit_bridge.py   on-demand sibling generation (emitters fed from the YAML)
 │   ├── bindings/                 canonical C-ABI binding + per-language call stubs
 │   ├── envs/  flags.py           the compiler/flag matrix (no literal -O3 anywhere)

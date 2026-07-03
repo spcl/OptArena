@@ -33,7 +33,7 @@ from optarena.agent_bench import tools
 REPO = paths.ROOT
 SCRIPT = REPO / "scripts" / "run_agent_in_container.sh"
 COMPOSE = REPO / "containers" / "agentbench.compose.yml"
-PYPATH = str(REPO / "optarena" / "NumpyTranslators" / "src")
+PYPATH = str(REPO / "optarena" / "numpy_translators" / "src")
 
 
 # --------------------------------------------------------------------------- #

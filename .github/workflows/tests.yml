@@ -37,7 +37,7 @@ jobs:
     # dominate the wall-clock; 240 leaves margin.
     timeout-minutes: 240
     env:
-      PYTHONPATH: ${{ github.workspace }}/optarena/NumpyTranslators/src
+      PYTHONPATH: ${{ github.workspace }}/optarena/numpy_translators/src
       # bondhugula/pluto @ 0.12.0-33-gdc46216 -- pin for reproducibility, bump deliberately.
       PLUTO_COMMIT: dc462163c8b4fc97d378a4d245d1a64741cb4111
     steps:

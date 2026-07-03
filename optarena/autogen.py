@@ -31,7 +31,7 @@ from typing import Dict, Iterable, List, Optional
 from optarena import paths
 
 _REPO = pathlib.Path(paths.__file__).resolve().parent.parent
-_TRANSLATORS_SRC = _REPO / "optarena" / "NumpyTranslators" / "src"
+_TRANSLATORS_SRC = _REPO / "optarena" / "numpy_translators" / "src"
 
 #: Auto-generatable Python targets and the canonical filename each produces
 #: (``{m}`` = the kernel's module_name). dace and jax are generated in-process;

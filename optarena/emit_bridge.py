@@ -9,7 +9,7 @@ truth (and ``bench_info/`` is deleted), the harness synthesizes the legacy JSON
 on the fly from a ``BenchSpec`` and hands the emitter a temp file -- its
 ``--bench-info`` contract is unchanged and **NumpyToX is never edited**.
 
-The emitter package set lives under ``optarena/NumpyTranslators/src`` (the unified
+The emitter package set lives under ``optarena/numpy_translators/src`` (the unified
 ``numpyto_common`` + per-language ``numpyto_c`` / ``numpyto_fortran`` / ... ).
 """
 import contextlib
@@ -25,7 +25,7 @@ from optarena.spec import BenchSpec, DEFAULT_FUZZ
 
 #: ``src`` root that holds every NumpyToX emitter package (on PYTHONPATH for the
 #: subprocess emit). Renamed from the old single-package ``NumpyToC`` layout.
-_TRANSLATORS_SRC = pathlib.Path(__file__).parent / "NumpyTranslators" / "src"
+_TRANSLATORS_SRC = pathlib.Path(__file__).parent / "numpy_translators" / "src"
 
 
 def _layouts_to_raw(layouts: Dict[str, Any]) -> Dict[str, Any]:
@@ -211,7 +211,7 @@ def emit_kernel(name: str,
     """Emit ``name`` to ``target`` via the unified ``numpyto --target`` driver,
     feeding it a transient bench_info JSON synthesized from the co-located YAML.
 
-    ``target`` is a NumpyTranslators target (``c`` / ``polly`` / ``pluto`` /
+    ``target`` is a numpy_translators target (``c`` / ``polly`` / ``pluto`` /
     ``fortran`` / ``cupy`` / ``numba`` / ``pythran``); the C target writes the
     whole C-family (``.c`` + ``.cpp`` + the Pluto input) in one run, so ``cpp``
     callers also use ``target="c"``. Each emitted source is named canonically

@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-TRANSLATORS = REPO / "optarena" / "NumpyTranslators" / "src"
+TRANSLATORS = REPO / "optarena" / "numpy_translators" / "src"
 for _p in (str(REPO), str(TRANSLATORS)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

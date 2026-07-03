@@ -13,7 +13,7 @@ import sys
 from typing import Iterator, List, Optional, Tuple
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
-SRC = REPO / "optarena" / "NumpyTranslators" / "src"
+SRC = REPO / "optarena" / "numpy_translators" / "src"
 for _p in (str(SRC), str(REPO)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

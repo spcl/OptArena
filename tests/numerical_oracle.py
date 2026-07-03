@@ -66,7 +66,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 # All translators live under one unified src tree (numpyto_c / numpyto_fortran /
 # numpyto_common / ...). SRC and FSRC are kept as aliases of it.
-SRC = FSRC = REPO / "optarena" / "NumpyTranslators" / "src"
+SRC = FSRC = REPO / "optarena" / "numpy_translators" / "src"
 # Emitter packages' import root, for the emit subprocess PYTHONPATH.
 _EMITTER_SRC = [SRC]
 for _p in (str(REPO), str(SRC), str(FSRC)):

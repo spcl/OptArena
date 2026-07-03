@@ -9,7 +9,7 @@ emitters use, so there is exactly one place to change a dtype.
 import pathlib
 import sys
 
-_TRANSLATORS_SRC = pathlib.Path(__file__).parent / "NumpyTranslators" / "src"
+_TRANSLATORS_SRC = pathlib.Path(__file__).parent / "numpy_translators" / "src"
 if _TRANSLATORS_SRC.is_dir() and str(_TRANSLATORS_SRC) not in sys.path:
     sys.path.insert(0, str(_TRANSLATORS_SRC))
 

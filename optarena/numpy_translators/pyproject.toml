@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "numpytranslators"
 version = "0.1.0"
-description = "NumpyTranslators: a numpy(-numeric subset) source -> C99/C++/Pluto, Fortran, CuPy, Numba, Pythran and JAX emitters, sharing one frontend/IR (numpyto_common)."
+description = "numpy_translators: a numpy(-numeric subset) source -> C99/C++/Pluto, Fortran, CuPy, Numba, Pythran and JAX emitters, sharing one frontend/IR (numpyto_common)."
 requires-python = ">=3.9"
 dependencies = []
 

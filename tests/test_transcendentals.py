@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "optarena" / "NumpyTranslators" / "src"))
+sys.path.insert(0, str(REPO / "optarena" / "numpy_translators" / "src"))
 
 from numpyto_c.frontend import parse_kernel  # noqa: E402
 from numpyto_c.lowering import lower  # noqa: E402

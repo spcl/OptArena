@@ -40,7 +40,7 @@ services:
     working_dir: /work
     environment:
       OPTARENA_IMAGE: ${OPTARENA_IMAGE:-optarena:cpu}
-      PYTHONPATH: /work:/work/optarena/NumpyTranslators/src
+      PYTHONPATH: /work:/work/optarena/numpy_translators/src
       OPTARENA_SHARED_DIR: /shared   # agent-installed libs/headers the judge links against
       # Judge policy (overrides config.yaml service.* if set):
       OPTARENA_SERVICE_ORACLE: ${ORACLE:-numpy}      # numpy | c | both
@@ -65,7 +65,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       OPTARENA_IMAGE: ${OPTARENA_IMAGE:-optarena:cpu}
-      PYTHONPATH: /work:/work/optarena/NumpyTranslators/src
+      PYTHONPATH: /work:/work/optarena/numpy_translators/src
       OPTARENA_SHARED_DIR: /shared   # install extra libs/headers here for the judge to link
       JUDGE_URL: http://judge:8800
       # The model the agent drives (host Ollama on the gateway, or an API key):
