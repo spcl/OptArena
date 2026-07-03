@@ -19,7 +19,7 @@ import importlib.util
 import io
 import re
 import tokenize
-from typing import List, Tuple
+from typing import List
 
 # Languages handled by the C-family block-and-line comment scanner.
 C_FAMILY = frozenset({"c", "cpp", "c++", "cuda", "hip"})
@@ -235,56 +235,57 @@ def _strip_c_family(src: str, *, slashes: bool = True, hashes: bool = False, for
 # REQUIRE the notice to survive redistribution, so stripping it from a ported
 # kernel (a microapp adapted from a real, licensed code) would violate the
 # license. Synthetic microkernels carry no such header, so nothing is kept.
-_ATTRIBUTION_RE = re.compile(r"licen[sc]e|attribution|copyright|spdx|creative commons|©", re.IGNORECASE)
+_ATTRIBUTION_RE = re.compile(r"licen[sc]e|attribution|copyright|spdx|creative commons|\(c\)|©", re.IGNORECASE)
 
-# Line prefixes that begin a top-of-file header line in the benchmark languages.
-_HEADER_LINE_STARTS = ("#", "//", "*", "!")
-
-
-def _carries_attribution(header: str) -> bool:
-    """True iff a header block carries a license / attribution notice to keep."""
-    return bool(_ATTRIBUTION_RE.search(header))
+# The leading COMMENT-line marker per language. Deliberately language-specific: '#' is a
+# comment in python/shell but a PREPROCESSOR directive in C, and '*' is a pointer in C --
+# so neither may count as a header comment there (the C '/* */' continuation is tracked
+# separately). Anything not listed is C-family and uses '//'.
+_COMMENT_STARTS = {"python": ("#", ), "fortran": ("!", )}
 
 
-def _split_leading_header(src: str) -> Tuple[str, str]:
-    """Split ``src`` into (header, body): the header is the top-of-file run of
-    blank lines, comment lines, and a leading triple-quoted docstring, up to the
-    first line of real code -- the block a license / attribution notice lives in.
-    Tracks multi-line ``/* */`` and docstrings so a wrapped notice stays whole."""
-    lines = src.splitlines(keepends=True)
-    doc_delim = None  # inside a python docstring
+def _carries_attribution(text: str) -> bool:
+    """True iff ``text`` carries a license / attribution notice to preserve."""
+    return bool(_ATTRIBUTION_RE.search(text))
+
+
+def _leading_license_block(src: str, norm: str) -> str:
+    """The top-of-file license / attribution comment block to keep verbatim, or ``""``.
+
+    It is the FIRST contiguous run of comment lines (language-aware: python ``#``,
+    fortran ``!``, C-family ``//`` + ``/* */``), starting at the top of the file and
+    STOPPING at the first blank line or blank comment line. Stopping there is what keeps
+    a DESCRIPTION block sitting below the notice out of the preserved region -- e.g.
+    force_lj's closed-form formula, separated from the copyright by a bare ``#``: only the
+    notice survives, the description is stripped with the body. Returns ``""`` when that
+    first block carries no license marker (a synthetic kernel)."""
+    starts = _COMMENT_STARTS.get(norm, ("//", ))
+    c_family = norm not in _COMMENT_STARTS
+    block: List[str] = []
     in_block = False  # inside a /* ... */ comment
-    k = 0
-    for line in lines:
+    for line in src.splitlines(keepends=True):
         s = line.strip()
         if in_block:
-            k += 1
+            block.append(line)
             if "*/" in s:
                 in_block = False
             continue
-        if doc_delim is not None:
-            k += 1
-            if doc_delim in s:
-                doc_delim = None
-            continue
         if not s:
-            k += 1
-            continue
-        if s[:3] in ('"""', "'''"):
-            k += 1
-            if s[:3] not in s[3:]:  # multi-line docstring: track its close
-                doc_delim = s[:3]
-            continue
-        if s.startswith("/*"):
-            k += 1
-            if "*/" not in s[2:]:  # multi-line block comment: track its close
+            break  # a blank line ends the leading block
+        if c_family and s.startswith("/*"):
+            block.append(line)
+            if "*/" not in s[2:]:
                 in_block = True
             continue
-        if s.startswith(_HEADER_LINE_STARTS):
-            k += 1
+        if s.startswith(starts):
+            marker = next(m for m in starts if s.startswith(m))
+            if s[len(marker):].strip() == "":
+                break  # a blank comment line separates the notice from a description below
+            block.append(line)
             continue
-        break  # first line of real code
-    return "".join(lines[:k]), "".join(lines[k:])
+        break  # first line of real code (or a docstring -- the stripper leaves those alone)
+    header = "".join(block)
+    return header if _carries_attribution(header) else ""
 
 
 def _strip_dispatch(src: str, norm: str) -> str:
@@ -302,18 +303,18 @@ def _strip_dispatch(src: str, norm: str) -> str:
 def strip_comments(src: str, lang: str) -> str:
     """Return ``src`` with all comments removed for ``lang``.
 
-    Uses tree-sitter when importable, else a stdlib fallback per language.
-    String / char literals are never disturbed. A leading license / attribution
-    header is preserved VERBATIM (see :data:`_ATTRIBUTION_RE`); only the body is
-    stripped -- so a ported microapp keeps its CC-BY notice while a synthetic
-    microkernel (no header) is fully stripped.
+    Uses tree-sitter when importable, else a stdlib fallback per language. String /
+    char literals are never disturbed. A leading license / attribution NOTICE (the first
+    top-of-file comment block, per :func:`_leading_license_block`) is preserved verbatim
+    so a ported microapp keeps its CC-BY / copyright line; everything else -- including
+    any description comments below the notice -- is stripped.
     """
     norm = _normalize_lang(lang)
     if norm not in TS_GRAMMAR:
         raise ValueError(f"strip_comments: unsupported lang {lang!r}; "
                          f"supported = {sorted(TS_GRAMMAR)}")
 
-    header, body = _split_leading_header(src)
-    if _carries_attribution(header):
-        return header + _strip_dispatch(body, norm)
+    header = _leading_license_block(src, norm)
+    if header:
+        return header + _strip_dispatch(src[len(header):], norm)
     return _strip_dispatch(src, norm)
