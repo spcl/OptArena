@@ -89,6 +89,60 @@ def test_strip_comments_python_removes_comments_and_keeps_strings():
 
 
 # --------------------------------------------------------------------------- #
+# License / attribution preservation
+# --------------------------------------------------------------------------- #
+
+APP_PY = '''\
+# All content is under Creative Commons Attribution CC-BY 4.0,
+# and all code is under the BSD-3 license.
+import numpy as np
+
+
+def cavity(u):
+    return u + 1  # hint: fuse the update
+'''
+
+MICROKERNEL_PY = '''\
+# spmv: sparse matvec reference
+import numpy as np
+
+
+def spmv(a):
+    return a  # accumulate the row
+'''
+
+
+def test_ported_kernel_keeps_attribution_header():
+    """A microapp's leading CC-BY / license block is preserved VERBATIM (the
+    license requires the notice to survive redistribution); only the body is
+    stripped -- so the whole leading block, not just the marked line, stays."""
+    out = strip_comments(APP_PY, "python")
+    assert "Creative Commons Attribution CC-BY 4.0" in out
+    assert "BSD-3 license" in out
+    assert "hint: fuse" not in out  # body comment still stripped
+
+
+def test_synthetic_kernel_header_fully_stripped():
+    """A synthetic microkernel has no license header, so its leading description
+    comment is stripped like any other comment (nothing to attribute)."""
+    out = strip_comments(MICROKERNEL_PY, "python")
+    assert "spmv: sparse matvec" not in out
+    assert "accumulate the row" not in out
+    assert "def spmv(a):" in out
+
+
+def test_c_license_block_preserved():
+    """A multi-line C ``/* ... */`` license header survives; body comments do not."""
+    src = ("/*\n * Copyright 2020 The Authors.\n"
+           " * SPDX-License-Identifier: MIT\n */\n"
+           "int main(void) { return 0; /* drop me */ }\n")
+    out = strip_comments(src, "c")
+    assert "Copyright 2020 The Authors" in out
+    assert "SPDX-License-Identifier: MIT" in out
+    assert "drop me" not in out
+
+
+# --------------------------------------------------------------------------- #
 # Name map construction
 # --------------------------------------------------------------------------- #
 

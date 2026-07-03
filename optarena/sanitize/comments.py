@@ -17,8 +17,9 @@ try-import-on-string dispatch).
 """
 import importlib.util
 import io
+import re
 import tokenize
-from typing import List
+from typing import List, Tuple
 
 # Languages handled by the C-family block-and-line comment scanner.
 C_FAMILY = frozenset({"c", "cpp", "c++", "cuda", "hip"})
@@ -230,23 +231,89 @@ def _strip_c_family(src: str, *, slashes: bool = True, hashes: bool = False, for
     return text
 
 
-def strip_comments(src: str, lang: str) -> str:
-    """Return ``src`` with all comments removed for ``lang``.
+# License / attribution notices we must preserve verbatim: CC-BY and friends
+# REQUIRE the notice to survive redistribution, so stripping it from a ported
+# kernel (a microapp adapted from a real, licensed code) would violate the
+# license. Synthetic microkernels carry no such header, so nothing is kept.
+_ATTRIBUTION_RE = re.compile(r"licen[sc]e|attribution|copyright|spdx|creative commons|©", re.IGNORECASE)
 
-    Uses tree-sitter when importable, else a stdlib fallback per language.
-    String / char literals are never disturbed.
-    """
-    norm = _normalize_lang(lang)
-    if norm not in TS_GRAMMAR:
-        raise ValueError(f"strip_comments: unsupported lang {lang!r}; "
-                         f"supported = {sorted(TS_GRAMMAR)}")
+# Line prefixes that begin a top-of-file header line in the benchmark languages.
+_HEADER_LINE_STARTS = ("#", "//", "*", "!")
 
+
+def _carries_attribution(header: str) -> bool:
+    """True iff a header block carries a license / attribution notice to keep."""
+    return bool(_ATTRIBUTION_RE.search(header))
+
+
+def _split_leading_header(src: str) -> Tuple[str, str]:
+    """Split ``src`` into (header, body): the header is the top-of-file run of
+    blank lines, comment lines, and a leading triple-quoted docstring, up to the
+    first line of real code -- the block a license / attribution notice lives in.
+    Tracks multi-line ``/* */`` and docstrings so a wrapped notice stays whole."""
+    lines = src.splitlines(keepends=True)
+    doc_delim = None  # inside a python docstring
+    in_block = False  # inside a /* ... */ comment
+    k = 0
+    for line in lines:
+        s = line.strip()
+        if in_block:
+            k += 1
+            if "*/" in s:
+                in_block = False
+            continue
+        if doc_delim is not None:
+            k += 1
+            if doc_delim in s:
+                doc_delim = None
+            continue
+        if not s:
+            k += 1
+            continue
+        if s[:3] in ('"""', "'''"):
+            k += 1
+            if s[:3] not in s[3:]:  # multi-line docstring: track its close
+                doc_delim = s[:3]
+            continue
+        if s.startswith("/*"):
+            k += 1
+            if "*/" not in s[2:]:  # multi-line block comment: track its close
+                in_block = True
+            continue
+        if s.startswith(_HEADER_LINE_STARTS):
+            k += 1
+            continue
+        break  # first line of real code
+    return "".join(lines[:k]), "".join(lines[k:])
+
+
+def _strip_dispatch(src: str, norm: str) -> str:
+    """Language dispatch: tree-sitter when importable, else a stdlib fallback."""
     if tree_sitter_available():
         return _strip_with_tree_sitter(src, norm)
-
     if norm == "python":
         return _strip_python_tokenize(src)
     if norm == "fortran":
         return _strip_c_family(src, slashes=False, hashes=False, fortran_bang=True)
     # c / cpp / cuda / hip
     return _strip_c_family(src, slashes=True, hashes=False, fortran_bang=False)
+
+
+def strip_comments(src: str, lang: str) -> str:
+    """Return ``src`` with all comments removed for ``lang``.
+
+    Uses tree-sitter when importable, else a stdlib fallback per language.
+    String / char literals are never disturbed. A leading license / attribution
+    header is preserved VERBATIM (see :data:`_ATTRIBUTION_RE`); only the body is
+    stripped -- so a ported microapp keeps its CC-BY notice while a synthetic
+    microkernel (no header) is fully stripped.
+    """
+    norm = _normalize_lang(lang)
+    if norm not in TS_GRAMMAR:
+        raise ValueError(f"strip_comments: unsupported lang {lang!r}; "
+                         f"supported = {sorted(TS_GRAMMAR)}")
+
+    header, body = _split_leading_header(src)
+    if _carries_attribution(header):
+        return header + _strip_dispatch(body, norm)
+    return _strip_dispatch(src, norm)
