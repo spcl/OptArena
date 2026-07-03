@@ -30,9 +30,17 @@ jobs:
           python -m pip install jinja2 tree-sitter tree-sitter-languages pytest
           python -m pip install -e .
 
-      - name: cupy attaches to the device
+      - name: cupy runs on the GPU
+        # Not just device presence: allocate + reduce on the device and check the
+        # exact result. sum_{i<N}(2i+1) == N**2, so a wrong/absent GPU fails loudly.
         run: |
-          python -c "import cupy; n=cupy.cuda.runtime.getDeviceCount(); assert n>0, n; print('devices', n, 'cc', cupy.cuda.Device(0).compute_capability)"
+          python -c "import cupy as cp; assert cp.cuda.runtime.getDeviceCount()>0; N=1000; a=cp.arange(N,dtype=cp.float64); s=float((2*a+1).sum()); cp.cuda.Device(0).synchronize(); assert a.device.id==0, a.device; assert s==N*N, (s,N*N); print('cupy GPU OK: cc', cp.cuda.Device(0).compute_capability, 'result', s)"
+
+      - name: jax runs on the GPU
+        # jax must default to the GPU backend and the jitted reduction must execute
+        # (and its result live) on a cuda device, with the same N**2 identity.
+        run: |
+          python -c "import jax, jax.numpy as jnp; assert jax.default_backend()!='cpu', jax.devices(); assert any(d.platform in ('gpu','cuda') for d in jax.devices()), jax.devices(); N=1000; y=jax.jit(lambda x:(2*x+1).sum())(jnp.arange(N,dtype=jnp.float32)); y.block_until_ready(); assert any(d.platform in ('gpu','cuda') for d in y.devices()), y.devices(); assert float(y)==N*N, (float(y),N*N); print('jax GPU OK:', jax.devices(), 'result', float(y))"
 
       - name: agent_bench tests (device-residency CUDA runs for real)
         # On this runner the cupy/nvcc gates are satisfied, so the GPU
