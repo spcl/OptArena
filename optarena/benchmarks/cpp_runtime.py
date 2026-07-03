@@ -1,4 +1,4 @@
-"""Shared loader for the native (C / C++ / Fortran) benchmark backends.
+`"""Shared loader for the native (C / C++ / Fortran) benchmark backends.
 
 Two paths share this module:
 

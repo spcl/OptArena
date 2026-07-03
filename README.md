@@ -44,6 +44,7 @@ optarena/
 │   │   ├── foundation/<kernel>.yaml + <kernel>_numpy.py        (flat)
 │   │   ├── hpc/<dwarf>/<kernel>/  (kernel dir + cpp_backend/)
 │   │   └── ml/<kernel>/
+│   ├── PytorchToNumpy/           separate PyTorch→NumPy translation corpus
 │   ├── taxonomy/                 controlled vocabularies (dwarfs · sparse_formats · …)
 │   ├── helpers/                  shared support code that is NOT a kernel
 │   │   └── sparse/               sparse generators + SpMV backends (used by hpc/sparse_*)
@@ -85,11 +86,13 @@ see the hidden tests or tamper with the clock.
 - **Local (pip).** Install with `pip`, start the judge, point the agent at it. The
   judge is a pure-stdlib socket webapp, so the whole loop runs in a plain Python
   environment — no Docker, no root:
+
   ```sh
   optarena serve --port 8800        # the verification+oracle webapp (oracle + baseline)
   # in another shell, the agent (or you) calls it over the socket:
   curl -s localhost:8800/baseline/gemm
   ```
+
   The two services the agent needs — the **baseline** (`GET /baseline/<kernel>`) and
   the **oracle** (`POST /oracle`) — are both served here over plain sockets.
 - **Containers (reproducible timing).** Run the judge and the agent as **two
@@ -352,7 +355,8 @@ whichever mode is active.
 
 > **⚠️ Still open (security boundary):** the workspace makes *agent-built* libraries
 > first-class, but **fetching arbitrary libraries from the internet** (an allow-list
-> + network inside the agent container) is the remaining supply-chain /
+>
+> - network inside the agent container) is the remaining supply-chain /
 > reproducibility decision. Today the agent builds against the offline fixed
 > toolchain + the workspace. See [Under Construction].
 
@@ -507,6 +511,11 @@ optarena/benchmarks/hpc/<dwarf>/<kernel>/<kernel>_numpy.py    (hpc)
 optarena/benchmarks/ml/<kernel>/<kernel>_numpy.py             (ml)
 ```
 
+If you are curating raw source corpora for translation work rather than OptArena
+benchmarks, keep them under `optarena/PytorchToNumpy/level1/`, `level2/`, and
+`level3/`, with generated NumPy outputs in the matching `result/level*/`
+directories. Do not place those source corpora under `optarena/benchmarks/`.
+
 Write it the everyday NumPy way. The reference may either **write into
 pre-allocated output buffers** (C-style, no `return`) *or* **return its result
 arrays** — the harness supports both. **Prefer pre-allocated buffers**: they map
@@ -599,6 +608,7 @@ carrying an `optarena-autogen` marker, and those canonical names are gitignored.
 now an *override* the regenerator never touches.
 
 **Common mistakes**
+
 - *the kernel `return`s its result* — NumPy lets you, but OptArena kernels are
   C-style: write into the output buffer in place (`y[:] = …`) so every language
   backend can reproduce it, and list that buffer in `output_args`.
@@ -647,6 +657,7 @@ rust:
   compile: ["{cc}", "-O", "--crate-type=cdylib", "{baseline}", "{src}", "-o", "{lib}"]
   link: []                       # cdylib already links a C-ABI shared object
 ```
+
 ```python
 # optarena/languages.py
 LANG_EXT = { ..., "rust": ".rs" }
@@ -732,6 +743,7 @@ OptArena adapts scientific Python/NumPy codes from many sources:
 - HotSpot 3D thermal simulation adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (hotspot3D)
 - Gaussian elimination adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (gaussian)
 - lavaMD cell-list molecular dynamics adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (lavaMD)
+- ML kernels from [KernelBench](https://github.com/ScalingIntelligence/KernelBench)
 
 Each adapted kernel retains the license of its original source (all GPLv3-compatible);
 the adaptation is credited above. Other contributors are listed in
