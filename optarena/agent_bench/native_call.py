@@ -90,16 +90,9 @@ def _alloc_workspace(nbytes: int, xp=np):
 
 
 def _arg_residence(binding: Binding, residency: str) -> Dict[str, str]:
-    """Storage location (``"host"``/``"device"``) of each ABI arg.
-
-    The single source of truth for the residency invariant (abi_contract §10):
-
-    * pointer references ALL share the task residency -- all host XOR all device,
-      never a mix;
-    * every scalar/size-symbol is ALWAYS host (passed by value -- there is no
-      buffer to place on the device);
-    * (the trailing ``time_ns``, handled separately, is always a host pointer.)
-    """
+    """Storage location (``"host"``/``"device"``) of each ABI arg (abi_contract §10):
+    pointer references all share the task residency (all host XOR all device); every
+    scalar/size-symbol is always host (passed by value)."""
     return {a.name: (residency if a.kind == "ptr" else "host") for a in binding.args}
 
 
