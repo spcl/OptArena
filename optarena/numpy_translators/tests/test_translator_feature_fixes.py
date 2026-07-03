@@ -598,7 +598,11 @@ def test_fortran_abi_param_order_matches_binding():
     info = legacy_bench_info_dict(BenchSpec.load("gesummv"))["benchmark"]
     with tempfile.TemporaryDirectory() as td:
         assert no._emit("gesummv", info, pathlib.Path(td))
-        binding = json.loads(next(pathlib.Path(td).glob("*_binding.json")).read_text())
+        # The fp64 C/Fortran binding -- NOT the pluto sidecar
+        # (``*_fp64_pluto_binding.json``), which carries its own symbols-first arg
+        # order and is marshalled via its own binding (see numerical_oracle
+        # ``_run_pluto``). A loose ``*_binding.json`` glob picks the pluto file up.
+        binding = json.loads(next(pathlib.Path(td).glob("*_fp64_binding.json")).read_text())
         order = [a["name"] for a in binding["args"]]
         f90 = next(pathlib.Path(td).glob("*_fp64.f90")).read_text()
         sig = f90.split("subroutine gesummv_fp64(", 1)[1].split(")", 1)[0]

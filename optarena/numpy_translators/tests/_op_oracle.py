@@ -128,7 +128,11 @@ def run_op(src: str, func: str, inputs: Dict[str, np.ndarray],
                     status[b] = f"FAIL:compile:{cc.stderr[-300:]}"
                     continue
                 try:
-                    status[b] = _no._invoke(b, binding, so, by, syms, expected, list(outputs), rtol, atol)
+                    # Forked child: a miscompiled kernel can segfault / corrupt the
+                    # heap in the ctypes call, which a bare in-process ``_invoke``
+                    # would let take down the whole pytest worker. ``_invoke_isolated``
+                    # runs it in a child and reports the crash as a ``FAIL`` string.
+                    status[b] = _no._invoke_isolated(b, binding, so, by, syms, expected, list(outputs), rtol, atol)
                 except Exception as exc:  # noqa: BLE001
                     status[b] = f"FAIL:{type(exc).__name__}:{exc}"
             elif b == "numba":

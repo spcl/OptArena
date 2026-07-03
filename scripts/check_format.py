@@ -34,9 +34,10 @@ FORT_EXT = {".f", ".f90", ".f03", ".f08", ".f95", ".for"}  # matched case-insens
 
 # Ported / generated sources are not hand-formatted (faithfulness over style),
 # matching the .yapfignore policy. A path is skipped when it sits under one of
-# these prefixes or its name marks it as generated. numpy_translators is a SEPARATE
-# distribution (its own pyproject, excluded from packaging) and carries its own
-# style policy, so the repo-root configs do not govern it.
+# these prefixes or its name marks it as generated. numpy_translators is now folded
+# into the optarena distribution (no separate pyproject or style config), but its
+# sources predate this gate and most are not yet yapf-clean at 120, so it stays
+# skipped until a coordinated reformat can drop it from SKIP_PREFIXES.
 SKIP_PREFIXES = ("optarena/benchmarks/", "optarena/numpy_translators/")
 SKIP_NAME_MARKERS = ("_generated.", )
 

@@ -166,6 +166,19 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider tests/test_native_autogen.py
 
+      - name: Phase 2a -- numpy-translator op suite (per-op + corpus, emit + compile + validate)
+        # The numpyto_* translator's own suite (~640 tests): per-op faithfulness plus
+        # feature-fix and corpus kernels, each emitted to C/C++/Fortran (+ numba/pythran/
+        # jax where the test opts in), compiled, and validated against numpy. Previously
+        # dead in CI -- only exercised indirectly through the Phase 5 e2e sweep, so a
+        # single-op lowering regression could reach a whole kernel before anything caught
+        # it. A few full-kernel e2e cases (cloudsc, velocity_tendencies) overlap Phase 5
+        # and each take ~5 min, hence --timeout=900; move them behind a `slow` marker
+        # into a nightly if per-PR wall time becomes a concern.
+        run: |
+          python -m pytest -q -p no:cacheprovider -rf -n auto --timeout=900 \
+            optarena/numpy_translators/tests/
+
       - name: Phase 2b -- port fidelity (numpy port vs original C/C++/Fortran reference)
         # Each tests/ports/<kernel>/ builds the upstream reference (e.g. vexx's FFTW
         # Fock oracle) and grades the numpy port against it. A missing toolchain/lib
