@@ -40,6 +40,7 @@ import ctypes
 import importlib.util
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +50,10 @@ _HERE = Path(__file__).resolve().parent
 _BASE = _HERE / "baseline"
 _KERNELS = _BASE / "lulesh_comp_kernels_original.f90"
 _CALLER = _BASE / "lulesh_xcheck_caller.f90"
+# The NumPy kernel + generator stay in the benchmark tree; only this port test
+# and its vendored Fortran oracle (baseline/) live under tests/ports/.
+_BENCH = _HERE.parents[2] / "optarena" / "benchmarks" / "hpc" / "unstructured_grids" / "lulesh"
+sys.path.insert(0, str(_BENCH))
 
 _P = ctypes.c_void_p
 _CI = ctypes.c_int
@@ -63,7 +68,7 @@ _ARG_NAMES = (
 
 
 def _load(name):
-    spec = importlib.util.spec_from_file_location(name, _HERE / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, _BENCH / f"{name}.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m

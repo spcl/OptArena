@@ -20,6 +20,7 @@ Skips cleanly when gfortran is unavailable.
 import ctypes
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,10 @@ import pytest
 
 _HERE = Path(__file__).resolve().parent
 _BASE = _HERE / "baseline"
+# The NumPy kernel + generator stay in the benchmark tree; only this port test
+# and its Fortran baseline/ oracle live under tests/ports/.
+_BENCH = _HERE.parents[2] / "optarena" / "benchmarks" / "hpc" / "unstructured_grids" / "velocity_tendencies"
+sys.path.insert(0, str(_BENCH))
 
 pytestmark = pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 
@@ -205,7 +210,7 @@ def caller_lib(tmp_path_factory):
 
 def _load_kernel():
     import importlib.util
-    spec = importlib.util.spec_from_file_location("velocity_tendencies_numpy", _HERE / "velocity_tendencies_numpy.py")
+    spec = importlib.util.spec_from_file_location("velocity_tendencies_numpy", _BENCH / "velocity_tendencies_numpy.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m.velocity_tendencies
@@ -310,7 +315,7 @@ _GEN_NAMES = (_INIT_ARRAY_ORDER[:_INIT_ARRAY_ORDER.index('p_diag_ddt_w_adv_pc') 
 
 def _load_initialize():
     import importlib.util
-    spec = importlib.util.spec_from_file_location("velocity_tendencies_init", _HERE / "velocity_tendencies.py")
+    spec = importlib.util.spec_from_file_location("velocity_tendencies_init", _BENCH / "velocity_tendencies.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m.initialize
