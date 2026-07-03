@@ -729,6 +729,7 @@ OptArena adapts scientific Python/NumPy codes from many sources:
 - HotSpot 3D thermal simulation adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (hotspot3D)
 - Gaussian elimination adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (gaussian)
 - lavaMD cell-list molecular dynamics adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (lavaMD)
+- Band-parallel exact-exchange (Fock) operator adapted from [Quantum ESPRESSO](https://www.quantum-espresso.org/) (vexx_k)
 
 Each adapted kernel retains the license of its original source (all GPLv3-compatible);
 the adaptation is credited above. Other contributors are listed in
