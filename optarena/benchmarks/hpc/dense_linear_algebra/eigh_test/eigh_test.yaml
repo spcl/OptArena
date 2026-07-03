@@ -1,3 +1,5 @@
+# OptArena benchmark manifest -- adding a benchmark: see README.md.
+# Schema: optarena/schemas/bench_spec.schema.yaml
 name: Generalized Hermitian eigh (test)
 short_name: eigh_test
 kind: microkernel
