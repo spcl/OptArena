@@ -468,6 +468,42 @@ def _iter_extent_of(expr: ast.expr,
                     if len(perm) == len(base):
                         return tuple(base[p] for p in perm)
                 return tuple(reversed(base))
+            # Shape aliases -> the operand's extent with axes swapped / a unit axis
+            # inserted / unit axes dropped (so an enclosing BinOp broadcasts correctly and
+            # the fresh target is allocated at the right rank).
+            if attr == "swapaxes" and len(expr.args) >= 3:
+                base = _iter_extent_of(expr.args[0], shape_table)
+                if base is None:
+                    return None
+                i, j = _const_axis(expr.args[1], len(base)), _const_axis(expr.args[2], len(base))
+                if i is None or j is None:
+                    return None
+                out = list(base)
+                out[i], out[j] = out[j], out[i]
+                return tuple(out)
+            if attr == "expand_dims" and expr.args:
+                base = _iter_extent_of(expr.args[0], shape_table)
+                if base is None:
+                    return None
+                axis = _const_axis(_kwarg_or_pos(expr.args, expr.keywords, 1, "axis"), len(base) + 1)
+                if axis is None:
+                    return None
+                out = list(base)
+                out.insert(axis, _const(1))
+                return tuple(out)
+            if attr == "squeeze" and expr.args:
+                base = _iter_extent_of(expr.args[0], shape_table)
+                if base is None:
+                    return None
+                axis_node = _kwarg_or_pos(expr.args, expr.keywords, 1, "axis")
+                if axis_node is not None:
+                    axis = _const_axis(axis_node, len(base))
+                    if axis is None or not (isinstance(base[axis], ast.Constant) and base[axis].value == 1):
+                        return None
+                    out = [e for k, e in enumerate(base) if k != axis]
+                else:
+                    out = [e for e in base if not (isinstance(e, ast.Constant) and e.value == 1)]
+                return tuple(out) if out else (_const(1), )
             if attr == "repeat":
                 return None
             # ``np.einsum(subscripts, *operands)`` -> the OUTPUT extent: one axis
@@ -1972,6 +2008,85 @@ def expand_transpose(target: ast.expr, args: List[ast.expr],
         targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
         value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()))]
     return _wrap_for_loops(src_iters, shape, body)
+
+
+def _const_axis(node: Optional[ast.expr], rank: int) -> Optional[int]:
+    """A (possibly negative) constant-int axis normalized to ``[0, rank)``; ``None`` when
+    ``node`` is not a plain int constant or the axis is out of range. A negative literal
+    parses as ``UnaryOp(USub, Constant(n))`` -- not ``Constant(-n)`` -- so handle both."""
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)
+            and isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int)):
+        val = -node.operand.value
+    elif isinstance(node, ast.Constant) and isinstance(node.value, int):
+        val = node.value
+    else:
+        return None
+    ax = val + rank if val < 0 else val
+    return ax if 0 <= ax < rank else None
+
+
+def expand_swapaxes(target: ast.expr, args: List[ast.expr],
+                    shape_table: Dict[str, Tuple[str, ...]], kwargs=None) -> List[ast.stmt]:
+    """``out = np.swapaxes(a, i, j)`` -> ``np.transpose(a, perm)`` with ``perm`` the
+    identity permutation with axes ``i`` and ``j`` exchanged (constant int axes). Reuses
+    the transpose loop-lowering, so no new machinery -- the ML attention Q/K axis swap."""
+    if not (args_one_name(args) and len(args) >= 3):
+        raise NotImplementedError("np.swapaxes needs (Name, int, int)")
+    a = args[0]
+    shape = shape_table.get(a.id)
+    if not shape:
+        raise NotImplementedError("np.swapaxes: source shape unknown")
+    rank = len(shape)
+    i, j = _const_axis(args[1], rank), _const_axis(args[2], rank)
+    if i is None or j is None:
+        raise NotImplementedError("np.swapaxes: axes must be constant ints in range")
+    perm = list(range(rank))
+    perm[i], perm[j] = perm[j], perm[i]
+    perm_tuple = ast.Tuple(elts=[_const(p) for p in perm], ctx=ast.Load())
+    return expand_transpose(target, [a, perm_tuple], shape_table)
+
+
+def expand_expand_dims(target: ast.expr, args: List[ast.expr],
+                       shape_table: Dict[str, Tuple[str, ...]], kwargs=None) -> List[ast.stmt]:
+    """``out = np.expand_dims(a, axis)`` -> ``np.reshape(a, <a's shape with a size-1 axis
+    inserted at axis>)`` -- a metadata view, lowered as the reshape flat-copy."""
+    if not args_one_name(args):
+        raise NotImplementedError("np.expand_dims needs a Name first arg")
+    a = args[0]
+    shape = shape_table.get(a.id)
+    if not shape:
+        raise NotImplementedError("np.expand_dims: source shape unknown")
+    axis = _const_axis(_kwarg_or_pos(args, kwargs, 1, "axis"), len(shape) + 1)
+    if axis is None:
+        raise NotImplementedError("np.expand_dims: axis must be a constant int in range")
+    new = list(shape)
+    new.insert(axis, "1")
+    newshape = ast.Tuple(elts=[_const_or_name(str(t)) for t in new], ctx=ast.Load())
+    return expand_reshape(target, [a, newshape], shape_table)
+
+
+def expand_squeeze(target: ast.expr, args: List[ast.expr],
+                   shape_table: Dict[str, Tuple[str, ...]], kwargs=None) -> List[ast.stmt]:
+    """``out = np.squeeze(a[, axis])`` -> ``np.reshape(a, <a's shape with the size-1
+    axis / all size-1 axes dropped>)``. Without ``axis`` every unit dim is dropped; with
+    ``axis`` that one axis (which must be size-1) is dropped."""
+    if not args_one_name(args):
+        raise NotImplementedError("np.squeeze needs a Name first arg")
+    a = args[0]
+    shape = shape_table.get(a.id)
+    if not shape:
+        raise NotImplementedError("np.squeeze: source shape unknown")
+    axis_node = _kwarg_or_pos(args, kwargs, 1, "axis")
+    if axis_node is not None:
+        axis = _const_axis(axis_node, len(shape))
+        if axis is None or str(shape[axis]) != "1":
+            raise NotImplementedError("np.squeeze: axis must be a constant size-1 dim")
+        new = [t for k, t in enumerate(shape) if k != axis]
+    else:
+        new = [t for t in shape if str(t) != "1"]
+    new = new or ["1"]  # a fully-squeezed array is scalar-like -> keep a (1,) buffer
+    newshape = ast.Tuple(elts=[_const_or_name(str(t)) for t in new], ctx=ast.Load())
+    return expand_reshape(target, [a, newshape], shape_table)
 
 
 def expand_linspace(target: ast.expr, args: List[ast.expr],
@@ -4495,6 +4610,9 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "asarray"):   expand_copy,
     ("np", "ascontiguousarray"): expand_copy,
     ("np", "reshape"):   expand_reshape,
+    ("np", "swapaxes"):  expand_swapaxes,
+    ("np", "expand_dims"): expand_expand_dims,
+    ("np", "squeeze"):   expand_squeeze,
     ("np", "repeat"):    expand_repeat,
     ("np", "eye"):       expand_eye,
     ("np", "triu"):      expand_triu,
