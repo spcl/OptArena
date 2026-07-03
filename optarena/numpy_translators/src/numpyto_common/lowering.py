@@ -4879,6 +4879,14 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
                 for sub in ast.walk(e):
                     if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                         scalars_used_as_index.add(sub.id)
+        # ``np.take(a, idx[, axis])`` -- ``idx`` (a param array) holds gather indices, so
+        # it is an index array (must be int), even though ``take`` is not yet expanded into
+        # the ``a[idx[..]]`` subscript form the direct detection above keys on.
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
+                and node.func.attr == "take" and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Name) and node.args[1].id in name_to_arr):
+            index_arrays.add(node.args[1].id)
         for child in ast.iter_child_nodes(node):
             _walk(child)
 

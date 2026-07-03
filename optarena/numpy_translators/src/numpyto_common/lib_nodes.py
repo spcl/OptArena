@@ -504,6 +504,20 @@ def _iter_extent_of(expr: ast.expr,
                 else:
                     out = [e for e in base if not (isinstance(e, ast.Constant) and e.value == 1)]
                 return tuple(out) if out else (_const(1), )
+            if attr == "take" and len(expr.args) >= 2:
+                base = _iter_extent_of(expr.args[0], shape_table)
+                idx_ext = _iter_extent_of(expr.args[1], shape_table)
+                if base is None or idx_ext is None or len(idx_ext) != 1:
+                    return None
+                axis_node = _kwarg_or_pos(expr.args, expr.keywords, 2, "axis")
+                if axis_node is None:
+                    return idx_ext if len(base) == 1 else None  # flat take on a 1-D source
+                axis = _const_axis(axis_node, len(base))
+                if axis is None:
+                    return None
+                out = list(base)
+                out[axis] = idx_ext[0]
+                return tuple(out)
             if attr == "repeat":
                 return None
             # ``np.einsum(subscripts, *operands)`` -> the OUTPUT extent: one axis
@@ -2093,6 +2107,44 @@ def expand_squeeze(target: ast.expr, args: List[ast.expr],
     new = new or ["1"]  # a fully-squeezed array is scalar-like -> keep a (1,) buffer
     newshape = ast.Tuple(elts=[_const_or_name(str(t)) for t in new], ctx=ast.Load())
     return expand_reshape(target, [a, newshape], shape_table)
+
+
+def expand_take(target: ast.expr, args: List[ast.expr],
+                shape_table: Dict[str, Tuple[str, ...]], kwargs=None) -> List[ast.stmt]:
+    """``out = np.take(a, idx[, axis=k])`` -> a gather loop nest. With ``axis=k`` the k-th
+    axis is indexed by the 1-D ``idx`` (out's k-th extent = idx's length) and every other
+    axis copied straight through: ``out[.., t, ..] = a[.., idx[t], ..]`` (the ML embedding
+    lookup). Without ``axis`` it is the flat take, which needs a 1-D source:
+    ``out[t] = a[idx[t]]``. ``idx`` is typed int by the index-array detection, which is
+    taught the ``np.take`` form."""
+    if not (args_one_name(args) and len(args) >= 2 and isinstance(args[1], ast.Name)):
+        raise NotImplementedError("np.take needs (Name a, Name idx)")
+    a, idx = args[0], args[1]
+    a_shape, idx_shape = shape_table.get(a.id), shape_table.get(idx.id)
+    if not a_shape or not idx_shape:
+        raise NotImplementedError("np.take: source / index shape unknown")
+    if len(idx_shape) != 1:
+        raise NotImplementedError("np.take: index must be 1-D")
+    axis_node = _kwarg_or_pos(args, kwargs, 2, "axis")
+    if axis_node is None:
+        if len(a_shape) != 1:
+            raise NotImplementedError("np.take without axis needs a 1-D source")
+        axis = 0
+    else:
+        axis = _const_axis(axis_node, len(a_shape))
+        if axis is None:
+            raise NotImplementedError("np.take: axis must be a constant int in range")
+    out_shape = list(a_shape)
+    out_shape[axis] = idx_shape[0]  # the gathered axis takes the index length
+    iters = [f"__tk{i}" for i in range(len(out_shape))]
+    src_index = [_name(v) for v in iters]
+    src_index[axis] = ast.Subscript(value=_name(idx.id), slice=_name(iters[axis]), ctx=ast.Load())
+    out_slot = _name(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[_name(v) for v in iters], ctx=ast.Load())
+    src_slot = src_index[0] if len(src_index) == 1 else ast.Tuple(elts=src_index, ctx=ast.Load())
+    body = [ast.Assign(
+        targets=[ast.Subscript(value=_name(target.id), slice=out_slot, ctx=ast.Store())],
+        value=ast.Subscript(value=_name(a.id), slice=src_slot, ctx=ast.Load()))]
+    return _wrap_for_loops(iters, out_shape, body)
 
 
 def expand_linspace(target: ast.expr, args: List[ast.expr],
@@ -4671,6 +4723,7 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "swapaxes"):  expand_swapaxes,
     ("np", "expand_dims"): expand_expand_dims,
     ("np", "squeeze"):   expand_squeeze,
+    ("np", "take"):      expand_take,
     ("np", "repeat"):    expand_repeat,
     ("np", "eye"):       expand_eye,
     ("np", "triu"):      expand_triu,
