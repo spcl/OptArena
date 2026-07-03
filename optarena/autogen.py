@@ -22,16 +22,12 @@ path and are NOT generated here.
 from __future__ import annotations
 
 import ast
-import os
 import pathlib
 import subprocess
 import sys
 from typing import Dict, Iterable, List, Optional
 
 from optarena import paths
-
-_REPO = pathlib.Path(paths.__file__).resolve().parent.parent
-_TRANSLATORS_SRC = _REPO / "optarena" / "numpy_translators" / "src"
 
 #: Auto-generatable Python targets and the canonical filename each produces
 #: (``{m}`` = the kernel's module_name). dace and jax are generated in-process;
@@ -43,18 +39,7 @@ def _file_for(module_name: str, target: str) -> str:
     return f"{module_name}_{target}.py"
 
 
-def _env() -> Dict[str, str]:
-    return {
-        **os.environ, "PYTHONPATH":
-        os.pathsep.join([str(_TRANSLATORS_SRC), str(_REPO),
-                         os.environ.get("PYTHONPATH", "")])
-    }
-
-
 def _emit_dace(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Path) -> str:
-    for p in (str(_TRANSLATORS_SRC), str(_REPO)):
-        if p not in sys.path:
-            sys.path.insert(0, p)
     from numpyto_c.frontend import parse_kernel
     from numpyto_c.dace_emit import emit_dace
     from numpyto_common.emit_io import write_generated
@@ -70,9 +55,6 @@ def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Pat
     # leaves a hand-written *_jax.py override (the committed microbench ones)
     # untouched.
     import json
-    for p in (str(_TRANSLATORS_SRC), str(_REPO)):
-        if p not in sys.path:
-            sys.path.insert(0, p)
     from numpyto_jax import emit_jax
     from numpyto_common.emit_io import write_generated
     func = json.loads(bench_info.read_text())["benchmark"]["func_name"]
@@ -81,9 +63,9 @@ def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Pat
     return write_generated(out, src, source=numpy_py.name)
 
 
-def _emit_cli(module: str, numpy_py: pathlib.Path, out_dir: pathlib.Path, extra: List[str], env: Dict[str, str]) -> str:
+def _emit_cli(module: str, numpy_py: pathlib.Path, out_dir: pathlib.Path, extra: List[str]) -> str:
     cmd = [sys.executable, "-m", module, "emit", "--kernel", str(numpy_py), "--out", str(out_dir), *extra]
-    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         tail = (r.stderr.strip().splitlines() or ["unknown error"])[-1]
         return f"fail: {tail}"
@@ -91,20 +73,18 @@ def _emit_cli(module: str, numpy_py: pathlib.Path, out_dir: pathlib.Path, extra:
     return "override" if " override " in f" {last} " else "ok"
 
 
-def _emit_target(target: str, numpy_py: pathlib.Path, kdir: pathlib.Path, bench_info: pathlib.Path,
-                 env: Dict[str, str]) -> str:
+def _emit_target(target: str, numpy_py: pathlib.Path, kdir: pathlib.Path, bench_info: pathlib.Path) -> str:
     if target == "dace":
         return _emit_dace(numpy_py, bench_info, kdir / _file_for(numpy_py.stem.removesuffix("_numpy"), "dace"))
     if target == "jax":
         return _emit_jax(numpy_py, bench_info, kdir / _file_for(numpy_py.stem.removesuffix("_numpy"), "jax"))
     if target == "cupy":
-        return _emit_cli("numpyto_cupy.cli", numpy_py, kdir, [], env)
+        return _emit_cli("numpyto_cupy.cli", numpy_py, kdir, [])
     if target in ("numba_n", "numba_np"):
         suffix = target.split("_", 1)[1]
-        return _emit_cli("numpyto_numba.cli", numpy_py, kdir,
-                         ["--bench-info", str(bench_info), "--suffix", suffix], env)
+        return _emit_cli("numpyto_numba.cli", numpy_py, kdir, ["--bench-info", str(bench_info), "--suffix", suffix])
     if target == "pythran":
-        return _emit_cli("numpyto_pythran.cli", numpy_py, kdir, ["--bench-info", str(bench_info)], env)
+        return _emit_cli("numpyto_pythran.cli", numpy_py, kdir, ["--bench-info", str(bench_info)])
     raise ValueError(f"unknown auto-gen target {target!r}; known: {TARGETS}")
 
 
@@ -116,12 +96,11 @@ def emit_targets(spec, targets: Iterable[str]) -> Dict[str, str]:
     numpy_py = kdir / f"{spec.module_name}_numpy.py"
     if not numpy_py.exists():
         return {}
-    env = _env()
     out: Dict[str, str] = {}
     with bench_info_tempfile(spec) as bi:
         for t in targets:
             try:
-                out[t] = _emit_target(t, numpy_py, kdir, bi, env)
+                out[t] = _emit_target(t, numpy_py, kdir, bi)
             except Exception as exc:  # noqa: BLE001 - report, keep going
                 out[t] = f"fail: {type(exc).__name__}: {exc}"
     return out
@@ -225,10 +204,6 @@ def emit_native(spec, langs: Iterable[str]) -> Dict[str, str]:
     ``--config`` so the emitter unpacks the logical array to that layout's member
     buffers); the file/symbol stem is ``<short>_<config>[_<fptype>]``."""
     from optarena.emit_bridge import emit_kernel
-    # write_generated lives under the translators src, which is not necessarily on
-    # the running process's path (run_benchmark sets only PYTHONPATH=repo root).
-    if str(_TRANSLATORS_SRC) not in sys.path:
-        sys.path.insert(0, str(_TRANSLATORS_SRC))
     from numpyto_common.emit_io import write_generated
     kdir = paths.BENCHMARKS / spec.relative_path
     numpy_py = kdir / f"{spec.module_name}_numpy.py"
@@ -290,8 +265,6 @@ _SIBLING_GLOBS = (
 def _is_generated(p: pathlib.Path) -> bool:
     """Single source of generator-marker detection (first line anchored). Shared
     with the emitter side so the override guard cannot drift between them."""
-    if str(_TRANSLATORS_SRC) not in sys.path:
-        sys.path.insert(0, str(_TRANSLATORS_SRC))
     from numpyto_common.emit_io import is_generated
     return is_generated(p)
 

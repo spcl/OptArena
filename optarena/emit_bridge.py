@@ -23,10 +23,6 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from optarena.spec import BenchSpec, DEFAULT_FUZZ
 
-#: ``src`` root that holds every NumpyToX emitter package (on PYTHONPATH for the
-#: subprocess emit). Renamed from the old single-package ``NumpyToC`` layout.
-_TRANSLATORS_SRC = pathlib.Path(__file__).parent / "numpy_translators" / "src"
-
 
 def _layouts_to_raw(layouts: Dict[str, Any]) -> Dict[str, Any]:
     """Invert ``spec._parse_sparse_layouts`` back to the JSON-native shape
@@ -237,10 +233,5 @@ def emit_kernel(name: str,
             cmd += ["--config", config]
         if precision:
             cmd += ["--precision", precision]
-        env = {**os.environ, **(extra_env or {})}
-        # PREPEND the emitter src so it is importable even when PYTHONPATH is
-        # already set (setdefault would skip it and the emit would fail with
-        # "No module named 'numpyto_common'").
-        existing = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = str(_TRANSLATORS_SRC) + (os.pathsep + existing if existing else "")
+        env = {**os.environ, **extra_env} if extra_env else None
         return subprocess.run(cmd, env=env).returncode
