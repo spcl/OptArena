@@ -542,6 +542,17 @@ def _iter_extent_of(expr: ast.expr,
                 summed = "(" + ") + (".join(s[axis] for s in shapes) + ")"
                 base[axis] = summed
                 return tuple(_const_or_name(t) for t in base)
+            # ``np.stack((a, b, ...), axis=k)`` -> the operands' common shape with a NEW
+            # size-N axis inserted at k (N = number of operands); out's rank = rank + 1.
+            if attr == "stack" and expr.args:
+                try:
+                    names, shapes, _ = _concat_operands_axis(expr.args, expr.keywords, shape_table)
+                    axis = _stack_axis(expr.args, expr.keywords, len(shapes[0]))
+                except NotImplementedError:
+                    return None
+                out = [_const_or_name(t) for t in shapes[0]]
+                out.insert(axis, _const(len(names)))
+                return tuple(out)
         # Elementwise / unary math functions (abs, sqrt, exp, sin,
         # cos, log, etc.) preserve the operand's iter extent. Pick
         # the first arg whose extent resolves.
@@ -2012,14 +2023,9 @@ def expand_transpose(target: ast.expr, args: List[ast.expr],
 
 def _const_axis(node: Optional[ast.expr], rank: int) -> Optional[int]:
     """A (possibly negative) constant-int axis normalized to ``[0, rank)``; ``None`` when
-    ``node`` is not a plain int constant or the axis is out of range. A negative literal
-    parses as ``UnaryOp(USub, Constant(n))`` -- not ``Constant(-n)`` -- so handle both."""
-    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)
-            and isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int)):
-        val = -node.operand.value
-    elif isinstance(node, ast.Constant) and isinstance(node.value, int):
-        val = node.value
-    else:
+    ``node`` is not a plain int constant or the axis is out of range."""
+    val = _const_int(node)
+    if val is None:
         return None
     ax = val + rank if val < 0 else val
     return ax if 0 <= ax < rank else None
@@ -2428,6 +2434,58 @@ def expand_concatenate(target: ast.expr, args: List[ast.expr],
         out.extend(_wrap_for_loops(iters, s, body))
         offset_tok = (f"({offset_tok}) + ({s[axis]})"
                       if offset_tok != "0" else str(s[axis]))
+    return out
+
+
+def _const_int(node: Optional[ast.expr]) -> Optional[int]:
+    """A plain (possibly negative) int constant, or ``None``. A negative literal parses as
+    ``UnaryOp(USub, Constant(n))`` -- not ``Constant(-n)`` -- so handle both."""
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)
+            and isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int)):
+        return -node.operand.value
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    return None
+
+
+def _stack_axis(args, kwargs, rank: int) -> int:
+    """The (possibly negative) NEW-axis position for ``np.stack``, normalized to
+    ``[0, rank]`` (an insert position, so ``rank`` -- append -- is valid, unlike
+    concatenate's ``[0, rank)``)."""
+    axis = 0
+    if len(args) >= 2 and _const_int(args[1]) is not None:
+        axis = _const_int(args[1])
+    for kw in (kwargs or []):
+        if kw.arg == "axis" and _const_int(kw.value) is not None:
+            axis = _const_int(kw.value)
+    if axis < 0:
+        axis += rank + 1
+    if not (0 <= axis <= rank):
+        raise NotImplementedError("np.stack: axis out of range")
+    return axis
+
+
+def expand_stack(target: ast.expr, args: List[ast.expr],
+                 shape_table: Dict[str, Tuple[str, ...]], kwargs=None) -> List[ast.stmt]:
+    """``out = np.stack((a, b, ...), axis=k)`` -- join N same-shape operands along a NEW
+    axis ``k`` (out's k-th extent = N, out's rank = operand rank + 1). Operand ``s`` is
+    copied to ``out`` at position ``s`` of the inserted axis, every other axis 1:1:
+    ``out[.., s, ..] = operand_s[..]``. (concatenate joins an EXISTING axis; stack inserts
+    one.) -- ML residual/head stacking."""
+    names, shapes, _ = _concat_operands_axis(args, kwargs, shape_table)
+    rank = len(shapes[0])
+    axis = _stack_axis(args, kwargs, rank)
+    iters = [_make_iter_name("__st", d) for d in range(rank)]
+    src_slot = (_name(iters[0]) if rank == 1 else ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
+    out: List[ast.stmt] = []
+    for s_idx, (nm, s) in enumerate(zip(names, shapes)):
+        tgt_elts = [_name(iters[d]) for d in range(rank)]
+        tgt_elts.insert(axis, _const(s_idx))
+        tgt_slot = tgt_elts[0] if len(tgt_elts) == 1 else ast.Tuple(elts=tgt_elts, ctx=ast.Load())
+        body = [ast.Assign(
+            targets=[ast.Subscript(value=_name(target.id), slice=tgt_slot, ctx=ast.Store())],
+            value=ast.Subscript(value=_name(nm), slice=src_slot, ctx=ast.Load()))]
+        out.extend(_wrap_for_loops(iters, s, body))
     return out
 
 
@@ -4618,6 +4676,7 @@ NP_CALL_EXPANDERS: Dict[Tuple[str, str], Callable] = {
     ("np", "triu"):      expand_triu,
     ("np", "hstack"):    expand_hstack,
     ("np", "concatenate"): expand_concatenate,
+    ("np", "stack"):     expand_stack,
     ("np", "flip"):      expand_flip,
     ("np", "linspace"):  expand_linspace,
     ("np", "arange"):    expand_arange,
