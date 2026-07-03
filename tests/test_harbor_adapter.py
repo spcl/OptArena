@@ -21,8 +21,8 @@ from optarena import hf_export
 
 
 def _emitter_and_gcc():
-    from optarena.emit_bridge import _TRANSLATORS_SRC
-    return (_TRANSLATORS_SRC / "numpyto_c" / "cli.py").exists() and shutil.which("gcc")
+    import importlib.util
+    return importlib.util.find_spec("numpyto_c") is not None and shutil.which("gcc")
 
 
 def test_generates_terminal_bench_task_layout(tmp_path):
