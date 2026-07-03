@@ -17,17 +17,13 @@ import json
 import pathlib
 import shutil
 import subprocess
-import sys
 import tempfile
 
 import numpy as np
 import pytest
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "optarena" / "numpy_translators" / "src"))
-
-from numpyto_c.frontend import parse_kernel  # noqa: E402
-from numpyto_c.lowering import lower  # noqa: E402
+from numpyto_c.frontend import parse_kernel
+from numpyto_c.lowering import lower
 from numpyto_c.emit import emit_c, emit_cpp  # noqa: E402
 from numpyto_c.bindings import emit_binding  # noqa: E402
 from numpyto_fortran.emit import emit_fortran  # noqa: E402

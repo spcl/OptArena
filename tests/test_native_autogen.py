@@ -20,14 +20,8 @@ import tempfile
 import numpy as np
 import pytest
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
-TRANSLATORS = REPO / "optarena" / "numpy_translators" / "src"
-for _p in (str(REPO), str(TRANSLATORS)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from optarena import paths  # noqa: E402
-from optarena.spec import BenchSpec  # noqa: E402
+from optarena import paths
+from optarena.spec import BenchSpec
 
 KERNEL = "tsvc_2_s212"  # 1-D: a,b outputs; c,d inputs; LEN_1D symbol
 #: framework -> the compiler binary that must be present to build it. Polly/Pluto
@@ -36,7 +30,7 @@ _COMPILER = {"cc": "gcc", "llvm": "clang", "fortran": "gfortran", "polly": "clan
 
 
 def _emitter_present() -> bool:
-    return (TRANSLATORS / "numpyto_c" / "cli.py").exists()
+    return importlib.util.find_spec("numpyto_c.cli") is not None
 
 
 @pytest.mark.skipif(not _emitter_present(), reason="translators absent")
@@ -281,7 +275,6 @@ def test_int32_array_promoted_on_read(framework, target, compiler, ext):
         numpy_py.write_text(_INT32_SRC)
         bi = out / "bi.json"
         bi.write_text(json.dumps(_INT32_BENCH))
-        env = {**__import__("os").environ, "PYTHONPATH": str(TRANSLATORS)}
         # Always emit C (it writes the .c/.cpp + the canonical binding JSON, the
         # single source of the ABI arg order); also emit Fortran when needed.
         mods = ["numpyto_c.cli"] + (["numpyto_fortran.cli"] if target == "fortran" else [])
@@ -292,7 +285,6 @@ def test_int32_array_promoted_on_read(framework, target, compiler, ext):
                 str(bi), "--out",
                 str(out)
             ],
-                               env=env,
                                capture_output=True,
                                text=True)
             assert r.returncode == 0, r.stderr
