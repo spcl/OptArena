@@ -159,6 +159,163 @@ def _array_annotation(arr) -> str:
     return f"{_dace_dtype(arr.dtype)}[{shape}]"
 
 
+class _DesugarTernary(ast.NodeTransformer):
+    """dace's frontend rejects a conditional expression as an assignment RHS
+    (``t = A if C else B`` -> "the rhs may only be data, numerical/boolean constants
+    and symbols"). Rewrite it to an ``if/else`` statement, which dace traces. Covers the
+    divide-by-zero guards the lowered sparse solves emit -- gmres's least-squares
+    back-substitution: ``factor = H[r,p] / H[p,p] if H[p,p] != 0.0 else 0.0``."""
+
+    def visit_Assign(self, node: ast.Assign):
+        self.generic_visit(node)
+        if isinstance(node.value, ast.IfExp) and len(node.targets) == 1:
+            tgt = node.targets[0]
+            return ast.copy_location(
+                ast.If(test=node.value.test,
+                       body=[ast.Assign(targets=[copy.deepcopy(tgt)], value=node.value.body)],
+                       orelse=[ast.Assign(targets=[copy.deepcopy(tgt)], value=node.value.orelse)]), node)
+        return node
+
+
+#: numpy allocators whose FIRST argument is a shape tuple (so the identifiers inside it
+#: are array DIMENSIONS that dace requires to be symbolic, not runtime scalars).
+_ALLOC_FUNCS = frozenset({"zeros", "empty", "ones"})
+
+
+def _is_symbol_expr(node: ast.AST, allowed: set) -> bool:
+    """True iff ``node`` is a shape expression dace can evaluate as a symbol: names drawn
+    from ``allowed``, integer constants, ``+ - * // %`` / unary sign, and ``min``/``max``
+    (the closed-form the caller can re-evaluate to bind the promoted symbol)."""
+    if isinstance(node, ast.Name):
+        return node.id in allowed
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, int)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)):
+        return _is_symbol_expr(node.left, allowed) and _is_symbol_expr(node.right, allowed)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        return _is_symbol_expr(node.operand, allowed)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("min", "max"):
+        return bool(node.args) and all(_is_symbol_expr(a, allowed) for a in node.args)
+    return False
+
+
+def _shape_ident_candidates(fn_ast: ast.AST, known: set) -> set:
+    """Identifiers used inside an ``np.zeros/empty/ones`` shape argument that are not
+    already an array / scalar / symbol -- body-computed scalars that feed a transient's
+    shape, which dace forbids (shapes must be symbolic). These are promoted to symbols."""
+    names = set()
+    for node in ast.walk(fn_ast):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _ALLOC_FUNCS
+                and node.args):
+            for sub in ast.walk(node.args[0]):
+                if isinstance(sub, ast.Name) and sub.id not in known:
+                    names.add(sub.id)
+    return names
+
+
+def _scan_size_assigns(fn_ast: ast.AST, targets: set):
+    """For each name in ``targets`` assigned in the body: its FIRST (defining) RHS, the
+    first-def order, and which names are assigned more than once. ``ast.walk`` is
+    breadth-first, so a top-level def is always seen before a loop-nested reassignment."""
+    first_rhs, order, counts = {}, [], {}
+    for node in ast.walk(fn_ast):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            nm = node.targets[0].id
+            if nm in targets:
+                counts[nm] = counts.get(nm, 0) + 1
+                if nm not in first_rhs:
+                    first_rhs[nm] = node.value
+                    order.append(nm)
+    reassigned = {nm for nm, c in counts.items() if c > 1}
+    return first_rhs, order, reassigned
+
+
+def _plan_size_promotion(fn_ast: ast.AST, known: set):
+    """Plan the promotion of body-computed size scalars to dace symbols.
+
+    Returns ``(order, symbol_defs, reassigned)``: ``order`` the names to declare as
+    ``dc.symbol`` (dependency order); ``symbol_defs`` ``[(name, rhs_src)]`` so the caller
+    can re-evaluate each dimension to bind it (an ABI value, not a program argument);
+    ``reassigned`` the subset the body also mutates (a runtime iteration count that must
+    be split off the allocation symbol). Empty when nothing needs promotion, or when a
+    def is not a pure symbol expression (then the kernel is left unchanged / unbuildable
+    rather than silently mis-lowered)."""
+    cand = _shape_ident_candidates(fn_ast, known)
+    if not cand:
+        return [], [], set()
+    body_assigned = {
+        a.targets[0].id
+        for a in ast.walk(fn_ast)
+        if isinstance(a, ast.Assign) and len(a.targets) == 1 and isinstance(a.targets[0], ast.Name)
+    }
+    # Transitive closure: a promoted def's own operands must be symbols too, so pull in
+    # any body-assigned dependency (m = min(max_iter, n) drags in n).
+    first_rhs, order, reassigned = _scan_size_assigns(fn_ast, cand)
+    changed = True
+    while changed:
+        changed = False
+        for nm in list(order):
+            for sub in ast.walk(first_rhs[nm]):
+                if isinstance(sub, ast.Name) and sub.id not in known and sub.id not in cand and sub.id in body_assigned:
+                    cand.add(sub.id)
+                    changed = True
+        if changed:
+            first_rhs, order, reassigned = _scan_size_assigns(fn_ast, cand)
+    allowed = known | cand
+    symbol_defs = []
+    for nm in order:
+        if not _is_symbol_expr(first_rhs[nm], allowed):
+            return [], [], set()  # non-symbolic size -> not safely promotable
+        symbol_defs.append((nm, ast.unparse(first_rhs[nm])))
+    # Every candidate must have a def we can bind; a shape ident with no body assignment
+    # would be an unbound symbol, so refuse the whole promotion (leave the kernel as-is).
+    if set(order) != cand:
+        return [], [], set()
+    return order, symbol_defs, reassigned
+
+
+class _SplitReassignedSize(ast.NodeTransformer):
+    """A promoted size symbol the body also REASSIGNS (gmres's ``m = k + 1`` on early
+    convergence) can't remain a single symbol: dace symbols are immutable, and that
+    reassignment is the *runtime* iteration count, not the allocation size. Keep the
+    symbol for ALLOCATION shapes (dace needs a symbol there) and route every other use --
+    loop bounds, indices -- through a runtime scalar ``<name>_iter`` seeded from the
+    symbol and updated by the reassignment. The workspace is allocated to the symbolic
+    upper bound; the tail past ``<name>_iter`` stays zero and is never read into the
+    result, so this matches the reference exactly. The defining assignment (the first,
+    e.g. ``m = min(max_iter, n)``) is dropped -- the caller binds the symbol's value."""
+
+    def __init__(self, names):
+        self.names = set(names)
+        self._defined = set()  # first assignment per name = the (dropped) def
+        self._in_alloc_shape = False
+
+    def visit_Assign(self, node: ast.Assign):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.names:
+            nm = node.targets[0].id
+            if nm not in self._defined:
+                self._defined.add(nm)
+                return None  # drop the defining assignment; the symbol value is caller-bound
+        self.generic_visit(node)  # a reassignment: target + rhs uses rename to <name>_iter
+        return node
+
+    def visit_Call(self, node: ast.Call):
+        if isinstance(node.func, ast.Attribute) and node.func.attr in _ALLOC_FUNCS and node.args:
+            prev, self._in_alloc_shape = self._in_alloc_shape, True
+            node.args[0] = self.visit(node.args[0])  # shape arg: leave the symbol in place
+            self._in_alloc_shape = prev
+            node.args[1:] = [self.visit(a) for a in node.args[1:]]
+            node.keywords = [self.visit(k) for k in node.keywords]
+            return node
+        self.generic_visit(node)
+        return node
+
+    def visit_Name(self, node: ast.Name):
+        if node.id in self.names and not self._in_alloc_shape:
+            node.id = f"{node.id}_iter"
+        return node
+
+
 def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     """Return the source of a ``<short>_dace.py`` module for ``kir``."""
     name = fn_name or kir.kernel_name
@@ -190,6 +347,55 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     needs_complex = any(_dace_dtype(a.dtype) == "dc_complex_float"
                         for a in kir.arrays) or any(_dace_dtype(s.dtype) == "dc_complex_float" for s in kir.scalars)
 
+    # Body: the numpy reference desugared for the verbatim-body backends -- the
+    # SAME pass numba/pythran use, so dace gains feature parity (np.fft, fancy
+    # multi-index gather, np.add.at scatter, axis reductions, boolean-mask
+    # assignment, ... lower to the plain loops a @dc.program traces). The
+    # function is renamed to kir.kernel_name first so the desugar seeds its rank/
+    # dtype tables from the kir arrays; falls back to the verbatim body if the
+    # desugar cannot parse (it never should for a valid kernel).
+    fn_ast = copy.deepcopy(kir.tree)
+    fn_ast.name = kir.kernel_name
+    try:
+        desugared = desugar_for_python_backend(ast.unparse(fn_ast), kir, backend="dace")
+        fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
+    except Exception:  # noqa: BLE001 -- keep the verbatim body if desugar fails
+        fn_ast = kir.tree
+    # dace's frontend has no conditional-expression RHS: lower ``t = A if C else B`` to
+    # an if/else statement (the divide-by-zero guards in the lowered solves).
+    fn_ast = _DesugarTernary().visit(fn_ast)
+    # A logical sparse ``A @ x`` lowered to CSR loops leaves ``<acc> =
+    # __optarena_zeros__()`` markers for its fixed-shape accumulators -- turn them into
+    # ``np.zeros`` / ``np.ones`` (per the recorded fill kind) so the @dc.program
+    # allocates the transient with its declared initial value.
+    zeros_locals = vars(kir.tree).get("zeros_locals", {}) or {}
+    zeros_fills = vars(kir.tree).get("zeros_fills", {}) or {}
+    local_dtypes = vars(kir.tree).get("local_dtypes", {}) or {}
+    default_dtype = vars(kir.tree).get("float_precision") or "float64"
+    fn_ast = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype).visit(fn_ast)
+    # dace has no runtime ``.shape`` and its symbols are immutable: rewrite
+    # ``arr.shape[k]`` to the symbolic dimension and drop any recompute of a size
+    # symbol (``M = A_indptr.shape[0] - 1``), which is redundant + illegal in dace.
+    fn_ast = _ShapeToSymbol(arr_shapes).visit(fn_ast)
+    # dace forbids a data-dependent (runtime-scalar) array shape, but the lowered Krylov
+    # workspaces have body-computed dims (gmres ``Q = zeros((n, m + 1))`` with
+    # ``m = min(max_iter, n)``). Promote those size scalars to dc.symbols the caller
+    # binds; split off a runtime iteration count for a size the body also reassigns.
+    promoted, symbol_defs, reassigned = _plan_size_promotion(fn_ast, set(arrays) | set(scalars) | set(symbol_names))
+    for nm in promoted:
+        if nm not in symbol_names:
+            symbol_names.append(nm)
+    if reassigned:
+        fn_ast = _SplitReassignedSize(reassigned).visit(fn_ast)
+        ast.fix_missing_locations(fn_ast)
+        fn_ast.body[0:0] = [ast.parse(f"{nm}_iter = {nm}").body[0] for nm in reassigned]
+    fn_ast = _DropSymbolAssign(symbol_names).visit(fn_ast)
+    ast.fix_missing_locations(fn_ast)
+    body = list(fn_ast.body)
+    if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        body = body[1:]
+
     out: List[str] = []
     out.append('"""DaCe program auto-generated from the numpy reference '
                'by numpyto_c.dace_emit."""')
@@ -208,43 +414,15 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
             out.append(f"{names} = (dc.symbol(s, dtype=dc.int64) "
                        f"for s in ({srcs}))")
         out.append("")
+    if symbol_defs:
+        # Per-dimension binding recipe for the harness: each promoted symbol is not a
+        # program argument, so the caller evaluates these (in order) over the known
+        # symbol values to supply them at call time. See sparse_oracle._run_dace.
+        out.append(f"__optarena_symbol_defs__ = {symbol_defs!r}")
+        out.append("")
     out.append("")
     out.append("@dc.program")
     out.append(f"def {name}({', '.join(params)}):")
-
-    # Body: the numpy reference desugared for the verbatim-body backends -- the
-    # SAME pass numba/pythran use, so dace gains feature parity (np.fft, fancy
-    # multi-index gather, np.add.at scatter, axis reductions, boolean-mask
-    # assignment, ... lower to the plain loops a @dc.program traces). The
-    # function is renamed to kir.kernel_name first so the desugar seeds its rank/
-    # dtype tables from the kir arrays; falls back to the verbatim body if the
-    # desugar cannot parse (it never should for a valid kernel).
-    fn_ast = copy.deepcopy(kir.tree)
-    fn_ast.name = kir.kernel_name
-    try:
-        desugared = desugar_for_python_backend(ast.unparse(fn_ast), kir, backend="dace")
-        fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
-    except Exception:  # noqa: BLE001 -- keep the verbatim body if desugar fails
-        fn_ast = kir.tree
-    # A logical sparse ``A @ x`` lowered to CSR loops leaves ``<acc> =
-    # __optarena_zeros__()`` markers for its fixed-shape accumulators -- turn them into
-    # ``np.zeros`` / ``np.ones`` (per the recorded fill kind) so the @dc.program
-    # allocates the transient with its declared initial value.
-    zeros_locals = vars(kir.tree).get("zeros_locals", {}) or {}
-    zeros_fills = vars(kir.tree).get("zeros_fills", {}) or {}
-    local_dtypes = vars(kir.tree).get("local_dtypes", {}) or {}
-    default_dtype = vars(kir.tree).get("float_precision") or "float64"
-    fn_ast = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype).visit(fn_ast)
-    # dace has no runtime ``.shape`` and its symbols are immutable: rewrite
-    # ``arr.shape[k]`` to the symbolic dimension and drop any recompute of a size
-    # symbol (``M = A_indptr.shape[0] - 1``), which is redundant + illegal in dace.
-    fn_ast = _ShapeToSymbol(arr_shapes).visit(fn_ast)
-    fn_ast = _DropSymbolAssign(symbol_names).visit(fn_ast)
-    ast.fix_missing_locations(fn_ast)
-    body = list(fn_ast.body)
-    if (body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant)
-            and isinstance(body[0].value.value, str)):
-        body = body[1:]
     if not body:
         out.append("    pass")
     else:

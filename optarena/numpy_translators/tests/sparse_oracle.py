@@ -640,6 +640,11 @@ def _run_dace(k: SparseKernel, info: Dict[str, Any], sparse_logical: Dict[str, A
     # symbols resolve from the dataset dims (env) or an int scalar the kir promoted to a
     # symbol (a solver's max_iter, used as a loop bound).
     sym_vals = {**{n: v for n, v in scalars.items() if isinstance(v, (int, np.integer))}, **env}
+    # A promoted workspace dimension (gmres ``n = N``, ``m = min(max_iter, n)``) is a dace
+    # symbol the emitter cannot pass as an argument -- the caller binds it by evaluating
+    # the recorded closed-form recipe, in dependency order, over the already-known values.
+    for name, expr in vars(mod).get("__optarena_symbol_defs__", []):
+        sym_vals[name] = int(eval(expr, {"__builtins__": {}}, {"min": min, "max": max, **sym_vals}))
     syms = {s: int(sym_vals[s]) for s in free_syms if s in sym_vals}
     try:
         ret = compiled(**call, **syms)
