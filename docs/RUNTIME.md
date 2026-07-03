@@ -39,6 +39,15 @@ or set `[environment].type` in `adapters/optarena/optarena.yaml`. `apptainer` an
 `udocker` run an image directly without Harbor (`optarena.containers.local_run_command`).
 Build the two images once (Apptainer/podman, both rootless), then run with any backend.
 
+**Hardware images (cpu / nvidia / amd).** Each hardware target has its own agent
+image — `containers/{cpu,nvidia,amd}.def` (Apptainer) plus the matching `.Dockerfile`
+— installing `requirements/<hw>.txt`. Build one with `apptainer build
+optarena-<hw>.sif containers/<hw>.def` (or the Dockerfile), then
+`scripts/run_agent_in_container.sh <hw> -- <agent args>` runs it with the device
+passed through automatically: `--nv` / `--gpus all` (nvidia), `--rocm` + kfd/dri
+(amd), nothing for cpu. The cpu image pins CPU-only torch; nvidia/amd pull the
+CUDA/ROCm wheels (`cupy-cuda13x`, `jax[cuda12]`, `torch`, `triton`).
+
 ## HPC notes
 
 The norm on clusters is **build off-cluster, run on-cluster**:
