@@ -40,14 +40,13 @@ services:
     working_dir: /work
     environment:
       OPTARENA_IMAGE: ${OPTARENA_IMAGE:-optarena:cpu}
-      PYTHONPATH: /work:/work/optarena/numpy_translators/src
       OPTARENA_SHARED_DIR: /shared   # agent-installed libs/headers the judge links against
       # Judge policy (overrides config.yaml service.* if set):
       OPTARENA_SERVICE_ORACLE: ${ORACLE:-numpy}      # numpy | c | both
       OPTARENA_SERVICE_BASELINE: ${BASELINE:-numpy}  # numpy | c | both
       OPTARENA_SERVICE_INPUT_MODE: ${INPUT_MODE:-source}  # source | library | either
       OPTARENA_SERVICE_PRESET: ${PRESET:-S}
-    command: python -m optarena.cli serve --host 0.0.0.0 --port 8800
+    command: sh -c "pip install --break-system-packages -e /work && exec python -m optarena.cli serve --host 0.0.0.0 --port 8800"
     # Exposed on the compose network as http://judge:8800 (publish to the host
     # only if you want to curl it directly):
     # ports: ["8800:8800"]
@@ -65,7 +64,6 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       OPTARENA_IMAGE: ${OPTARENA_IMAGE:-optarena:cpu}
-      PYTHONPATH: /work:/work/optarena/numpy_translators/src
       OPTARENA_SHARED_DIR: /shared   # install extra libs/headers here for the judge to link
       JUDGE_URL: http://judge:8800
       # The model the agent drives (host Ollama on the gateway, or an API key):
@@ -75,4 +73,4 @@ services:
     # prompt, e.g.:
     #   python -m optarena.cli prompt gemm --service --judge-url http://judge:8800 > /task.md
     #   mini-swe-agent --task /task.md ...
-    command: ["sleep", "infinity"]
+    command: ["sh", "-c", "pip install --break-system-packages -e /work && exec sleep infinity"]
