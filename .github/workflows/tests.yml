@@ -173,6 +173,20 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rs --timeout=600 tests/ports/
 
+      - name: Phase 2c -- benchmark reference validation (numpy kernel vs naive loop / GT4Py DSL / physics)
+        # The co-located test_reference.py files check each benchmark's numpy kernel
+        # against an independent reference: seissol vs a naive einsum/GEMM loop, fv3
+        # vs the GT4Py DSL (physics-invariant fallback when gt4py is absent), cloudsc
+        # vs physical preconditions. They share the test_reference basename, hence
+        # importlib import-mode; optional data + pending translator features self-skip.
+        run: |
+          python -m pytest -q -p no:cacheprovider -rs --import-mode=importlib --timeout=600 \
+            optarena/benchmarks/hpc/dense_linear_algebra/seissol_batched_gemm/test_reference.py \
+            optarena/benchmarks/hpc/dense_linear_algebra/seissol_tensor_contraction/test_reference.py \
+            optarena/benchmarks/hpc/structured_grids/cloudsc/test_reference.py \
+            optarena/benchmarks/hpc/structured_grids/fv3_dycore/test_reference.py \
+            optarena/benchmarks/hpc/structured_grids/fv3_xppm/test_reference.py
+
       - name: Phase 3 -- agent-bench (tools + no-op/BLAS optimizers, both modes, in-proc judge)
         run: |
           python -m pytest -q -p no:cacheprovider --timeout=600 \
