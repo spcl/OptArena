@@ -17,8 +17,8 @@ the optarena application.
 import ast
 from typing import Dict, Optional
 
-from .comments import strip_comments, tree_sitter_available
-from .mangle import build_name_map, mangle
+from numpyto_common.sanitize.comments import strip_comments, tree_sitter_available
+from numpyto_common.sanitize.mangle import build_name_map, mangle
 
 __all__ = ["strip_comments", "mangle", "build_name_map", "tree_sitter_available", "sanitize"]
 
@@ -55,10 +55,10 @@ def _strip_docstrings(tree: ast.AST) -> None:
     """Drop the leading string-expression statement of the module and of every
     function / class definition."""
     for node in ast.walk(tree):
-        body = getattr(node, "body", None)
-        if (isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                and body and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
+        if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # only these carry a docstring; guarding first lets us read .body directly
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
                 and isinstance(body[0].value.value, str)):
             node.body = body[1:] or [ast.Pass()]
 
