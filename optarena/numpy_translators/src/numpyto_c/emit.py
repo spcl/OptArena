@@ -358,6 +358,11 @@ class _CBodyEmitter(BaseEmitter):
         if isinstance(node, ast.Name):
             return node.id
         if isinstance(node, ast.UnaryOp):
+            # ``~x`` on a BOOLEAN operand is numpy logical negation (mask
+            # inversion), not integer bitwise NOT -- emit ``!`` so a 0/1 bool
+            # inverts to 1/0 (bitwise ``~`` would give the truthy ``-2``).
+            if isinstance(node.op, ast.Invert) and self._operand_is_bool(node.operand):
+                return f"(!{self.emit_expr(node.operand)})"
             op = {ast.USub: "-", ast.UAdd: "+", ast.Not: "!", ast.Invert: "~"}.get(type(node.op))
             if op is None:
                 raise NotImplementedError(f"unary {type(node.op).__name__}")
@@ -788,6 +793,21 @@ class _CBodyEmitter(BaseEmitter):
                 if a.name == name:
                     return a.dtype
         return dt
+
+    def _operand_is_bool(self, node: ast.AST) -> bool:
+        """True when ``node`` is a boolean value: a comparison / bool-op /
+        logical-not, or a Name / Subscript of a boolean-typed array. Used to
+        emit ``~mask`` as logical ``!`` rather than integer bitwise ``~`` (which
+        on a 0/1 bool yields the truthy ``-2``)."""
+        if isinstance(node, (ast.Compare, ast.BoolOp)):
+            return True
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return True
+        if isinstance(node, ast.Name):
+            return self._dtype_for_name(node.id) in ("bool", "bool_")
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            return self._dtype_for_name(node.value.id) in ("bool", "bool_")
+        return False
 
     def _is_complex_subscript_legacy(self, node: ast.AST) -> bool:
         """Retained for the original Subscript(Name) shortcut."""

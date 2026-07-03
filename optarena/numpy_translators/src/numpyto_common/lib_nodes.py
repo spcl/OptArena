@@ -251,15 +251,15 @@ def _reduction(target: ast.expr, arr_node: ast.expr, init: ast.expr,
 
 
 def _slice_step_const(sl: ast.Slice) -> Optional[int]:
-    """Return a Slice's constant integer step (``a[lo:hi:k]`` -> ``k``), or
-    ``None`` when there is no step or it is not a positive integer constant.
-    Negative / symbolic steps are unsupported (return ``None``)."""
+    """Return a Slice's constant integer step (``a[lo:hi:k]`` -> ``k``), or ``None`` when
+    there is no step or it is not a nonzero integer constant. A NEGATIVE step (``a[::-1]``
+    reverse, ``a[::-2]``) is returned as-is; callers handle the reverse index mapping and
+    take ``abs`` for the element count. A symbolic step is unsupported (``None``)."""
     step = sl.step
     if step is None:
         return None
-    if isinstance(step, ast.Constant) and isinstance(step.value, int) and step.value > 0:
-        return step.value
-    return None
+    v = _const_int(step)
+    return v if v not in (None, 0) else None
 
 
 def _slice_axes(node: ast.AST) -> List[ast.AST]:
@@ -643,13 +643,16 @@ def _iter_extent_of(expr: ast.expr,
                 # ``b[:, 0::2]`` over an even axis ``s`` -> ``s // 2``.
                 step = _slice_step_const(ax)
                 if step is not None and step != 1:
+                    # Element count is ceil(raw / |step|) -- a negative step (reverse)
+                    # spans the same number of elements as its positive magnitude.
+                    astep = abs(step)
                     if isinstance(raw, ast.Constant):
-                        ext.append(_const((raw.value + step - 1) // step))
+                        ext.append(_const((raw.value + astep - 1) // astep))
                     else:
                         ext.append(ast.BinOp(
                             left=ast.BinOp(left=raw, op=ast.Add(),
-                                           right=_const(step - 1)),
-                            op=ast.FloorDiv(), right=_const(step)))
+                                           right=_const(astep - 1)),
+                            op=ast.FloorDiv(), right=_const(astep)))
                 else:
                     ext.append(raw)
             elif isinstance(ax, ast.Name) and shape_table.get(ax.id):
@@ -1043,7 +1046,7 @@ def _read_axis_keepdims(args, kwargs):
     return axes, keepdims
 
 
-def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_fn=None):
+def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_fn=None, update_fn=None):
     """Generic axis-aware reduction.
 
     Lowers ``out = np.X(arr, axis=k, keepdims=True)`` into a nested
@@ -1058,6 +1061,11 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     :param post_fn: optional callable ``(target_lvalue, divisor) ->
         ast.stmt`` invoked after the reduction loop closes; used by
         mean to divide by the reduction-axis size.
+    :param update_fn: optional callable ``(store, load, src) -> ast.stmt``
+        that builds the per-element update STATEMENT, overriding the default
+        ``store = op_fn(load, src)`` assignment. Used by the if-guarded
+        boolean reductions (any / all / count_nonzero) which must not rely on
+        C's bool-as-int arithmetic (invalid in Fortran).
     """
     arr = args[0]
     shape = _resolve_shape(arr, shape_table)
@@ -1073,7 +1081,8 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
                    ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())),
             ctx=ast.Load())
         target_load = ast.Name(id=target.id, ctx=ast.Load())
-        body = [ast.Assign(targets=[target], value=op_fn(target_load, subscript))]
+        body = [update_fn(target, target_load, subscript) if update_fn
+                else ast.Assign(targets=[target], value=op_fn(target_load, subscript))]
         loops = _wrap_for_loops(iters, shape, body)
         stmts = [ast.Assign(targets=[target], value=_init_for(init, arr, n_dim))]
         stmts.extend(loops)
@@ -1157,7 +1166,8 @@ def _expand_axis_reduction(target, args, kwargs, shape_table, init, op_fn, post_
     else:
         init_node = init
     init_stmt = ast.Assign(targets=[out_sub], value=init_node)
-    update_stmt = ast.Assign(targets=[out_sub], value=op_fn(out_load, src_sub))
+    update_stmt = (update_fn(out_sub, out_load, src_sub) if update_fn
+                   else ast.Assign(targets=[out_sub], value=op_fn(out_load, src_sub)))
     # Inner loop nest over the reduction axes, deepest first.
     inner_stmts: List[ast.stmt] = [update_stmt]
     for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
@@ -1284,35 +1294,48 @@ def expand_prod(target, args, shape_table, kwargs=None):
         op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Mult(), right=x))
 
 
+def _truthy(x):
+    """``x != 0`` -- element truthiness. On a boolean mask the Fortran emitter
+    folds ``<logical> /= 0`` back to the bare logical; C reads it as 0/1."""
+    return ast.Compare(left=x, ops=[ast.NotEq()], comparators=[_const(0)])
+
+
+def _falsy(x):
+    return ast.Compare(left=x, ops=[ast.Eq()], comparators=[_const(0)])
+
+
+def _if_set(test_fn, value_fn):
+    """Build an ``update_fn`` that, per element, tests ``test_fn(src)`` and on
+    hit assigns ``value_fn(load)`` to the accumulator. Keeps the accumulator
+    INTEGER (0/1 or a count) so no backend needs bool-as-int arithmetic (which
+    Fortran rejects)."""
+    def _f(store, load, src):
+        return ast.If(test=test_fn(src), body=[ast.Assign(targets=[store], value=value_fn(load))], orelse=[])
+    return _f
+
+
 def expand_any(target, args, shape_table, kwargs=None):
-    """``s = np.any(A [, axis=k, keepdims=...])`` -- short-circuit OR
-    reduction. Result is 0/1 (int) at each kept-axis position. Init=0,
-    accumulator = ``acc || x``."""
+    """``s = np.any(A [, axis=k, keepdims=...])`` -- OR reduction. Init=0; each
+    truthy element sets the (integer 0/1) accumulator to 1."""
     return _expand_axis_reduction(
-        target, args, kwargs, shape_table,
-        init=_const(0),
-        op_fn=lambda acc, x: ast.BoolOp(op=ast.Or(), values=[acc, x]))
+        target, args, kwargs, shape_table, init=_const(0), op_fn=None,
+        update_fn=_if_set(_truthy, lambda load: _const(1)))
 
 
 def expand_all(target, args, shape_table, kwargs=None):
-    """``s = np.all(A [, axis=k, keepdims=...])`` -- short-circuit AND
-    reduction. Init=1; accumulator = ``acc && x``."""
+    """``s = np.all(A [, axis=k, keepdims=...])`` -- AND reduction. Init=1; each
+    falsy element clears the (integer 0/1) accumulator to 0."""
     return _expand_axis_reduction(
-        target, args, kwargs, shape_table,
-        init=_const(1),
-        op_fn=lambda acc, x: ast.BoolOp(op=ast.And(), values=[acc, x]))
+        target, args, kwargs, shape_table, init=_const(1), op_fn=None,
+        update_fn=_if_set(_falsy, lambda load: _const(0)))
 
 
 def expand_count_nonzero(target, args, shape_table, kwargs=None):
-    """``s = np.count_nonzero(A [, axis=k, keepdims=...])`` -- count
-    of non-zero elements. Init=0; accumulator = ``acc + (x != 0)``."""
+    """``s = np.count_nonzero(A [, axis=k, keepdims=...])`` -- count of non-zero
+    elements. Init=0; each truthy element increments the integer accumulator."""
     return _expand_axis_reduction(
-        target, args, kwargs, shape_table,
-        init=_const(0),
-        op_fn=lambda acc, x: ast.BinOp(
-            left=acc, op=ast.Add(),
-            right=ast.Compare(left=x, ops=[ast.NotEq()],
-                              comparators=[_const(0)])))
+        target, args, kwargs, shape_table, init=_const(0), op_fn=None,
+        update_fn=_if_set(_truthy, lambda load: ast.BinOp(left=load, op=ast.Add(), right=_const(1))))
 
 
 def expand_argmax(target, args, shape_table, kwargs=None):
@@ -5767,8 +5790,9 @@ class _CallHoister(ast.NodeTransformer):
         # expander sees a Name operand.
         key = self._key_of(node)
         if (key in ({("np", k) for k in {"sum", "max", "min", "mean", "prod",
-                                         "std", "repeat", "transpose", "reshape",
-                                         "triu", "tril", "flip", "copy"}}
+                                         "std", "var", "median", "any", "all",
+                                         "count_nonzero", "repeat", "transpose",
+                                         "reshape", "triu", "tril", "flip", "copy"}}
                     | {("np", "fft.fftn"), ("np", "fft.ifftn"),
                        ("np", "fft.fft"), ("np", "fft.ifft")})
                 and node.args and not isinstance(node.args[0], ast.Name)):

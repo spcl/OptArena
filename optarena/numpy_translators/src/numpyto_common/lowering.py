@@ -2246,6 +2246,15 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 # result position ``pos = ivar - lhs_start`` is ``lo + pos*k``.
                 # dwt2d Haar ``b[:, 0::2]`` with a full-slice LHS (lhs_start 0)
                 # -> ``b[i, 2*j]``.
+                # A NEGATIVE step with the start omitted (``a[::-1]`` / ``a[:hi:-1]``)
+                # begins at the LAST index ``axis_len - 1``, not 0 (numpy reverse), so
+                # ``a[::-1]`` reads ``a[(N - 1) - pos]`` rather than the wrong ``a[-pos]``.
+                if step < 0 and d.lower is None:
+                    _ss = self.array_shapes.get(rhs_name)
+                    if _ss and axis < len(_ss):
+                        _al = (_const(int(_ss[axis])) if str(_ss[axis]).isdigit()
+                               else ast.Name(id=str(_ss[axis]), ctx=ast.Load()))
+                        rhs_start = _binop(_al, ast.Sub(), _const(1))
                 pos: ast.expr = ivar
                 if not (isinstance(lhs_start, ast.Constant) and lhs_start.value == 0):
                     pos = _binop(ivar, ast.Sub(), lhs_start)
@@ -3031,9 +3040,50 @@ class _TupleSubscriptFolder(ast.NodeTransformer):
         return node
 
 
+def _collect_bool_names(tree: ast.AST, arrays) -> Set[str]:
+    """Names known to hold a boolean array.
+
+    The conservative criterion that separates ``arr[bool_mask]`` (a masked
+    select) from ``arr[int_idx]`` (an integer gather): only unambiguously
+    boolean producers count, so an integer index array is never misread as a
+    mask. A single forward pass over the body suffices because a mask is
+    defined before it is used (``m = a > c``; later ``m2 = m & other``)."""
+    bn: Set[str] = {a.name for a in arrays if a.dtype in ("bool", "bool_")}
+
+    def _is_bool(e: ast.AST) -> bool:
+        if isinstance(e, (ast.Compare, ast.BoolOp)):
+            return True
+        if isinstance(e, ast.Name):
+            return e.id in bn
+        if isinstance(e, ast.UnaryOp) and isinstance(e.op, ast.Invert):
+            return _is_bool(e.operand)
+        if isinstance(e, ast.BinOp) and isinstance(e.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
+            return _is_bool(e.left) and _is_bool(e.right)
+        if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and isinstance(e.func.value, ast.Name) \
+                and e.func.value.id == "np":
+            if e.func.attr in ("logical_and", "logical_or", "logical_not", "logical_xor",
+                               "isnan", "isinf", "isfinite", "greater", "greater_equal",
+                               "less", "less_equal", "equal", "not_equal"):
+                return True
+            if e.func.attr in ("zeros", "ones", "empty", "full", "zeros_like", "ones_like"):
+                for kw in e.keywords:
+                    dv = kw.value
+                    if kw.arg == "dtype" and ((isinstance(dv, ast.Attribute) and dv.attr in ("bool_", "bool"))
+                                              or (isinstance(dv, ast.Name) and dv.id == "bool")):
+                        return True
+        return False
+
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and _is_bool(node.value)):
+            bn.add(node.targets[0].id)
+    return bn
+
+
 class _BooleanMaskReductionRewriter(ast.NodeTransformer):
-    def __init__(self, shape_table=None):
+    def __init__(self, shape_table=None, bool_names=None):
         self.shape_table = shape_table or {}
+        self.bool_names = bool_names or set()
 
     """Peephole: rewrite ``tmp = arr[mask]; X = np.<reduction>(tmp)``
     into a single masked-iteration form that skips materialising the
@@ -3055,6 +3105,27 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
         i = 0
         while i < len(stmts):
             stmt = stmts[i]
+            # Inline single-statement form ``X = np.<reduction>(arr[mask])``
+            # (X a Name or Subscript LHS): the masked select is nested directly
+            # in the reduction call rather than bound to a temp. Gate on a
+            # KNOWN-boolean mask so an integer gather ``np.sum(a[idx])`` is left
+            # for the gather materialiser instead of becoming a masked loop.
+            inline = self._inline_masked_reduction(stmt)
+            if inline is not None:
+                arr, mask, op, tgt = inline
+                if isinstance(tgt, ast.Name):
+                    replacement = self._emit_masked(tgt.id, arr, mask, op)
+                else:
+                    scratch = f"__msk_res_{i}"
+                    replacement = self._emit_masked(scratch, arr, mask, op)
+                    if replacement is not None:
+                        replacement = list(replacement) + [ast.Assign(
+                            targets=[tgt], value=ast.Name(id=scratch, ctx=ast.Load()))]
+                        ast.fix_missing_locations(replacement[-1])
+                if replacement is not None:
+                    out.extend(replacement)
+                    i += 1
+                    continue
             # ``Name = Subscript(Name(arr), Name(mask))`` followed by
             # ``Name2 = np.<reduction>(Name)``
             if (isinstance(stmt, ast.Assign)
@@ -3101,6 +3172,38 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
             out.append(stmt)
             i += 1
         return out
+
+    def _inline_masked_reduction(self, stmt):
+        """Detect ``X = np.<reduction>(arr[mask])`` / ``X = arr[mask].<reduction>()``
+        as a single statement with a KNOWN-boolean ``mask``.
+
+        Returns ``(arr, mask, op, target)`` or ``None``. ``target`` is the LHS
+        (a Name or Subscript). The masked select is the sole reduction argument
+        (``np.sum``) or the call receiver (``.sum()``)."""
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            return None
+        tgt = stmt.targets[0]
+        if not isinstance(tgt, (ast.Name, ast.Subscript)):
+            return None
+        call = stmt.value
+        if not isinstance(call, ast.Call):
+            return None
+        func = call.func
+        sel = None
+        op = None
+        # Form ``np.<op>(arr[mask])``.
+        if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                and func.value.id == "np" and func.attr in {"mean", "sum", "max", "min"}
+                and len(call.args) == 1 and not call.keywords):
+            sel, op = call.args[0], func.attr
+        # Form ``arr[mask].<op>()``.
+        elif (isinstance(func, ast.Attribute) and func.attr in {"mean", "sum", "max", "min"}
+                and not call.args and not call.keywords):
+            sel, op = func.value, func.attr
+        if (isinstance(sel, ast.Subscript) and isinstance(sel.value, ast.Name)
+                and isinstance(sel.slice, ast.Name) and sel.slice.id in self.bool_names):
+            return sel.value.id, sel.slice.id, op, tgt
+        return None
 
     def _consumer_op(self, stmt, expected_name):
         """Detect a reduction consumer of ``expected_name`` in ``stmt``.
@@ -3203,24 +3306,29 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
                 body=[ast.If(test=mask_load, body=body, orelse=[])],
                 orelse=[]))
         elif op in {"max", "min"}:
-            # First mask hit seeds the accumulator; subsequent hits
-            # compare and update. Simplification: use the first
-            # element of arr as the seed (unconditional; the mask
-            # then refines).
+            # The FIRST masked hit seeds the accumulator; subsequent hits
+            # compare and update. Seeding from ``arr[0]`` unconditionally would
+            # be wrong when index 0 is masked out and more extreme than every
+            # masked value -- so a ``seen`` flag guards the seed instead.
             cmp = ast.Gt() if op == "max" else ast.Lt()
             out.append(ast.Assign(
                 targets=[ast.Name(id=res_name, ctx=ast.Store())],
                 value=ast.Subscript(
                     value=ast.Name(id=arr, ctx=ast.Load()),
                     slice=ast.Constant(value=0), ctx=ast.Load())))
-            body = [ast.If(
-                test=ast.Compare(left=arr_load, ops=[cmp],
-                                   comparators=[ast.Name(
-                                       id=res_name, ctx=ast.Load())]),
-                body=[ast.Assign(
-                    targets=[ast.Name(id=res_name, ctx=ast.Store())],
-                    value=arr_load)],
-                orelse=[])]
+            out.append(ast.Assign(
+                targets=[ast.Name(id=cnt_name, ctx=ast.Store())],
+                value=ast.Constant(value=0)))
+            update = ast.If(
+                test=ast.BoolOp(op=ast.Or(), values=[
+                    ast.Compare(left=ast.Name(id=cnt_name, ctx=ast.Load()),
+                                ops=[ast.Eq()], comparators=[ast.Constant(value=0)]),
+                    ast.Compare(left=arr_load, ops=[cmp],
+                                comparators=[ast.Name(id=res_name, ctx=ast.Load())])]),
+                body=[ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())], value=arr_load)],
+                orelse=[])
+            body = [update, ast.Assign(
+                targets=[ast.Name(id=cnt_name, ctx=ast.Store())], value=ast.Constant(value=1))]
             out.append(ast.For(
                 target=ast.Name(id=i_name, ctx=ast.Store()),
                 iter=ast.Call(
@@ -3457,6 +3565,10 @@ def _is_bool_expr(node: ast.AST, local_dtypes: Dict[str, str]) -> bool:
         return True
     if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
         return _is_bool_expr(node.left, local_dtypes) and _is_bool_expr(node.right, local_dtypes)
+    # ``~x`` inverts a boolean MASK (logical negation) when x is boolean; on an
+    # integer operand it is bitwise NOT and stays integer.
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+        return _is_bool_expr(node.operand, local_dtypes)
     if isinstance(node, ast.Name):
         return local_dtypes.get(node.id) in ("bool", "bool_")
     if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
@@ -4186,6 +4298,23 @@ class _SubscriptifyNames(ast.NodeTransformer):
                 if (sl.lower is None and sl.upper is None
                         and sl.step is None):
                     return self.visit_Name(node.value)
+                from numpyto_common.lib_nodes import _slice_step_const
+                step = _slice_step_const(sl)
+                if step is not None and step != 1 and self.iters:
+                    # Strided / reverse lone slice ``arr[::k]`` / ``arr[lo::k]``: source
+                    # index = start + iter*k, where start is ``lower``, or 0 (positive step)
+                    # / axis_len-1 (negative step -- ``arr[::-1]``) when omitted.
+                    iterv: ast.expr = ast.Name(id=self.iters[-1], ctx=ast.Load())
+                    scaled: ast.expr = ast.BinOp(left=iterv, op=ast.Mult(), right=ast.Constant(value=step))
+                    start: Optional[ast.expr] = sl.lower
+                    if start is None and step < 0:
+                        sh = self.shape_table.get(node.value.id)
+                        if sh:
+                            al = (ast.Constant(value=int(sh[0])) if str(sh[0]).isdigit()
+                                  else ast.Name(id=str(sh[0]), ctx=ast.Load()))
+                            start = ast.BinOp(left=al, op=ast.Sub(), right=ast.Constant(value=1))
+                    idx = scaled if start is None else ast.BinOp(left=scaled, op=ast.Add(), right=start)
+                    return ast.Subscript(value=node.value, slice=idx, ctx=ast.Load())
                 # Bounded lone slice ``arr[:k]`` / ``arr[a:b]`` / ``arr[1:]``
                 # on a 1-D array: the iter loop bound already enforces the
                 # slice range, so replace the slice with the (right-aligned)
@@ -4536,7 +4665,8 @@ def lower(kir: KernelIR) -> KernelIR:
     # a single masked iteration so we avoid materialising the dynamic-
     # length compacted view from boolean fancy indexing. Seeded with
     # the kernel-array shapes so the loop bound is the right symbol.
-    _BooleanMaskReductionRewriter(arrays_shapes).visit(lowered.tree)
+    _BooleanMaskReductionRewriter(
+        arrays_shapes, _collect_bool_names(lowered.tree, lowered.arrays)).visit(lowered.tree)
     ast.fix_missing_locations(lowered.tree)
     # Pre-pass: harvest shapes from ``name = np.zeros / empty / zeros_like``
     # at the top of the body so LibNodeRewriter sees the shape of locals

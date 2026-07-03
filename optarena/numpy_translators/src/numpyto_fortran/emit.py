@@ -289,6 +289,10 @@ class _FortranBodyEmitter(BaseEmitter):
             return True
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             return True
+        # ``~x`` (mask inversion) is logical iff its operand is -- so a combine
+        # ``m & ~m3`` routes to ``.AND.`` of two logicals, not integer IAND.
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+            return self._is_logical_operand(node.operand)
         if isinstance(node, ast.Name) and node.id in self._logical_array_locals:
             return True
         # A subscript into a known boolean-array local is also logical.
@@ -316,6 +320,20 @@ class _FortranBodyEmitter(BaseEmitter):
                                           "uint64", "uint32", "uint16", "uint8")}
             self._int_scalar_names = int_scalars
         return isinstance(node, ast.Name) and node.id in int_scalars
+
+    def _is_logical_node(self, node: ast.AST) -> bool:
+        """True when ``node`` emits a Fortran LOGICAL: a comparison / bool-op /
+        ``not`` (``_produces_logical``) or a Name / Subscript of a local the
+        lowering typed boolean."""
+        if _produces_logical(node):
+            return True
+        logicals = vars(self).get("_logical_array_locals", set())
+        if isinstance(node, ast.Name) and node.id in logicals:
+            return True
+        if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                and node.value.id in logicals):
+            return True
+        return False
 
     def _as_logical_operand(self, node: ast.AST) -> str:
         """Emit ``node`` as a Fortran LOGICAL operand for ``.and.`` / ``.or.``.
@@ -569,7 +587,11 @@ class _FortranBodyEmitter(BaseEmitter):
             return f"[{elts}]"
         if isinstance(node, ast.UnaryOp):
             if isinstance(node.op, ast.Invert):
-                # Python bitwise NOT (``~x``) -> Fortran integer ``NOT(x)``.
+                # ``~x`` on a BOOLEAN operand is numpy logical negation (mask
+                # inversion), not integer bitwise NOT -- emit ``.not.``. On an
+                # integer operand it stays the Fortran ``NOT(x)`` intrinsic.
+                if self._is_logical_node(node.operand):
+                    return f".not. ({self.emit_expr(node.operand)})"
                 return f"NOT({self.emit_expr(node.operand)})"
             if isinstance(node.op, ast.USub):
                 return f"(-({self.emit_expr(node.operand)}))"
@@ -730,6 +752,16 @@ class _FortranBodyEmitter(BaseEmitter):
             parts = [self._as_logical_operand(v) for v in node.values]
             return "(" + f" {op} ".join(parts) + ")"
         if isinstance(node, ast.Compare):
+            # ``<LOGICAL> != 0`` / ``<LOGICAL> == 0`` is a truthiness test on a
+            # boolean operand (from the if-guarded any/all/count_nonzero
+            # reductions when applied to a mask). Fortran has no LOGICAL-vs-0
+            # comparison, so emit the logical directly / negated.
+            if len(node.ops) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+                for a, b in ((node.left, node.comparators[0]), (node.comparators[0], node.left)):
+                    if self._is_logical_node(a) and isinstance(b, ast.Constant) \
+                            and b.value == 0 and not isinstance(b.value, bool):
+                        le = self.emit_expr(a)
+                        return le if isinstance(node.ops[0], ast.NotEq) else f".not. ({le})"
             # Python chained comparison ``a < b < c`` == ``(a<b) and (b<c)``;
             # Fortran has no chaining, so emit an explicit ``.and.`` join.
             operands = [self.emit_expr(node.left)] + [self.emit_expr(c) for c in node.comparators]
