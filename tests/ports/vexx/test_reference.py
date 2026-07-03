@@ -37,6 +37,9 @@ import numpy as np
 import pytest
 
 _HERE = Path(__file__).resolve().parent
+# This port test lives in tests/ports/vexx/; the numpy kernel + init stay with the
+# benchmark, so load them from there. The C++ oracle (baseline/) moved here with us.
+_BENCH = _HERE.parents[2] / "optarena" / "benchmarks" / "hpc" / "spectral_methods" / "vexx"
 _BASE = _HERE / "baseline"
 
 # Positional indices into initialize()'s flat return tuple (== kernel arg order).
@@ -61,7 +64,7 @@ _AUG = {
 
 
 def _load(name):
-    spec = importlib.util.spec_from_file_location(name, _HERE / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, _BENCH / f"{name}.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
