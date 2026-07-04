@@ -41,11 +41,15 @@ runs fail to compile. The einsum LOWERING (`expand_einsum`) is deterministic
 (dict/list, insertion-ordered); the non-determinism is in the Fortran emit's
 size-symbol type resolution — hash / iteration-order dependent (a fixed
 `PYTHONHASHSEED` is stable per-seed; it only surfaces in the c→cpp→fortran
-multi-emit sequence of one `run_op`). Pre-existing — reproduces on the EXPLICIT
-form, so it is NOT the ellipsis expansion. FIX: make the emit's symbol-type
+multi-emit sequence of one `run_op` — ~40% of `pytest` runs). Pre-existing —
+reproduces on the EXPLICIT form, so it is NOT the ellipsis expansion. NOTE: the
+`_const` numpy-scalar coercion (emit `0` not `np.int64(0)`) is ORTHOGONAL and
+does NOT fix this — the numpy scalar reaches the size-symbol classification via a
+different path (the `_is_int_scalar`/`is_int_expr` gate in numpyto_fortran/emit.py
+~L393, `isinstance(_, int)`). FIX: make the emit's size-symbol integer
 classification order-independent (sort the symbol set, or type size symbols
 int64 unconditionally). Relevant to the SeisSol batched-GEMM / tensor-contraction
-kernels. Repro: einsum matmul via the op-oracle on c/cpp/fortran, ~5 runs.
+kernels. Repro: einsum matmul via the op-oracle on c/cpp/fortran, ~5 pytest runs.
 
 ## FV3 dycore — remaining after the gt==4 dry core (assembled + validated)
 

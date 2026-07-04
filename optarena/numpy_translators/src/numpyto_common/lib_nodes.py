@@ -41,6 +41,13 @@ def _name(n: str) -> ast.Name:
 
 
 def _const(v) -> ast.Constant:
+    # A numpy scalar (e.g. ``np.int64(0)``) is NOT a Python int -- ``isinstance(_,
+    # int)`` is False, so the Fortran emit misclassifies a size symbol built from
+    # it as REAL -- and it unparse to ``np.int64(0)`` under numpy 2.0's repr,
+    # which breaks dace's sympy loop-range parse. Coerce to the plain Python value
+    # so every backend sees a bare ``0`` / ``0.0`` literal.
+    if type(v).__module__.startswith("numpy"):
+        v = v.item()
     return ast.Constant(value=v)
 
 

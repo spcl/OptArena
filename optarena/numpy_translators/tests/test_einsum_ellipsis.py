@@ -56,10 +56,11 @@ def test_einsum_ellipsis_batched_transpose_e2e():
 
 def test_einsum_ellipsis_batched_matmul_e2e():
     # Ellipsis WITH a contraction: '...ij,...jk->...ik' expands to 'Aij,Ajk->Aik'
-    # (a batched GEMM). Native c/cpp only: the batched-einsum Fortran emit
-    # non-deterministically mistypes a size symbol as REAL (a pre-existing
-    # hash/order-dependent emit bug, tracked in BACKLOG -- reproduces on the
-    # EXPLICIT 'Bij,Bjk->Bik' too, so it is not the ellipsis expansion).
+    # (a batched GEMM). c/cpp only: the batched-einsum FORTRAN emit
+    # non-deterministically types a size symbol REAL (~40% flaky, hash/order
+    # dependent, reproduces on the EXPLICIT 'Bij,Bjk->Bik' too -- NOT the ellipsis
+    # expansion). Tracked in BACKLOG; root is the emit's size-symbol integer
+    # classification, separate from the np.int64-in-constants hardening.
     rng = np.random.default_rng(0)
     src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.einsum('...ij,...jk->...ik', a, b)\n"
     a, b = rng.random((2, 3, 4)), rng.random((2, 4, 5))
@@ -80,3 +81,17 @@ def test_einsum_ellipsis_batched_matmul_e2e():
                    "out": "(B, M, N)"
                },
                backends=("c", "cpp")), "einsum-ellipsis-matmul")
+
+
+def test_const_coerces_numpy_scalar():
+    """A numpy scalar must never reach an ast.Constant: under numpy 2.0 it
+    unparse to ``np.int64(0)`` (breaking dace's sympy loop-range parse) and it
+    fails the Fortran emit's ``isinstance(_, int)`` integer test. ``_const``
+    coerces it to the plain Python value so every backend emits a bare ``0``."""
+    from numpyto_common.lib_nodes import _const
+    ci = _const(np.int64(0))
+    assert type(ci.value) is int and ci.value == 0
+    cf = _const(np.float64(1.5))
+    assert type(cf.value) is float and cf.value == 1.5
+    # plain Python values pass through untouched.
+    assert type(_const(3).value) is int and type(_const(2.0).value) is float
