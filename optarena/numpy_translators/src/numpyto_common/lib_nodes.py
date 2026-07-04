@@ -3185,7 +3185,7 @@ def expand_pad(target: ast.expr, args: List[ast.expr],
     if widths is None:
         raise NotImplementedError("np.pad needs scalar or per-axis tuple pad_width")
     mode = _pad_mode_str(args, kwargs)
-    if mode not in ("edge", "constant"):
+    if mode not in ("edge", "constant", "reflect", "wrap", "symmetric"):
         raise NotImplementedError(f"np.pad mode={mode!r} unsupported")
     rank = len(view)
 
@@ -3220,30 +3220,95 @@ def expand_pad(target: ast.expr, args: List[ast.expr],
         stmts += _wrap_for_loops(cp_iters, [_dim(k) for k in range(rank)], cp_body)
         return stmts
 
-    # mode == "edge": clamp each output index back into the source range.
+    # Boundary modes: each output cell reads the source cell whose index is a
+    # mode-specific remap of ``q = out_iter - before`` back into ``[0, d-1]``
+    # (edge = clamp, wrap = periodic, reflect/symmetric = mirror). Emitted as
+    # scalar ``__ps<k>`` index locals so no min/max/mod sits in subscript.
     out_iters = [f"__pp{k}" for k in range(rank)]
     src_idx_vars = [f"__ps{k}" for k in range(rank)]
+
+    def _floor_mod(x: ast.expr, m: ast.expr) -> ast.expr:
+        # ((x % m) + m) % m -- a floor modulo, correct whether the backend's
+        # ``%`` truncates (C) or floors, keeping the index in [0, m).
+        inner = ast.BinOp(left=x, op=ast.Mod(), right=copy.deepcopy(m))
+        return ast.BinOp(left=ast.BinOp(left=inner, op=ast.Add(), right=copy.deepcopy(m)),
+                         op=ast.Mod(),
+                         right=copy.deepcopy(m))
+
+    def _fold_high(sv: str, hi: ast.expr, d: ast.expr) -> ast.stmt:
+        # ``if sv >= d: sv = hi - sv`` -- fold the period's upper half down.
+        return ast.If(test=ast.Compare(left=_name(sv), ops=[ast.GtE()], comparators=[copy.deepcopy(d)]),
+                      body=[ast.Assign(targets=[_store(sv)], value=ast.BinOp(left=hi, op=ast.Sub(), right=_name(sv)))],
+                      orelse=[])
+
+    def _remap(sv: str, d: ast.expr, pv: str) -> List[ast.stmt]:
+        if mode == "edge":
+            lo = ast.If(test=ast.Compare(left=_name(sv), ops=[ast.Lt()], comparators=[_const(0)]),
+                        body=[ast.Assign(targets=[_store(sv)], value=_const(0))],
+                        orelse=[])
+            upper = ast.BinOp(left=copy.deepcopy(d), op=ast.Sub(), right=_const(1))
+            hi = ast.If(test=ast.Compare(left=_name(sv), ops=[ast.Gt()], comparators=[upper]),
+                        body=[ast.Assign(targets=[_store(sv)], value=copy.deepcopy(upper))],
+                        orelse=[])
+            return [lo, hi]
+        if mode == "wrap":  # periodic tiling: src[q mod d]
+            return [ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), d))]
+        # symmetric / reflect: mirror with period 2d (incl. edge) or 2(d-1)
+        # (excl. edge). The modulus must share the int64 index kind: a LITERAL
+        # extent folds to a literal modulus (which the Fortran emitter
+        # kind-coerces), a SYMBOLIC extent (int64) is bound to an int local
+        # ``pv`` -- an inline compound modulus with a default-kind literal would
+        # clash with the int64 index under Fortran's kind-strict MODULO.
+        dv = _const_int(d)
+        if mode == "symmetric":  # mirror INCLUDING the edge; period 2d
+            if dv is not None:
+                return [
+                    ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), _const(2 * dv))),
+                    _fold_high(sv, _const(2 * dv - 1), d)
+                ]
+            period = ast.BinOp(left=_const(2), op=ast.Mult(), right=copy.deepcopy(d))
+            return [
+                ast.Assign(targets=[_store(pv)], value=period),
+                ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), _name(pv))),
+                _fold_high(sv, ast.BinOp(left=_name(pv), op=ast.Sub(), right=_const(1)), d)
+            ]
+        # mode == "reflect": period 2(d-1); a size-1 axis just repeats element 0.
+        if dv is not None:
+            if dv == 1:
+                return [ast.Assign(targets=[_store(sv)], value=_const(0))]
+            m = 2 * (dv - 1)
+            return [
+                ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), _const(m))),
+                _fold_high(sv, _const(m), d)
+            ]
+        period = ast.BinOp(left=_const(2),
+                           op=ast.Mult(),
+                           right=ast.BinOp(left=copy.deepcopy(d), op=ast.Sub(), right=_const(1)))
+        reflect_body = [
+            ast.Assign(targets=[_store(pv)], value=period),
+            ast.Assign(targets=[_store(sv)], value=_floor_mod(_name(sv), _name(pv))),
+            _fold_high(sv, _name(pv), d)
+        ]
+        return [
+            ast.If(test=ast.Compare(left=copy.deepcopy(d), ops=[ast.Eq()], comparators=[_const(1)]),
+                   body=[ast.Assign(targets=[_store(sv)], value=_const(0))],
+                   orelse=reflect_body)
+        ]
+
     pre: List[ast.stmt] = []
     for k in range(rank):
         sv = src_idx_vars[k]
-        pre.append(ast.Assign(targets=[_store(sv)],
-                              value=ast.BinOp(left=_name(out_iters[k]),
-                                              op=ast.Sub(), right=_before(k))))
-        pre.append(ast.If(
-            test=ast.Compare(left=_name(sv), ops=[ast.Lt()], comparators=[_const(0)]),
-            body=[ast.Assign(targets=[_store(sv)], value=_const(0))], orelse=[]))
-        upper = ast.BinOp(left=_dim(k), op=ast.Sub(), right=_const(1))
-        pre.append(ast.If(
-            test=ast.Compare(left=_name(sv), ops=[ast.Gt()], comparators=[upper]),
-            body=[ast.Assign(targets=[_store(sv)], value=copy.deepcopy(upper))],
-            orelse=[]))
-    body = pre + [ast.Assign(targets=[_store_target([_name(v) for v in out_iters])],
-                             value=_src_read([_name(v) for v in src_idx_vars]))]
+        pre.append(
+            ast.Assign(targets=[_store(sv)], value=ast.BinOp(left=_name(out_iters[k]), op=ast.Sub(), right=_before(k))))
+        pre.extend(_remap(sv, _dim(k), f"__pm{k}"))
+    body = pre + [
+        ast.Assign(targets=[_store_target([_name(v) for v in out_iters])],
+                   value=_src_read([_name(v) for v in src_idx_vars]))
+    ]
     return _wrap_for_loops(out_iters, out_bounds, body)
 
 
-def expand_trace(target: ast.expr, args: List[ast.expr],
-                 shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
+def expand_trace(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """``np.trace(A)`` -> ``sum_i A[i, i]`` (the diagonal sum)."""
     if len(args) != 1 or not isinstance(args[0], ast.Name):
         raise NotImplementedError("np.trace needs one bare-Name 2-D arg")
