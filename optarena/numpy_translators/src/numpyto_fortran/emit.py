@@ -1611,17 +1611,32 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: O
     # parameters / symbols / arrays and have ``_FortranRenameTemps``
     # rewrite collisions with an ``f_`` prefix.
     import copy
-    reserved = set()
-    for s in kir.symbols:
-        reserved.add(s.name)
-    for a in kir.arrays:
-        reserved.add(a.name)
-    for s in kir.scalars:
-        reserved.add(s.name)
+    # Case-insensitive collision map (Fortran folds ``B`` and ``b`` to one
+    # identifier). ``case_map[lc]`` is the ``f_``-prefixed rewrite for the
+    # offender; ``case_map[lc + "_reserved"]`` is the ONE spelling that keeps its
+    # case. Both the descriptor order and the reserved-slot claim MUST be
+    # deterministic: iterating a *set* here (and letting the last writer win the
+    # reserved slot) was hash-order-dependent, so a batch size symbol ``B`` that
+    # collides with an input array ``b`` was kept on some runs and renamed on
+    # others. Size SYMBOLS are listed FIRST and claim the reserved slot via
+    # ``setdefault`` so they always win: a symbol is referenced by array shape
+    # tokens (``a(K, M, B)``) that are emitted verbatim and never rewritten
+    # through ``case_map``, so renaming the symbol would leave those tokens
+    # dangling -- an undeclared name Fortran then implicitly types REAL, breaking
+    # the integer array bound. Renaming the colliding array/scalar is safe (its
+    # body uses are AST Names the rename pass rewrites), so the symbol stays put
+    # and keeps its int64 declaration.
+    reserved: Set[str] = set()
+    reserved_ordered: List[str] = []
+    for _descs in (kir.symbols, kir.arrays, kir.scalars):
+        for _d in _descs:
+            if _d.name not in reserved:
+                reserved.add(_d.name)
+                reserved_ordered.append(_d.name)
     case_map: Dict[str, str] = {}
-    for r in reserved:
-        case_map[r.lower()] = "f_" + r.lower()
-        case_map[r.lower() + "_reserved"] = r
+    for r in reserved_ordered:
+        case_map.setdefault(r.lower(), "f_" + r.lower())
+        case_map.setdefault(r.lower() + "_reserved", r)
     # ALSO scan the AST body for local-vs-local case clashes (Fortran
     # is case-insensitive; ``i`` loop iter and ``I`` boolean-mask
     # local collapse to the same identifier and Fortran rejects the

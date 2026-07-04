@@ -22,11 +22,17 @@ runs:
         # requirements.txt (numpy 2.x + core) + the translator stack + numba/pythran/jax/dace,
         # which co-resolve with numpy 2.x. tvm/gt4py/pluto/apptainer are job-specific and added
         # by the job that needs them. pytest-xdist gives every runner its own -n auto.
+        #
+        # Retry every install: CI runners hit transient PyPI IncompleteRead/ProtocolError on
+        # large sdists (dace). CRUCIAL: ``pip install -e .`` (which installs numpyto_common --
+        # without it every tests/conftest import dies) runs BEFORE the flaky framework downloads,
+        # in its own retried call, so a framework network blip can never skip the editable install.
+        pip_retry() { for i in 1 2 3 4 5; do python -m pip install "$@" && return 0; echo "pip attempt $i failed; retrying in $((i*5))s"; sleep $((i*5)); done; return 1; }
         python -m pip install --upgrade pip
-        python -m pip install -r requirements.txt \
+        pip_retry -r requirements.txt \
           pytest pytest-timeout pytest-xdist sympy jinja2 cffi tree-sitter-language-pack psutil py-cpuinfo
-        python -m pip install "jax[cpu]" dace numba pythran pyarrow
-        python -m pip install -e .
+        pip_retry -e .
+        pip_retry "jax[cpu]" dace numba pythran pyarrow
 
     - name: Verify common toolchain (fail fast on a missing dependency)
       shell: bash

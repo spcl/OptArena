@@ -4323,14 +4323,18 @@ class _SubscriptifyNames(ast.NodeTransformer):
                                   else ast.Name(id=str(sh[0]), ctx=ast.Load()))
                             start = ast.BinOp(left=al, op=ast.Sub(), right=ast.Constant(value=1))
                     # A negative step with an UNRESOLVED start (axis length not tracked)
-                    # would emit ``arr[iter*-1]`` -- a negative, out-of-bounds read. Only
-                    # emit the reverse form when the start is known; else fall through to
-                    # the safe bounded-slice path below.
-                    if not (step < 0 and start is None):
-                        iterv: ast.expr = ast.Name(id=self.iters[-1], ctx=ast.Load())
-                        scaled: ast.expr = ast.BinOp(left=iterv, op=ast.Mult(), right=ast.Constant(value=step))
-                        idx = scaled if start is None else ast.BinOp(left=scaled, op=ast.Add(), right=start)
-                        return ast.Subscript(value=node.value, slice=idx, ctx=ast.Load())
+                    # cannot emit the reverse index ``(len-1) - iter*|step|``. Falling through
+                    # to the bounded path below would emit a FORWARD ``arr[iter]`` -- a silent
+                    # un-reversed copy. Refuse loudly instead (mirrors _SliceToScalarRewriter,
+                    # which raises for the identical untracked-shape reverse). Positive strided
+                    # slices (start None, step > 0) are fine: idx = iter*step is forward.
+                    if step < 0 and start is None:
+                        raise NotImplementedError(
+                            f"reverse slice of {node.value.id!r} needs a known axis length (shape untracked)")
+                    iterv: ast.expr = ast.Name(id=self.iters[-1], ctx=ast.Load())
+                    scaled: ast.expr = ast.BinOp(left=iterv, op=ast.Mult(), right=ast.Constant(value=step))
+                    idx = scaled if start is None else ast.BinOp(left=scaled, op=ast.Add(), right=start)
+                    return ast.Subscript(value=node.value, slice=idx, ctx=ast.Load())
                 # Bounded lone slice ``arr[:k]`` / ``arr[a:b]`` / ``arr[1:]``
                 # on a 1-D array: the iter loop bound already enforces the
                 # slice range, so replace the slice with the (right-aligned)

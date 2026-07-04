@@ -6069,7 +6069,18 @@ class _CallHoister(ast.NodeTransformer):
             return node
         # Stash axis/keepdims kwargs for the reduction case so
         # _derive_output_shape can compute the correct array shape.
-        self._cur_axis, self._cur_keepdims = _read_axis_keepdims(node.args, node.keywords)
+        if key == ("np", "linalg.norm"):
+            # ``linalg.norm``'s positional layout is ``(v, ord, axis, keepdims)``
+            # -- unlike a reduction whose 2nd positional is ``axis`` -- so strip a
+            # positional/keyword ``ord`` before reading the axis (mirroring
+            # ``expand_linalg_norm``). Otherwise a positional ord (``norm(a, 1)``)
+            # is misread as ``axis=1`` and an axis-less vector norm is wrongly
+            # hoisted as an array.
+            norm_args = [node.args[0]] + list(node.args[2:]) if node.args else []
+            norm_kwargs = [kw for kw in node.keywords if kw.arg != "ord"]
+            self._cur_axis, self._cur_keepdims = _read_axis_keepdims(norm_args, norm_kwargs)
+        else:
+            self._cur_axis, self._cur_keepdims = _read_axis_keepdims(node.args, node.keywords)
         self.counter[0] += 1
         temp = f"__cb{self.counter[0]}"
         # Classify: scalar return vs array return.
@@ -6086,7 +6097,8 @@ class _CallHoister(ast.NodeTransformer):
                 is_scalar = False
         # Axis-aware reductions with axis specified return an array.
         if (is_scalar and key[1] in {"sum", "max", "min", "mean", "prod", "std",
-                                     "argmax", "argmin", "any", "all", "count_nonzero"}
+                                     "argmax", "argmin", "any", "all", "count_nonzero",
+                                     "linalg.norm"}
                 and self._cur_axis is not None):
             is_scalar = False
         if is_scalar and node.args and isinstance(node.args[0], ast.Subscript):
@@ -6274,8 +6286,10 @@ class _CallHoister(ast.NodeTransformer):
         # Axis-aware reductions: the output shape comes from removing
         # the reduction axis (or replacing with size 1 if keepdims).
         # ``argmax``/``argmin`` with an axis return the index array over the
-        # kept axes (same kept-axes shape as a value reduction).
-        if op in {"sum", "max", "min", "mean", "prod", "std", "argmax", "argmin"}:
+        # kept axes (same kept-axes shape as a value reduction). An axis-aware
+        # ``linalg.norm`` is a per-line L2 reduction with the same kept-axes shape.
+        if op in {"sum", "max", "min", "mean", "prod", "std", "argmax", "argmin",
+                  "linalg.norm"}:
             if args and isinstance(args[0], ast.Name):
                 src_shape = self.shape_table.get(args[0].id)
                 if src_shape:
