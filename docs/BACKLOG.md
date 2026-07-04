@@ -31,6 +31,22 @@ NOT here — the OTHER chat owns it: strided slice-assign `out[::2] = a[::2]`
 (their in-progress step-handling in `lowering.py`; currently miscompiles — leave
 it alone). The naive-lowering and contraction-family sections below are DONE.
 
+## Translator BUG: batched-einsum Fortran emit non-determinism (flaky, real)
+
+`np.einsum('...ij,...jk->...ik', ...)` — and the explicit `'Bij,Bjk->Bik'`
+batched-GEMM form — emit CORRECT c/c++, but the FORTRAN emit
+non-deterministically declares a size symbol `REAL` instead of `INTEGER`
+(`out(N, M, B)` → "Expression must be of INTEGER type, found REAL"), so ~40% of
+runs fail to compile. The einsum LOWERING (`expand_einsum`) is deterministic
+(dict/list, insertion-ordered); the non-determinism is in the Fortran emit's
+size-symbol type resolution — hash / iteration-order dependent (a fixed
+`PYTHONHASHSEED` is stable per-seed; it only surfaces in the c→cpp→fortran
+multi-emit sequence of one `run_op`). Pre-existing — reproduces on the EXPLICIT
+form, so it is NOT the ellipsis expansion. FIX: make the emit's symbol-type
+classification order-independent (sort the symbol set, or type size symbols
+int64 unconditionally). Relevant to the SeisSol batched-GEMM / tensor-contraction
+kernels. Repro: einsum matmul via the op-oracle on c/cpp/fortran, ~5 runs.
+
 ## FV3 dycore — remaining after the gt==4 dry core (assembled + validated)
 
 `hpc/structured_grids/fv3_dycore/` has a FULL gt==4 dry nonhydrostatic dycore

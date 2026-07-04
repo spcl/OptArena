@@ -2892,6 +2892,41 @@ def _parse_einsum_subscripts(spec: str):
     return inputs, rhs
 
 
+def _expand_einsum_ellipsis(spec: str, ranks: List[int]) -> str:
+    """Rewrite ``...`` in an einsum spec to explicit index letters using each
+    operand's rank, so the plain-subscript lowering handles it.
+
+    ``'...ij,...jk->...ik'`` on rank-3 operands -> ``'Aij,Ajk->Aik'`` (the one
+    broadcast axis becomes a fresh shared index ``A``). Requires the explicit
+    ``->`` form and that every ``...`` covers the same number of axes (numpy's
+    differing-rank ellipsis broadcasting is not modelled) -- otherwise raises.
+    """
+    spec = spec.replace(" ", "")
+    if "->" not in spec:
+        raise NotImplementedError("einsum: ellipsis requires an explicit -> output")
+    lhs, rhs = spec.split("->")
+    ins = lhs.split(",")
+    if len(ins) != len(ranks):
+        raise NotImplementedError("einsum: operand count != subscript count")
+    ell_rank, seen = 0, False
+    for sub, r in zip(ins, ranks):
+        if "..." in sub:
+            er = r - len(sub.replace("...", ""))
+            if er < 0:
+                raise NotImplementedError("einsum: too many indices for operand rank")
+            if seen and er != ell_rank:
+                raise NotImplementedError("einsum: differing ellipsis ranks (broadcast) unsupported")
+            ell_rank, seen = er, True
+    used = set(spec) - set(".,->")
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    fresh = [c for c in letters if c not in used]
+    if len(fresh) < ell_rank:
+        raise NotImplementedError("einsum: not enough free index letters for ellipsis")
+    ell = "".join(fresh[:ell_rank])
+    new_ins = [sub.replace("...", ell) for sub in ins]
+    return ",".join(new_ins) + "->" + rhs.replace("...", ell)
+
+
 def expand_einsum(target: ast.expr, args: List[ast.expr],
                   shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """Lower ``np.einsum(subscripts, *operands)`` to a nested loop nest.
@@ -2907,8 +2942,18 @@ def expand_einsum(target: ast.expr, args: List[ast.expr],
     """
     if not args or not isinstance(args[0], ast.Constant) or not isinstance(args[0].value, str):
         raise NotImplementedError("einsum needs a literal subscript string")
-    inputs, output = _parse_einsum_subscripts(args[0].value)
+    spec = args[0].value
     operands = args[1:]
+    if "..." in spec:
+        # Expand ``...`` to explicit letters from each operand's rank (needs the
+        # shape table), then lower the plain form; the parser stays ellipsis-free.
+        ranks = []
+        for op in operands:
+            if not isinstance(op, ast.Name) or shape_table.get(op.id) is None:
+                raise NotImplementedError("einsum ellipsis needs bare-Name operands with known shape")
+            ranks.append(len(shape_table[op.id]))
+        spec = _expand_einsum_ellipsis(spec, ranks)
+    inputs, output = _parse_einsum_subscripts(spec)
     if len(inputs) != len(operands):
         raise NotImplementedError("einsum operand count mismatches subscripts")
     operand_names: List[str] = []
