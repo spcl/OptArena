@@ -25,8 +25,27 @@ setup(
     ],
     packages=(find_packages(include=['optarena', 'optarena.*'], exclude=['optarena.numpy_translators*']) +
               _translator_packages),
-    package_dir={'': '.', **{p: os.path.join(_TRANSLATOR_SRC, p) for p in _translator_top}},
+    package_dir={
+        '': '.',
+        **{
+            p: os.path.join(_TRANSLATOR_SRC, p)
+            for p in _translator_top
+        }
+    },
+    # Ship the library's data files. include_package_data alone is not enough for a
+    # `pip wheel .` build: without an active VCS file-finder it silently drops these
+    # (config.yaml is loaded at import by config.py; the schema/taxonomy/env specs by
+    # spec.py / languages.py). Explicit package_data globs are deterministic per-env.
     include_package_data=True,
+    package_data={
+        'optarena': [
+            'config.yaml',
+            'schemas/*.yaml',
+            'taxonomy/*.yaml',
+            'envs/*.yaml',
+            'hardware_info/theoretical/*.yaml',
+        ],
+    },
     entry_points={
         'console_scripts': [
             # The main CLI (serve / run / agent / ...). Without this the documented
