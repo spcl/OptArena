@@ -80,6 +80,10 @@ jobs:
 
       - name: Phase 3 -- agent-bench (tools + no-op/BLAS optimizers, both modes, in-proc judge)
         if: ${{ !cancelled() }}
+        # Per-step cap: a hung/slow phase fails THIS step (a step timeout is a failure,
+        # not a job cancellation), so the ``!cancelled()`` phases below still run instead
+        # of the whole job dying at the 90-min job timeout and skipping 5 + 7.
+        timeout-minutes: 25
         run: |
           python -m pytest -q -p no:cacheprovider --timeout=600 \
             tests/test_agent_tools.py \
@@ -94,10 +98,14 @@ jobs:
 
       - name: Phase 5 -- e2e numerical sweep [numba, jax] @ S
         if: ${{ !cancelled() }}
+        # Bounded like Phase 3 so a wedged worker fails this step (leaving Phase 7 to run),
+        # not the job. --timeout is the per-test backstop; the oracle already SIGKILLs its
+        # own forked jax/native children, so this only catches an in-process numba hang.
+        timeout-minutes: 35
         env:
           OPTARENA_E2E_BACKENDS: "numba,jax"
         run: |
-          python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
+          python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
 
       - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
         # Gated on success() (NOT !cancelled()): never build/publish a dataset from a run where

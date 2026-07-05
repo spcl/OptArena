@@ -96,7 +96,7 @@ def resolve_ranges(parameters: Dict[str, Any]) -> Dict[str, Any]:
     size-1 params are kept fixed.
     """
     if FUZZED_PRESET in parameters:
-        return dict(parameters[FUZZED_PRESET])
+        return _apply_size_cap(dict(parameters[FUZZED_PRESET]))
     base = (parameters.get("L") or next(iter(parameters.values())))
     step = parameters.get("XL") or {}  # additive width: from L toward the XL (GPU) size
     hi_m = float(config.get("fuzz.size_hi_mult", 4.0))
@@ -105,6 +105,28 @@ def resolve_ranges(parameters: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(value, int) and value > 1:
             hi = value + int(step[name]) if isinstance(step.get(name), int) else int(value * hi_m)
             out[name] = [value, max(hi, value)]
+        else:
+            out[name] = value
+    return _apply_size_cap(out)
+
+
+def _apply_size_cap(ranges: Dict[str, Any]) -> Dict[str, Any]:
+    """Clamp every resolved fuzz size range / scalar to ``fuzz.size_cap`` when that
+    knob is set (> 0). OFF by default (0) so production sweeps keep their full
+    GPU-scale range. Unit tests set ``OPTARENA_FUZZ_SIZE_CAP`` to a tiny value so a
+    grade()/score_task_fuzzed wiring test stays sub-second: the uncapped sweep draws
+    up to ~10^8-element (XL / GPU-scale) shapes, and grading a Python-loop numpy
+    reference (e.g. TSVC) at that size takes minutes."""
+    cap = int(config.get("fuzz.size_cap", 0))
+    if cap <= 0:
+        return ranges
+    out: Dict[str, Any] = {}
+    for name, value in ranges.items():
+        if is_range(value):
+            lo, hi = value
+            out[name] = [min(int(lo), cap), min(int(hi), cap)]  # lo <= hi -> stays ordered
+        elif isinstance(value, int) and value > 1:
+            out[name] = min(value, cap)
         else:
             out[name] = value
     return out
