@@ -24,7 +24,8 @@ import pytest
 from numpyto_c.lib_nodes import expand_arange, expand_fromfunction
 from numpyto_common.frontend import _shape_from_constructor
 from numpyto_common.lowering import (_AstypeRewriter, _NpAliasRewriter,
-                                     _ScatterAtRewriter, _SubscriptifyNames)
+                                     _ScatterAtRewriter, _SubscriptifyNames,
+                                     SliceFusion)
 
 
 def _expr(src):
@@ -734,3 +735,32 @@ def test_max_min_propagate_nan_like_python(backend):
     assert out == "1 1 1 1", (
         f"{backend} max/min NaN order diverges from Python's builtin: got {out!r} "
         f"(expected '1 1 1 1' = max(nan,x)->nan, max(x,nan)->x, min likewise)")
+
+
+# --------------------------------------------------------------------------- #
+# H. SliceFusion: explicit-stop slices must not require the LHS array's shape #
+# --------------------------------------------------------------------------- #
+
+def test_slice_fusion_explicit_stop_does_not_need_lhs_shape():
+    """``w[:n] = x[:n]`` has an EXPLICIT stop (``n``), so ``_axis_length``
+    must never be consulted for ``w`` -- yet ``_rewrite`` computed
+    ``default=self._axis_length(lhs_name, axis)`` as an eager Python call
+    argument, which runs unconditionally regardless of whether the ``None``
+    branch is taken. On a bare function parameter with no declared shape
+    (miniFE's ``waxpby(..., w)``, whose local alias ``wcoefs`` never appears
+    in ``array_shapes``) this made ``w[:n] = ...`` raise NotImplementedError
+    even though its stop was never omitted, blocking the whole kernel's
+    C/C++/Fortran emission. ``w`` is deliberately absent from ``array_shapes``
+    here to reproduce that."""
+    tree = ast.parse("w[:n] = x[:n]")
+    SliceFusion({"x": ["n"]}).visit(tree)  # must not raise
+
+
+def test_slice_fusion_omitted_stop_still_raises_on_unresolved_shape():
+    """A GENUINELY omitted stop (``w[:] = ...``) on an array absent from
+    ``array_shapes`` must still raise -- the fix only defers evaluating the
+    default to when it is actually needed, it does not suppress the real
+    unresolved-shape error."""
+    tree = ast.parse("w[:] = x[:n]")
+    with pytest.raises(NotImplementedError, match="shape unknown"):
+        SliceFusion({"x": ["n"]}).visit(tree)
