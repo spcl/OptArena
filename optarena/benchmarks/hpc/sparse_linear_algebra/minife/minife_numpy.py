@@ -52,8 +52,8 @@ def _as_float_array(array: np.ndarray, name: str) -> np.ndarray:
 
 def _as_index_array(array: np.ndarray, name: str) -> np.ndarray:
     array = np.asarray(array)
-    if not np.issubdtype(array.dtype, np.integer):
-        raise TypeError(f"{name} must use an integer dtype")
+    if array.dtype != INDEX_DTYPE:
+        raise TypeError(f"{name} must have dtype {INDEX_DTYPE}")
     if array.ndim != 1:
         raise ValueError(f"{name} must be one-dimensional")
     if not array.flags.c_contiguous:
@@ -132,8 +132,8 @@ def generate_random_minife_inputs(
         raise ValueError("nx, ny, and nz must be positive element counts")
 
     index_dtype = np.dtype(index_dtype)
-    if not np.issubdtype(index_dtype, np.integer):
-        raise TypeError("index_dtype must be an integer dtype")
+    if index_dtype != INDEX_DTYPE:
+        raise TypeError(f"index_dtype must be {INDEX_DTYPE}")
 
     nx_nodes = nx + 1
     ny_nodes = ny + 1
@@ -257,12 +257,6 @@ def _matvec_std_arrays(
     x: np.ndarray,
     y: np.ndarray,
 ) -> np.ndarray:
-    row_offsets = _as_index_array(row_offsets, "row_offsets")
-    cols = _as_index_array(cols, "cols")
-    values = _as_float_array(values, "values")
-    x = _as_float_array(x, "x")
-    y = _as_float_array(y, "y")
-
     nrows = row_offsets.shape[0] - 1
     for row in range(nrows):
         row_start = int(row_offsets[row])
@@ -286,24 +280,19 @@ def waxpby(
 ) -> np.ndarray:
     """Compute w = alpha*x + beta*y, matching MiniFE's WAXPBY helper."""
 
-    xcoefs = _vector_coefs(x, "x")
-    ycoefs = _vector_coefs(y, "y")
-    wcoefs = _vector_coefs(w, "w")
-    n = min(xcoefs.shape[0], ycoefs.shape[0], wcoefs.shape[0])
+    n = min(x.shape[0], y.shape[0], w.shape[0])
 
     if beta == 0.0:
         if alpha == 1.0:
-            wcoefs[:n] = xcoefs[:n]
+            w[:n] = x[:n]
         else:
-            np.multiply(xcoefs[:n], alpha, out=wcoefs[:n])
+            w[:n] = alpha * x[:n]
     elif alpha == 1.0:
-        np.multiply(ycoefs[:n], beta, out=wcoefs[:n])
-        wcoefs[:n] += xcoefs[:n]
+        w[:n] = x[:n] + beta * y[:n]
     else:
-        np.multiply(xcoefs[:n], alpha, out=wcoefs[:n])
-        wcoefs[:n] += beta * ycoefs[:n]
+        w[:n] = alpha * x[:n] + beta * y[:n]
 
-    return wcoefs
+    return w
 
 
 def daxpby(
@@ -314,40 +303,33 @@ def daxpby(
 ) -> np.ndarray:
     """Compute y = alpha*x + beta*y in place, matching MiniFE's DAXPBY."""
 
-    xcoefs = _vector_coefs(x, "x")
-    ycoefs = _vector_coefs(y, "y")
-    n = min(xcoefs.shape[0], ycoefs.shape[0])
+    n = min(x.shape[0], y.shape[0])
 
     if alpha == 1.0 and beta == 1.0:
-        ycoefs[:n] += xcoefs[:n]
+        y[:n] = y[:n] + x[:n]
     elif beta == 1.0:
-        ycoefs[:n] += alpha * xcoefs[:n]
+        y[:n] = y[:n] + alpha * x[:n]
     elif alpha == 1.0:
-        ycoefs[:n] *= beta
-        ycoefs[:n] += xcoefs[:n]
+        y[:n] = beta * y[:n] + x[:n]
     elif beta == 0.0:
-        np.multiply(xcoefs[:n], alpha, out=ycoefs[:n])
+        y[:n] = alpha * x[:n]
     else:
-        ycoefs[:n] *= beta
-        ycoefs[:n] += alpha * xcoefs[:n]
+        y[:n] = beta * y[:n] + alpha * x[:n]
 
-    return ycoefs
+    return y
 
 
 def dot(x: np.ndarray, y: np.ndarray) -> float:
     """Compute MiniFE's local dot product."""
 
-    xcoefs = _vector_coefs(x, "x")
-    ycoefs = _vector_coefs(y, "y")
-    n = min(xcoefs.shape[0], ycoefs.shape[0])
-    return float(np.dot(xcoefs[:n], ycoefs[:n]))
+    n = min(x.shape[0], y.shape[0])
+    return float(np.dot(x[:n], y[:n]))
 
 
 def dot_r2(x: np.ndarray) -> float:
     """Compute MiniFE's dot_r2 helper, sum(x*x)."""
 
-    xcoefs = _vector_coefs(x, "x")
-    return float(np.dot(xcoefs, xcoefs))
+    return float(np.dot(x, x))
 
 
 def cg_solve_minife(
@@ -414,26 +396,26 @@ def initialize(nx, ny, nz, seed, datatype=np.float64):
     row_offsets, cols, values, x, _, b = generate_random_minife_inputs(
         nx=nx, ny=ny, nz=nz, seed=seed
     )
-    return row_offsets, cols, values, x, b
+    nrows = int((int(nx) + 1) * (int(ny) + 1) * (int(nz) + 1))
+    max_nnz = 27 * nrows
+    padded_cols = np.zeros(max_nnz, dtype=INDEX_DTYPE)
+    padded_values = np.zeros(max_nnz, dtype=FLOAT_DTYPE)
+    padded_cols[: cols.shape[0]] = cols
+    padded_values[: values.shape[0]] = values
+    return row_offsets, padded_cols, padded_values, x, b
 
 
 def minife(row_offsets, cols, values, x, b, max_iter, tolerance):
     """Manifest-compatible MiniFE CG benchmark entry point."""
 
-    row_offsets = _as_index_array(row_offsets, "row_offsets")
-    cols = _as_index_array(cols, "cols")
-    values = _as_float_array(values, "values")
-    x = _as_float_array(x, "x")
-    b = _as_float_array(b, "b")
-
     nrows = row_offsets.shape[0] - 1
     p = np.zeros_like(x)
-    ap = np.zeros(nrows, dtype=FLOAT_DTYPE)
-    r = np.zeros(nrows, dtype=FLOAT_DTYPE)
+    ap = np.zeros(nrows, dtype=np.float64)
+    r = np.zeros(nrows, dtype=np.float64)
 
-    waxpby(1.0, x, 0.0, x, p)
-    _matvec_std_arrays(row_offsets, cols, values, p, ap)
-    waxpby(1.0, b, -1.0, ap, r)
+    p = waxpby(1.0, x, 0.0, x, p)
+    ap = _matvec_std_arrays(row_offsets, cols, values, p, ap)
+    r = waxpby(1.0, b, -1.0, ap, r)
 
     rtrans = dot_r2(r)
     normr = float(np.sqrt(rtrans))
@@ -442,22 +424,22 @@ def minife(row_offsets, cols, values, x, b, max_iter, tolerance):
         if normr <= float(tolerance):
             break
         if k == 1:
-            daxpby(1.0, r, 0.0, p)
+            p = daxpby(1.0, r, 0.0, p)
         else:
             oldrtrans = rtrans
             rtrans = dot_r2(r)
             beta = rtrans / oldrtrans
-            daxpby(1.0, r, beta, p)
+            p = daxpby(1.0, r, beta, p)
             normr = float(np.sqrt(rtrans))
 
-        _matvec_std_arrays(row_offsets, cols, values, p, ap)
+        ap = _matvec_std_arrays(row_offsets, cols, values, p, ap)
         p_ap_dot = dot(ap, p)
         if p_ap_dot <= 0.0:
-            raise FloatingPointError("CG breakdown: non-positive p^T A p")
+            break
 
         alpha = rtrans / p_ap_dot
-        daxpby(alpha, p, 1.0, x)
-        daxpby(-alpha, ap, 1.0, r)
+        x = daxpby(alpha, p, 1.0, x)
+        r = daxpby(-alpha, ap, 1.0, r)
         rtrans = dot_r2(r)
         normr = float(np.sqrt(rtrans))
 

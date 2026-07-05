@@ -13,7 +13,9 @@ from pathlib import Path
 import sys
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))
+REPO_ROOT = HERE.parents[2]  # tests/ports/minife -> tests/ports -> tests -> repo root
+BENCH_DIR = REPO_ROOT / "optarena" / "benchmarks" / "hpc" / "sparse_linear_algebra" / "minife"
+sys.path.insert(0, str(BENCH_DIR))
 
 import numpy as np
 from numpy.ctypeslib import ndpointer
