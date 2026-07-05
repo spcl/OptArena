@@ -234,6 +234,7 @@ KNOWN_MANIFEST_KEYS = frozenset({
     "rtol",
     "atol",
     "notes",
+    "level",
     "_note",
     "_note_concurrency",
 })
@@ -328,6 +329,15 @@ def validate_scale(scale: Optional[str], track: str, source: str = "<spec>") -> 
     if track != "hpc":
         raise ValueError(f"{source}: scale is only valid on the hpc track; "
                          f"got track {track!r}")
+
+
+def validate_level(level, source: str = "<spec>") -> None:
+    """Raise ``ValueError`` unless ``level`` is ``None`` or one of 1/2/3 (an explicit
+    override of the per-track derived difficulty; see :attr:`BenchSpec.resolved_level`)."""
+    if level is None:
+        return
+    if level not in (1, 2, 3):
+        raise ValueError(f"{source}: level {level!r} must be 1, 2, or 3 (or unset to derive it)")
 
 
 #: Per-format buffer role requirements. The validator's rule #2 checks
@@ -500,6 +510,9 @@ class BenchSpec:
     #: HPC scale class (``micro`` / ``proxy``); ``None`` for non-HPC kernels and
     #: for unset HPC kernels (which resolve to ``micro`` via :attr:`scale_class`).
     scale: Optional[str] = None
+    #: Explicit difficulty level (1/2/3). ``None`` => derived per track from loop-nest
+    #: complexity by :attr:`resolved_level` (KernelBench-style; see optarena.levels).
+    level: Optional[int] = None
 
     # AgentBench additions (back-compatible defaults)
     track: str = "foundation"
@@ -687,6 +700,7 @@ class BenchSpec:
             domain=bench.get("domain"),
             dwarf=bench.get("dwarf"),
             scale=bench.get("scale"),
+            level=(ext.get("level", bench.get("level"))),
             track=track,
             precisions=tuple(ext.get("precisions", bench.get("precisions", ("fp64", "fp32")))),
             rtol=_coerce_tol(ext.get("rtol", bench.get("rtol"))),
@@ -745,12 +759,13 @@ class BenchSpec:
             raw.setdefault("name", raw["short_name"])
         taxonomy = raw.pop("taxonomy", None)
         if isinstance(taxonomy, dict):
-            for k in ("track", "subtrack", "dwarf", "domain", "scale"):
+            for k in ("track", "subtrack", "dwarf", "domain", "scale", "level"):
                 if k in taxonomy and k not in raw:
                     raw[k] = taxonomy[k]
         spec = cls.from_dict(raw, source)
         validate_dwarf(spec.dwarf, source)
         validate_scale(spec.scale, spec.track, source)
+        validate_level(spec.level, source)
         return spec
 
     @property
@@ -760,6 +775,15 @@ class BenchSpec:
         if self.scale is not None:
             return self.scale
         return "micro" if self.track == "hpc" else None
+
+    @property
+    def resolved_level(self) -> int:
+        """The 1/2/3 difficulty level: the explicit ``level`` if set, else derived
+        per track from loop-nest complexity (:func:`optarena.levels.classify_level`)."""
+        if self.level is not None:
+            return int(self.level)
+        from optarena.levels import classify_level
+        return classify_level(self)
 
     @classmethod
     def load(cls, short_name: str) -> "BenchSpec":
@@ -886,6 +910,33 @@ def _scan_kernels() -> Dict[str, pathlib.Path]:
     return out
 
 
+def _split_level(selector: str) -> Tuple[str, Optional[int]]:
+    """Split a ``<selector>@lvl<n>`` token into ``(selector, level)``.
+
+    Accepts ``@lvl3`` / ``@level3`` / ``@l3`` (case-insensitive); no suffix -> level
+    ``None``. Raises ``KeyError`` on a malformed / out-of-range level suffix."""
+    at = selector.rfind("@")
+    if at < 0:
+        return selector, None
+    base, tag = selector[:at], selector[at + 1:].lower()
+    for prefix in ("level", "lvl", "l"):
+        if tag.startswith(prefix) and tag[len(prefix):].isdigit():
+            n = int(tag[len(prefix):])
+            if n not in (1, 2, 3):
+                raise KeyError(f"level suffix {selector!r}: level must be 1, 2, or 3")
+            return base, n
+    raise KeyError(f"malformed level suffix in {selector!r} (use @lvl1 / @lvl2 / @lvl3)")
+
+
+def _safe_level(path_key: str) -> Optional[int]:
+    """The resolved difficulty level of a kernel, or ``None`` if it fails to load
+    (a malformed manifest is skipped, never crashing the whole selection)."""
+    try:
+        return BenchSpec.load(path_key).resolved_level
+    except Exception:  # noqa: BLE001 -- a broken manifest just doesn't match a level filter
+        return None
+
+
 @functools.lru_cache(maxsize=1)
 def _stem_aliases() -> Dict[str, str]:
     """Bare stem -> its unique path-key. Stems shared by >1 manifest (possible
@@ -957,11 +1008,29 @@ class KernelRegistry:
         * a **directory** path-prefix -- every kernel beneath it.
         * a **single kernel** -- a bare stem (when unambiguous) or full path-key.
 
+        A ``@lvl<n>`` suffix (``<selector>@lvl<n>``, n in 1/2/3) further filters the
+        resolved set to kernels of that difficulty level (e.g. ``hpc@lvl3`` = every
+        HPC full-app; ``foundation@lvl2`` = the branchy foundation kernels). See
+        :attr:`BenchSpec.resolved_level`.
+
         Raises ``KeyError`` when nothing matches.
         """
+        selector, level = _split_level(selector)
         scan = _scan_kernels()
-        if selector == "all":
+        if selector == "all" and level is None:
             return sorted(scan)
+        base = sorted(scan) if selector == "all" else None
+        if base is None:
+            base = self._select_group_or_kernel(selector, scan)
+        if level is None:
+            return base
+        keep = [k for k in base if _safe_level(k) == level]
+        if not keep:
+            raise KeyError(f"no kernel in {selector!r} has level {level}")
+        return keep
+
+    def _select_group_or_kernel(self, selector: str, scan) -> List[str]:
+        """The pre-level resolution of a selector to path-keys (track/dwarf/dir/kernel)."""
         s = selector.strip("/")
         # Group selection: the token names a directory (track / dwarf / subdir).
         # Try the bare token and an ``hpc/<token>`` shorthand so a dwarf name

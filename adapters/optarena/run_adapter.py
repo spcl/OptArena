@@ -38,8 +38,9 @@ _ADAPTER_DIR = Path(__file__).resolve().parent
 
 
 def _slug(selector: str) -> str:
-    """A filesystem-safe directory name for a selector (``hpc/dense`` -> ``hpc_dense``)."""
-    return selector.strip("/").replace("/", "_") or "all"
+    """A filesystem-safe directory name for a selector (``hpc/dense`` -> ``hpc_dense``,
+    ``hpc@lvl3`` -> ``hpc_lvl3``)."""
+    return selector.strip("/").replace("/", "_").replace("@", "_") or "all"
 
 
 def _write_job_config(tasks_dir: Path, selector: str, jobs_dir: Path) -> Path:

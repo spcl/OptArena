@@ -361,9 +361,9 @@ def cmd_export_hf(args) -> int:
     print(f"wrote {len(rows)} rows -> {args.out} ({args.format})")
 
     if args.push:
-        # HF dataset config names must be [A-Za-z0-9._-]+, but a selector can be a
-        # slash-bearing path (e.g. hpc/dense_linear_algebra) -- flatten it.
-        config = args.selector.strip("/").replace("/", "_")
+        # HF dataset config names must be [A-Za-z0-9._-]+, but a selector can bear a
+        # slash (hpc/dense_linear_algebra) or an @lvl suffix (hpc@lvl3) -- flatten both.
+        config = args.selector.strip("/").replace("/", "_").replace("@", "_")
         try:
             hf_export.push_to_hub(rows, args.push, config=config, token=os.environ.get("HF_TOKEN"))
         except Exception as exc:  # noqa: BLE001 -- clean CLI error, not a traceback
