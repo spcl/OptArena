@@ -36,9 +36,9 @@ UNROLLJ = 4
 FULL_EXCLUSION_MASK = 0xFFFF
 CENTRAL_SHIFT_INDEX = 0
 
-CI_DO_LJ = 1 << 0
-CI_DO_COUL = 1 << 1
-CI_HALF_LJ = 1 << 2
+CI_DO_LJ = 1
+CI_DO_COUL = 2
+CI_HALF_LJ = 4
 
 # GROMACS c_nbnxnMinDistanceSquared for GMX_DOUBLE.
 NBNXN_MIN_DISTANCE_SQUARED = 1.0e-36
@@ -460,6 +460,13 @@ def initialize(
         table_size=table_size,
         include_exclusions=bool(include_exclusions),
     )
+    max_cj = int(n_clusters) * int(n_clusters)
+    padded_cj_cluster = np.zeros(max_cj, dtype=np.int32)
+    padded_cj_excl = np.full(max_cj, FULL_EXCLUSION_MASK, dtype=np.uint16)
+    padded_cj_cluster[: cj_cluster.shape[0]] = cj_cluster
+    padded_cj_excl[: cj_excl.shape[0]] = cj_excl
+    f = np.zeros_like(x, dtype=np.float64)
+    fshift = np.zeros_like(shift_vec, dtype=np.float64)
     return (
         x,
         q,
@@ -470,11 +477,13 @@ def initialize(
         ci_cj_start,
         ci_cj_end,
         ci_flags,
-        cj_cluster,
-        cj_excl,
+        padded_cj_cluster,
+        padded_cj_excl,
         shift_vec,
         coulomb_table_f,
         tab_coul_scale,
+        f,
+        fshift,
     )
 
 
@@ -534,6 +543,8 @@ def gromacs(
     cj_excl,
     shift_vec,
     coulomb_table_f,
+    f,
+    fshift,
     epsfac,
     rcut,
     tab_coul_scale,
@@ -541,7 +552,7 @@ def gromacs(
 ):
     """Manifest-compatible GROMACS benchmark entry point."""
 
-    return _nbnxm_4x4_qstab_lj_force_arrays(
+    computed_f, computed_fshift = _nbnxm_4x4_qstab_lj_force_arrays(
         x,
         q,
         atom_type,
@@ -560,6 +571,9 @@ def gromacs(
         tab_coul_scale,
         min_distance_squared,
     )
+    f[:, :] = computed_f
+    fshift[:, :] = computed_fshift
+    return f, fshift
 
 
 def _nbnxm_4x4_qstab_lj_force_arrays(
@@ -732,9 +746,14 @@ def _inner_4x4(
             if do_coul:
                 qq = skipmask * qi[i] * q[aj]
                 # CALC_COUL_TAB lookup variable: rs = r * tab_coul_scale.
-                rs = rsq * rinv * tab_coul_scale
+                # ``float(...)`` is explicit (not a no-op cast for the reader):
+                # ``rs`` feeds ``ri = int(rs)``, an array index -- without this
+                # cast the translator's int-ness propagation walks backward
+                # through the multiply and misclassifies tab_coul_scale (and
+                # rsq/min_distance_squared through it) as integer scalars.
+                rs = rsq * rinv * float(tab_coul_scale)
                 ri = int(rs)
-                ri = min(max(ri, 0), len(coulomb_table_f) - 2)
+                ri = min(max(ri, 0), coulomb_table_f.shape[0] - 2)
                 frac = rs - float(ri)
                 fexcl = (1.0 - frac) * coulomb_table_f[ri] + frac * coulomb_table_f[
                     ri + 1
