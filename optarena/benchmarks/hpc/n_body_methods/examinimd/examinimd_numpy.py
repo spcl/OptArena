@@ -549,7 +549,9 @@ def initialize(
             displacement=displacement,
         )
     )
-    return x, atom_type, neigh_counts, neigh_list, lj1, lj2, cutsq, f
+    padded_neigh_list = np.full((x.shape[0], x.shape[0]), -1, dtype=INDEX_DTYPE)
+    padded_neigh_list[:, : neigh_list.shape[1]] = neigh_list
+    return x, atom_type, neigh_counts, padded_neigh_list, lj1, lj2, cutsq, f
 
 
 def examinimd(x, atom_type, neigh_counts, neigh_list, lj1, lj2, cutsq, f):
