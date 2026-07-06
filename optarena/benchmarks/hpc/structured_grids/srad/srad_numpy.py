@@ -195,26 +195,30 @@ def validate_srad_inputs(
 def compute_roi_q0sqr(J, r1, r2, c1, c2):
     """Rodinia ROI mean/variance/q0sqr computation for one iteration."""
 
-    rows, cols = J.shape
-    J_flat = J.ravel()
     size_R = (r2 - r1 + 1) * (c2 - c1 + 1)
     total = 0.0
     total2 = 0.0
 
     for i in range(r1, r2 + 1):
-        row_base = i * cols
         for j in range(c1, c2 + 1):
-            tmp = J_flat[row_base + j]
+            tmp = J[i, j]
             total += tmp
             total2 += tmp * tmp
 
     mean_roi = total / size_R
     var_roi = total2 / size_R - mean_roi * mean_roi
-    q0sqr = var_roi / (mean_roi * mean_roi)
 
-    # Avoid division by zero for uniform or degenerate ROIs.
-    if not np.isfinite(q0sqr) or q0sqr < SRAD_EPS:
+    # Guard the division by zero directly (mean_roi == 0 for a degenerate
+    # ROI) instead of computing the ratio and post-checking np.isfinite --
+    # C/Fortran have no isfinite intrinsic wired into the emitter, and this
+    # is exactly equivalent since mean_roi == 0 is the only way the ratio
+    # below can go non-finite.
+    if mean_roi == 0.0:
         q0sqr = SRAD_EPS
+    else:
+        q0sqr = var_roi / (mean_roi * mean_roi)
+        if q0sqr < SRAD_EPS:
+            q0sqr = SRAD_EPS
 
     return q0sqr, mean_roi, var_roi
 
@@ -223,36 +227,28 @@ def srad_compute_diffusion(J, iN, iS, jW, jE, q0sqr, dN, dS, dW, dE, c):
     """Compute derivatives and diffusion coefficients."""
 
     rows, cols = J.shape
-    J_flat = J.ravel()
-    dN_flat = dN.ravel()
-    dS_flat = dS.ravel()
-    dW_flat = dW.ravel()
-    dE_flat = dE.ravel()
-    c_flat = c.ravel()
     q0sqr_safe = q0sqr if q0sqr > SRAD_EPS else SRAD_EPS
 
     for i in range(rows):
-        row_base = i * cols
-        north_base = int(iN[i]) * cols
-        south_base = int(iS[i]) * cols
+        north = int(iN[i])
+        south = int(iS[i])
         for j in range(cols):
-            k = row_base + j
-            Jc = J_flat[k]
+            Jc = J[i, j]
             Jc_safe = Jc if abs(Jc) > SRAD_EPS else SRAD_EPS
 
-            dN_flat[k] = J_flat[north_base + j] - Jc
-            dS_flat[k] = J_flat[south_base + j] - Jc
-            dW_flat[k] = J_flat[row_base + int(jW[j])] - Jc
-            dE_flat[k] = J_flat[row_base + int(jE[j])] - Jc
+            dN[i, j] = J[north, j] - Jc
+            dS[i, j] = J[south, j] - Jc
+            dW[i, j] = J[i, int(jW[j])] - Jc
+            dE[i, j] = J[i, int(jE[j])] - Jc
 
             G2 = (
-                dN_flat[k] * dN_flat[k]
-                + dS_flat[k] * dS_flat[k]
-                + dW_flat[k] * dW_flat[k]
-                + dE_flat[k] * dE_flat[k]
+                dN[i, j] * dN[i, j]
+                + dS[i, j] * dS[i, j]
+                + dW[i, j] * dW[i, j]
+                + dE[i, j] * dE[i, j]
             ) / (Jc_safe * Jc_safe)
 
-            L = (dN_flat[k] + dS_flat[k] + dW_flat[k] + dE_flat[k]) / Jc_safe
+            L = (dN[i, j] + dS[i, j] + dW[i, j] + dE[i, j]) / Jc_safe
 
             num = 0.5 * G2 - (1.0 / 16.0) * (L * L)
             den = 1.0 + 0.25 * L
@@ -271,32 +267,24 @@ def srad_compute_diffusion(J, iN, iS, jW, jE, q0sqr, dN, dS, dW, dE, c):
             elif c_val > 1.0:
                 c_val = 1.0
 
-            c_flat[k] = c_val
+            c[i, j] = c_val
 
 
 def srad_update_image(J, iS, jE, lam, dN, dS, dW, dE, c):
     """Compute divergence and update the image."""
 
     rows, cols = J.shape
-    J_flat = J.ravel()
-    dN_flat = dN.ravel()
-    dS_flat = dS.ravel()
-    dW_flat = dW.ravel()
-    dE_flat = dE.ravel()
-    c_flat = c.ravel()
 
     for i in range(rows):
-        row_base = i * cols
-        south_base = int(iS[i]) * cols
+        south = int(iS[i])
         for j in range(cols):
-            k = row_base + j
-            cN = c_flat[k]
-            cS = c_flat[south_base + j]
-            cW = c_flat[k]
-            cE = c_flat[row_base + int(jE[j])]
+            cN = c[i, j]
+            cS = c[south, j]
+            cW = c[i, j]
+            cE = c[i, int(jE[j])]
 
-            D = cN * dN_flat[k] + cS * dS_flat[k] + cW * dW_flat[k] + cE * dE_flat[k]
-            J_flat[k] = J_flat[k] + 0.25 * lam * D
+            D = cN * dN[i, j] + cS * dS[i, j] + cW * dW[i, j] + cE * dE[i, j]
+            J[i, j] = J[i, j] + 0.25 * lam * D
 
 
 def srad_kernel(J, iN, iS, jW, jE, q0sqr, lam, dN, dS, dW, dE, c):
@@ -336,7 +324,7 @@ def srad_run(
         c = np.zeros_like(J)
 
     for _ in range(int(niter)):
-        q0sqr, _, _ = compute_roi_q0sqr(J, int(r1), int(r2), int(c1), int(c2))
+        q0sqr, _mean_roi, _var_roi = compute_roi_q0sqr(J, int(r1), int(r2), int(c1), int(c2))
         srad_kernel(J, iN, iS, jW, jE, q0sqr, float(lam), dN, dS, dW, dE, c)
 
     return J
@@ -362,6 +350,6 @@ def srad(J, iN, iS, jW, jE, niter, lam, r1, r2, c1, c2, dN, dS, dW, dE, c):
     """Manifest-compatible SRAD benchmark entry point."""
 
     for _ in range(int(niter)):
-        q0sqr, _, _ = compute_roi_q0sqr(J, int(r1), int(r2), int(c1), int(c2))
+        q0sqr, _mean_roi, _var_roi = compute_roi_q0sqr(J, int(r1), int(r2), int(c1), int(c2))
         srad_kernel(J, iN, iS, jW, jE, q0sqr, float(lam), dN, dS, dW, dE, c)
     return J
