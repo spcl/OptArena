@@ -81,10 +81,6 @@ optimizations:
     expected_optimization: null
     detect: null
     source: tsvc_2_5
-  ext_war_sym:
-    expected_optimization: null
-    detect: null
-    source: tsvc_2_5
   fission_dep_const_offset:
     expected_optimization: null
     detect: null
@@ -178,10 +174,6 @@ optimizations:
     detect: null
     source: tsvc_2_5
   move_if_data_dep_nest:
-    expected_optimization: null
-    detect: null
-    source: tsvc_2_5
-  neg_stride_rev:
     expected_optimization: null
     detect: null
     source: tsvc_2_5
