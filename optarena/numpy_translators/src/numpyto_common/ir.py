@@ -176,15 +176,3 @@ class KernelIR:
         refs = sorted(a.name for a in self.arrays)
         scalars = sorted([s.name for s in self.symbols] + [s.name for s in self.scalars])
         return refs + scalars
-
-    def is_array(self, name: str) -> bool:
-        return any(a.name == name for a in self.arrays)
-
-    def is_symbol(self, name: str) -> bool:
-        return any(s.name == name for s in self.symbols)
-
-    def find_array(self, name: str) -> Optional[ArrayDesc]:
-        for a in self.arrays:
-            if a.name == name:
-                return a
-        return None

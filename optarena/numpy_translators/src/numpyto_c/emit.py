@@ -816,21 +816,6 @@ class _CBodyEmitter(BaseEmitter):
             return self._dtype_for_name(node.value.id) in ("bool", "bool_")
         return False
 
-    def _is_complex_subscript_legacy(self, node: ast.AST) -> bool:
-        """Retained for the original Subscript(Name) shortcut."""
-        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
-            name = node.value.id
-            local_dtypes = getattr(self.kir.tree, "local_dtypes", {}) or {}
-            dt = local_dtypes.get(name)
-            if dt is None:
-                for a in self.kir.arrays:
-                    if a.name == name:
-                        dt = a.dtype
-                        break
-            if dt is not None and dt.startswith("complex"):
-                return True
-        return False
-
 
 # ---------------------------------------------------------------------------
 # Top-level emitters

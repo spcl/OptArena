@@ -1127,35 +1127,6 @@ def _resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> Optional[List
     return call_args + defaults[-missing:]
 
 
-def _collect_returned_outputs(fn: ast.FunctionDef) -> List[str]:
-    """Return the list of Names mentioned in a final ``return`` of the
-    function body.
-
-    Recognised forms:
-    * ``return X`` -> ``['X']``
-    * ``return X, Y, Z`` -> ``['X', 'Y', 'Z']``
-    * Anything else (expressions, no return) -> ``[]``.
-    """
-    if not fn.body:
-        return []
-    last = fn.body[-1]
-    if not isinstance(last, ast.Return) or last.value is None:
-        return []
-    if isinstance(last.value, ast.Name):
-        return [last.value.id]
-    if isinstance(last.value, ast.Tuple):
-        names: List[str] = []
-        for elt in last.value.elts:
-            if isinstance(elt, ast.Name):
-                names.append(elt.id)
-            else:
-                # Mixed-form return -- bail; the kernel needs manual
-                # care (or extension here later).
-                return []
-        return names
-    return []
-
-
 def _synthesize_return_temps(fn: ast.FunctionDef):
     """Rewrite a trailing ``return <expr>`` into ``optarena_out0 = <expr>;
     return optarena_out0`` so a computed (non-Name) return can flow through

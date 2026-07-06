@@ -61,14 +61,6 @@ def _attr_call(mod: str, attr: str, args: List[ast.expr]) -> ast.Call:
         args=args, keywords=[])
 
 
-def _is_attr_call(node: ast.AST, mod: str, attr: str) -> bool:
-    return (isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == mod
-            and node.func.attr == attr)
-
-
 # ---------------------------------------------------------------------------
 # Expanders. Each returns a list of replacement statements for the
 # original assignment.
@@ -76,20 +68,6 @@ def _is_attr_call(node: ast.AST, mod: str, attr: str) -> bool:
 
 def _make_iter_name(prefix: str, depth: int) -> str:
     return f"{prefix}{depth}"
-
-
-def _flatten_loop(arr_name: str, shape: Tuple[str, ...],
-                  iter_prefix: str) -> Tuple[List[ast.AST], ast.AST]:
-    """Build a nested ``for`` loop over an N-D array and return
-    ``(loops, leaf_subscript)``. The caller wraps the leaf with the
-    reduction body."""
-    iters = [_make_iter_name(iter_prefix, i) for i in range(len(shape))]
-    subscript = (ast.Subscript(value=_name(arr_name),
-                               slice=(_name(iters[0]) if len(iters) == 1 else
-                                      ast.Tuple(elts=[_name(i) for i in iters],
-                                                ctx=ast.Load())),
-                               ctx=ast.Load()))
-    return iters, subscript
 
 
 def _wrap_for_loops(iters: List[str], bounds, body: List[ast.stmt]) -> List[ast.stmt]:
@@ -219,42 +197,6 @@ def _shape_total_product(shape: Tuple[str, ...]) -> ast.expr:
     for p in parts[1:]:
         expr = ast.BinOp(left=expr, op=ast.Mult(), right=p)
     return expr
-
-
-def _reduction(target: ast.expr, arr_node: ast.expr, init: ast.expr,
-               op_fn: Callable[[ast.expr, ast.expr], ast.expr],
-               shape: Tuple[str, ...], post: Optional[ast.expr] = None
-               ) -> List[ast.stmt]:
-    """Build an accumulator loop reducing ``arr_node`` into ``target``.
-
-    :param target: assignment LHS (``s`` in ``s = np.sum(A)``).
-    :param arr_node: the array being reduced (``np.sum(A)`` -> ``A``).
-    :param init: initial accumulator value.
-    :param op_fn: callable returning the inner update expression --
-        e.g. ``lambda acc, x: acc + x`` for sum.
-    :param shape: array shape (drives the loop nest).
-    :param post: optional post-loop expression to overwrite ``target``
-        (used by mean for the divide-by-count).
-    """
-    if not isinstance(arr_node, ast.Name):
-        # ``np.sum(A * B)`` etc. -- bind to a temporary first.
-        # For now keep simple: only Name forms supported.
-        raise NotImplementedError("non-Name reduction operand")
-    arr_name = arr_node.id
-    iters = [_make_iter_name("__r", i) for i in range(len(shape))]
-    subscript = ast.Subscript(
-        value=_name(arr_name),
-        slice=(_name(iters[0]) if len(iters) == 1 else
-               ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load())),
-        ctx=ast.Load())
-    target_load = ast.Name(id=target.id, ctx=ast.Load()) if isinstance(target, ast.Name) else target
-    body = [ast.Assign(targets=[target], value=op_fn(target_load, subscript))]
-    loops = _wrap_for_loops(iters, shape, body)
-    stmts: List[ast.stmt] = [ast.Assign(targets=[target], value=init)]
-    stmts.extend(loops)
-    if post is not None:
-        stmts.append(ast.Assign(targets=[target], value=post))
-    return stmts
 
 
 def _slice_step_const(sl: ast.Slice) -> Optional[int]:
@@ -3022,12 +2964,6 @@ def expand_einsum(target: ast.expr, args: List[ast.expr],
         return _wrap_for_loops([var_of[c] for c in out_letters],
                                [letter_extent[c] for c in out_letters], inner)
     return inner
-
-
-def _einsum_call(spec: str, *operands: ast.expr) -> ast.Call:
-    """Build an ``np.einsum(spec, *operands)`` Call so the wrapper ops
-    (tensordot / inner / vdot) reuse :func:`expand_einsum`."""
-    return _attr_call("np", "einsum", [_const(spec), *operands])
 
 
 def expand_tensordot(target: ast.expr, args: List[ast.expr],

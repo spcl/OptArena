@@ -1557,14 +1557,6 @@ def _shape_from_ast(node, shape_table=None) -> Tuple[str, ...]:
 _DEFAULT_SLICE_START = "0"
 
 
-def _slice_dim_count(node: ast.Subscript) -> int:
-    """Return the number of dim entries the subscript carries."""
-    sl = node.slice
-    if isinstance(sl, ast.Tuple):
-        return len(sl.elts)
-    return 1
-
-
 def _slice_dims(node: ast.Subscript) -> List[ast.AST]:
     """Return per-axis slice entries (either ``Slice`` or non-slice index)."""
     sl = node.slice
@@ -2367,15 +2359,6 @@ def _fold_offset(rhs_start: ast.AST, lhs_start: ast.AST) -> Optional[int]:
             and isinstance(lhs_start.value, int)):
         return rhs_start.value - lhs_start.value
     return None
-
-
-def _ast_equal(a: ast.AST, b: ast.AST) -> bool:
-    """Best-effort structural equality on simple Constant / Name nodes."""
-    if isinstance(a, ast.Constant) and isinstance(b, ast.Constant):
-        return a.value == b.value
-    if isinstance(a, ast.Name) and isinstance(b, ast.Name):
-        return a.id == b.id
-    return ast.dump(a) == ast.dump(b)
 
 
 class _DaceMapRewriter(ast.NodeTransformer):
@@ -4023,39 +4006,6 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                     if expanded:
                         return expanded
         return node
-
-    def _widest_array_shape(self, expr: ast.AST):
-        """Return the widest (highest-rank) shape among array Name
-        references in ``expr`` that are read AS arrays (not as scalar
-        subscripts). Returns ``None`` if no array Names are referenced
-        in array context.
-
-        ``a[i] + 0.0`` does NOT infer ``a``'s shape -- the subscript
-        reduces ``a`` to a scalar; only bare Name references and
-        slice-bearing subscripts count.
-        """
-        best = None
-        # Find every Subscript so we can exclude its base from the
-        # "bare Name" scan unless the slice contains a Slice.
-        scalar_subscript_bases: Set[int] = set()
-        for sub in ast.walk(expr):
-            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
-                sl = sub.slice
-                has_slice = (isinstance(sl, ast.Slice)
-                             or (isinstance(sl, ast.Tuple)
-                                 and any(isinstance(e, ast.Slice) for e in sl.elts)))
-                if not has_slice:
-                    scalar_subscript_bases.add(id(sub.value))
-        for sub in ast.walk(expr):
-            if isinstance(sub, ast.Name):
-                if id(sub) in scalar_subscript_bases:
-                    continue
-                shape = self.shape_table.get(sub.id)
-                if shape is None:
-                    continue
-                if best is None or len(shape) > len(best):
-                    best = tuple(shape)
-        return best
 
     def _rhs_is_whole_array(self, expr: ast.AST, lhs_name: str) -> bool:
         """Check that every array Name referenced in ``expr`` has a
