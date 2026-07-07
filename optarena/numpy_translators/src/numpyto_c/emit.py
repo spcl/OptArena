@@ -428,12 +428,16 @@ class _CBodyEmitter(BaseEmitter):
             if isinstance(node.op, ast.FloorDiv):
                 return (f"int_floor({self.emit_expr(node.left)}, "
                         f"{self.emit_expr(node.right)})")
-            # ``a % b`` -> ``python_mod(a, b)`` because Python (and numpy)
-            # take the sign of the divisor; C/C++ take the sign of the
-            # dividend. The macro converts.
+            # ``a % b`` -> ``python_mod`` / ``python_fmod`` because Python (and
+            # numpy) take the sign of the divisor; C/C++ take the sign of the
+            # dividend. Integer operands use the exact integer ``%`` macro; a
+            # float operand (numpy ``np.mod`` on reals) needs the ``fmod``-based
+            # variant since C ``%`` rejects doubles.
             if isinstance(node.op, ast.Mod):
-                return (f"python_mod({self.emit_expr(node.left)}, "
-                        f"{self.emit_expr(node.right)})")
+                left, right = self.emit_expr(node.left), self.emit_expr(node.right)
+                if self._is_float_operand(node.left) or self._is_float_operand(node.right):
+                    return f"python_fmod({left}, {right})"
+                return f"python_mod({left}, {right})"
             # ``scalar @ scalar`` (numpy treats ``@`` between two
             # 0-D values as ordinary multiplication). Reaches emit
             # only when the matmul hoister rejected it because both
@@ -1275,6 +1279,14 @@ _C_HEADER = ("#define _POSIX_C_SOURCE 199309L\n"
              "#ifndef python_mod\n"
              "#define python_mod(a, b) (((a) % (b) + (b)) % (b))\n"
              "#endif\n"
+             "/* Floating-point ``%``: numpy's floored modulo takes the sign of the\n"
+             " * divisor, which integer ``python_mod`` cannot express on doubles.\n"
+             " * Mirrors numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n"
+             "static inline double python_fmod(double a, double b) {\n"
+             "    double m = fmod(a, b);\n"
+             "    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n"
+             "    return m;\n"
+             "}\n"
              "/* Integer power for VLA shape bounds like ``R ** K``. */\n"
              "static inline int64_t __npb_int_pow(int64_t base, int64_t exp) {\n"
              "    int64_t result = 1;\n"
@@ -1375,7 +1387,15 @@ _CPP_HEADER = ('#include <chrono>\n#include <cstdint>\n#include <cmath>\n'
                '/* Python ``%`` returns the sign of the divisor; C/C++ the\n'
                ' * dividend. ``python_mod`` bridges the gap. */\n'
                'template <class A, class B>\n'
-               'constexpr auto python_mod(A a, B b) { return (a % b + b) % b; }\n\n'
+               'constexpr auto python_mod(A a, B b) { return (a % b + b) % b; }\n'
+               '/* Floating-point ``%``: numpy floored modulo (sign of the divisor),\n'
+               ' * which integer ``python_mod`` cannot express on doubles. Mirrors\n'
+               ' * numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n'
+               'inline double python_fmod(double a, double b) {\n'
+               '    double m = std::fmod(a, b);\n'
+               '    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n'
+               '    return m;\n'
+               '}\n\n'
                'extern "C" {\n')
 _CPP_FOOTER = '} // extern "C"\n'
 

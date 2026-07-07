@@ -2687,6 +2687,68 @@ class _ComplexAccessorToFunc(ast.NodeTransformer):
         return node
 
 
+def _np_multi_call(fn: str, args: List[ast.expr]) -> ast.Call:
+    """Build ``np.<fn>(*args)`` (the multi-argument sibling of
+    ``_ComplexAccessorToFunc._np_call``)."""
+    return ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=fn, ctx=ast.Load()),
+                    args=args,
+                    keywords=[])
+
+
+def _cmp_zero(x: ast.expr, op: ast.cmpop) -> ast.Compare:
+    """Build ``x <op> 0`` (heaviside's sign test against zero)."""
+    return ast.Compare(left=x, ops=[op], comparators=[ast.Constant(value=0)])
+
+
+class _ElementalUfuncToPrimitive(ast.NodeTransformer):
+    """Rewrite the two-argument elemental numpy ufuncs that lack a direct native /
+    JIT lowering into equivalent expressions over already-supported primitives, so
+    every backend (C / C++ / Fortran + numba / pythran / jax) lowers them uniformly
+    and the array / slice forms scalarise through the normal elementwise expander:
+
+      * ``np.mod(a, b)`` / ``np.remainder(a, b)`` -> ``a % b`` -- numpy's floored
+        modulo is exactly the ``%`` operator (result takes the sign of the divisor).
+      * ``np.logaddexp(a, b)`` -> ``np.maximum(a, b) + np.log(1.0 + np.exp(-np.abs(a - b)))``
+        -- numpy's stable log-sum-exp (``npy_logaddexp``). ``log1p`` would be the exact
+        spelling but has no Fortran intrinsic; here ``exp(-|a-b|)`` is in ``(0, 1]`` so
+        ``log(1 + .)`` is well-conditioned and agrees with numpy to a few ulp.
+      * ``np.heaviside(a, b)`` -> ``np.where(a < 0, 0.0, np.where(a == 0, b, 1.0))``
+        -- 0 below zero, the second arg exactly at zero, 1 above.
+
+    numba has no ``np.heaviside`` and pythran no ``np.logaddexp``; expanding to the
+    shared primitives every backend supports is the single uniform lowering, with no
+    per-backend special-casing. Reused operands are deep-copied so no AST node is
+    shared between two positions."""
+
+    def __init__(self):
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        f = node.func
+        if not (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy")
+                and len(node.args) == 2 and not node.keywords):
+            return node
+        a, b = node.args
+        if f.attr in ("mod", "remainder"):
+            self.changed = True
+            return ast.copy_location(ast.BinOp(left=a, op=ast.Mod(), right=b), node)
+        if f.attr == "logaddexp":
+            self.changed = True
+            diff = ast.BinOp(left=a, op=ast.Sub(), right=copy.deepcopy(b))
+            expterm = _np_multi_call("exp", [ast.UnaryOp(op=ast.USub(), operand=_np_multi_call("abs", [diff]))])
+            onep = ast.BinOp(left=ast.Constant(value=1.0), op=ast.Add(), right=expterm)
+            tail = _np_multi_call("log", [onep])
+            head = _np_multi_call("maximum", [copy.deepcopy(a), copy.deepcopy(b)])
+            return ast.copy_location(ast.BinOp(left=head, op=ast.Add(), right=tail), node)
+        if f.attr == "heaviside":
+            self.changed = True
+            inner = _np_multi_call("where", [_cmp_zero(copy.deepcopy(a), ast.Eq()), b, ast.Constant(value=1.0)])
+            outer = _np_multi_call("where", [_cmp_zero(a, ast.Lt()), ast.Constant(value=0.0), inner])
+            return ast.copy_location(outer, node)
+        return node
+
+
 def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) -> str:
     """Rewrite ``source`` so numba / pythran / dace can compile it: expand the
     numpy ops they do not support (batched ``@`` / ``np.matmul``, ``np.pad``,
@@ -2747,6 +2809,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _ReshapeContiguousInline(noncontig),
             _IntMatmulInline(ranks, dtypes),
             _ComplexAccessorToFunc(conjugate_only=True),
+            _ElementalUfuncToPrimitive(),
         ]
         for p in passes:
             # Process THIS scope's own statements only; a nested def is its own

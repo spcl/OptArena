@@ -57,11 +57,12 @@ def native_desugar(fn: ast.FunctionDef) -> None:
       IfExp / if branches, so a backend never meets a bare None literal at emit.
     """
     from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
-                                              _UfuncOutInline)
+                                              _ElementalUfuncToPrimitive, _UfuncOutInline)
     _NewaxisToNone().visit(fn)
     _UfuncOutInline().visit(fn)
     _DecomposeRollSlice().visit(fn)
     _ComplexAccessorToFunc().visit(fn)
+    _ElementalUfuncToPrimitive().visit(fn)
     _DropValidationGuards().visit(fn)
     _FoldStaticNoneBranches().visit(fn)
     ast.fix_missing_locations(fn)
