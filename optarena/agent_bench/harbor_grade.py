@@ -37,16 +37,53 @@ from optarena.agent_bench.scoring import BASELINE_CHOICES
 from optarena.agent_bench.task import Task
 
 
+def _parse_cpu_list(text: str) -> set:
+    """Parse a Linux cpulist (``"0-1,4,6-7"``) into a set of CPU ids."""
+    cpus = set()
+    for part in text.strip().split(","):
+        if not part:
+            continue
+        if "-" in part:
+            lo, hi = part.split("-")
+            cpus.update(range(int(lo), int(hi) + 1))
+        else:
+            cpus.add(int(part))
+    return cpus
+
+
+def _physical_core_affinity(allowed: set) -> set:
+    """One logical CPU per physical core, dropping SMT/hyperthread siblings, intersected
+    with ``allowed``. Reads sysfs topology (no privileges needed); returns ``allowed``
+    unchanged when the topology is unreadable (non-Linux, or ``/sys`` not mounted)."""
+    chosen, seen_cores = set(), set()
+    for cpu in sorted(allowed):
+        try:
+            with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as f:
+                core = min(_parse_cpu_list(f.read()))
+        except OSError:
+            return set(allowed)  # topology unavailable -> keep the full mask
+        if core not in seen_cores:
+            seen_cores.add(core)
+            chosen.add(cpu)
+    return chosen or set(allowed)
+
+
 def pin_threads() -> None:
-    """Pin this process (and its forked timing children) to cores, so co-runners
-    cannot perturb the timing. Best-effort: OMP placement always, OS affinity where
-    supported (Linux). No-op when ``measurement.pin_threads`` is false."""
+    """Pin this process (and its forked timing children) to ONE thread per physical core,
+    so co-runners and SMT siblings cannot perturb the timing. Best-effort: OMP placement
+    always, OS affinity to physical cores where supported (Linux). No-op when
+    ``measurement.pin_threads`` is false.
+
+    Turbo/boost and the CPU frequency governor are NOT controlled here: disabling them needs
+    write access to root-owned sysfs (``cpufreq/boost``, ``scaling_governor``), so under a
+    sudoless judge CPU-frequency drift is a residual noise source that the same-machine ratio
+    and the dispersion gate absorb. TODO: disable turbo in the runner image where privileged."""
     if not config.get("measurement.pin_threads", True):
         return
     os.environ.setdefault("OMP_PROC_BIND", "close")
-    os.environ.setdefault("OMP_PLACES", "cores")
+    os.environ.setdefault("OMP_PLACES", "cores")  # OpenMP places = physical cores
     if "sched_setaffinity" in vars(os):
-        os.sched_setaffinity(0, os.sched_getaffinity(0))
+        os.sched_setaffinity(0, _physical_core_affinity(os.sched_getaffinity(0)))
 
 
 @contextlib.contextmanager

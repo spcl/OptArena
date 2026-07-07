@@ -238,23 +238,23 @@ def _run_c_reference(spec: BenchSpec, task: Task, binding: Binding, public_data:
             raise RuntimeError(f"C reference build failed:\n{built.log[-1500:]}")
         outputs, samples = None, []
         for _ in range(max(1, repeat)):
-            outputs, ns = _call_isolated(built.lib,
-                                         binding,
-                                         public_data,
-                                         "c",
-                                         device=False,
-                                         timeout=timeout,
-                                         memory_gb=memory_gb)
+            outputs, ns, _ = _call_isolated(built.lib,
+                                            binding,
+                                            public_data,
+                                            "c",
+                                            device=False,
+                                            timeout=timeout,
+                                            memory_gb=memory_gb)
             samples.append(int(ns))
         best = min(samples) if samples else 0
         hidden_out: Dict[str, Dict] = {}
         for label, hdata in hidden_data:
-            houts, _ = _call_isolated(built.lib,
-                                      binding,
-                                      hdata,
-                                      "c",
-                                      device=False,
-                                      timeout=timeout,
-                                      memory_gb=memory_gb)
+            houts, _, _ = _call_isolated(built.lib,
+                                         binding,
+                                         hdata,
+                                         "c",
+                                         device=False,
+                                         timeout=timeout,
+                                         memory_gb=memory_gb)
             hidden_out[label] = houts
     return outputs, int(best or 0), hidden_out, [int(s) for s in samples]
