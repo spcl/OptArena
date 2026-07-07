@@ -26,10 +26,14 @@ replicated.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+if TYPE_CHECKING:  # hints only -- the math core stays free of the binding/envelope imports
+    from optarena.agent_bench.envelope import Submission
+    from optarena.bindings.contract import Binding
 
 SCHEMES = ("block", "block_cyclic", "cyclic", "replicated")
 
@@ -218,3 +222,178 @@ def default_distribution(shape: Sequence[int], grid: Grid, tile: int = 1) -> Arr
         else:
             axes.append(AxisDist(grid_dim=None))
     return ArrayDist(axes=tuple(axes))
+
+
+# --------------------------------------------------------------------------------------- #
+# Descriptor -- the semantic layer over a raw ``Submission.distribution`` dict.
+#
+# The envelope (``Submission.__post_init__``) checks only the SHAPE of the request. The
+# Descriptor binds it to a concrete kernel: every named array must be a real binding
+# pointer (never a scalar -- scalars are broadcast by value, identical on every rank), the
+# processor grid must have exactly the run's fixed rank count, and per-array axis counts
+# must match the array's dimensionality where it is known. Everything the agent did NOT
+# distribute -- and every scalar and length-1 array -- is REPLICATED: it lives on every
+# rank and the harness reads rank 0's copy when it gathers (keeping the replicas coherent
+# across ranks is the kernel's job, per the distributed contract).
+# --------------------------------------------------------------------------------------- #
+
+
+def _array_dist_from_layout(name: str, layout: dict, grid: Grid) -> ArrayDist:
+    """Resolve one array's ``{replicated | axes:[...]}`` layout dict into an
+    :class:`ArrayDist`. Structural fields were already validated by the envelope; here we
+    additionally reject a ghost margin on a non-``block`` axis (a contiguous halo is only
+    defined for ``block``)."""
+    if layout.get("replicated"):
+        return ArrayDist(replicated=True)
+    axes: List[AxisDist] = []
+    for i, ax in enumerate(layout["axes"]):
+        scheme = ax.get("scheme", "block")
+        halo = int(ax.get("halo", 0))
+        if halo and scheme != "block":
+            raise ValueError(f"distribution.arrays[{name!r}] axis {i}: halo={halo} requires "
+                             f"scheme 'block' (a ghost margin is only defined for a contiguous "
+                             f"block), got scheme {scheme!r}")
+        axes.append(AxisDist(grid_dim=ax.get("grid_dim"), scheme=scheme, tile=int(ax.get("tile", 1)), halo=halo))
+    return ArrayDist(axes=tuple(axes))
+
+
+def _symbol_axes_from_binding(binding: "Binding") -> Dict[str, List[Tuple[str, int]]]:
+    """Derive ``{size_symbol: [(array, axis), ...]}`` from the binding's declarative array
+    shapes: a shape token that is exactly a size-symbol name ties that symbol to that array
+    axis, so a distributed axis makes the symbol's LOCAL value the local extent. Legacy
+    kernels with no ``init.shapes`` (pointer ``shape is None``) contribute nothing -- their
+    per-rank sizes come from an explicit ``symbol_axes`` override (the manifest ``mpi:``
+    block). Candidates are collected in the binding's canonical (name-sorted) order."""
+    symbols = {a.name for a in binding.scalars if a.role == "symbol"}
+    out: Dict[str, List[Tuple[str, int]]] = {}
+    for p in binding.pointers:
+        if p.shape is None:
+            continue
+        for axis, tok in enumerate(p.shape):
+            if tok in symbols:
+                out.setdefault(tok, []).append((p.name, axis))
+    return out
+
+
+@dataclass
+class Descriptor:
+    """The resolved MPI distribution for one ``(submission, binding)`` pair.
+
+    Built once via :meth:`from_submission`; both the C-driver codegen and the mpi4py
+    launcher drive scatter/gather + per-rank size scalars through it, so they can never
+    disagree on where an element lives.
+
+    :ivar grid: the processor grid (``grid.nranks == the run's fixed rank count``).
+    :ivar arrays: every binding array pointer -> its :class:`ArrayDist` (declared arrays as
+        the agent asked; every other array replicated).
+    :ivar symbol_axes: ``{size_symbol: [(array, axis), ...]}`` -- the candidate axes a
+        symbol sizes, used by :meth:`local_size_scalars` to give each rank its LOCAL extent.
+    """
+    grid: Grid
+    arrays: Dict[str, ArrayDist]
+    symbol_axes: Dict[str, List[Tuple[str, int]]] = field(default_factory=dict)
+
+    @classmethod
+    def from_submission(cls,
+                        submission: "Submission",
+                        binding: "Binding",
+                        ranks: int,
+                        *,
+                        symbol_axes: Optional[Dict[str, Tuple[str, int]]] = None) -> "Descriptor":
+        """Resolve + semantically validate ``submission.distribution`` against ``binding``
+        and the fixed ``ranks``.
+
+        Raises ``ValueError`` (a scored error, never a silent mis-layout) when: the grid's
+        rank product != ``ranks``; a named array is unknown or is a scalar (scalars are
+        replicated by value, never distributed); a declared axis count != the array's known
+        dimensionality; or a ghost margin sits on a non-``block`` axis. Every array the
+        agent did not name -- and thus every scalar / length-1 array the kernel just
+        broadcasts -- resolves to ``replicated``.
+
+        ``symbol_axes`` (from the manifest ``mpi:`` block) pins ``{symbol: (array, axis)}``
+        for legacy kernels whose shapes are not declarative; it overrides the shapes-derived
+        mapping for the named symbols.
+        """
+        dist = submission.distribution
+        if dist is None:
+            raise ValueError("submission carries no 'distribution'; not an MPI submission")
+
+        grid = Grid(tuple(dist["grid"]))
+        if grid.nranks != ranks:
+            raise ValueError(f"distribution grid {grid.dims} spans {grid.nranks} rank(s) but the run "
+                             f"is configured for {ranks}")
+
+        ptrs = {a.name: a for a in binding.pointers}
+        scalar_names = {a.name for a in binding.scalars}
+        ndims = {name: len(a.shape) for name, a in ptrs.items() if a.shape is not None}
+
+        resolved: Dict[str, ArrayDist] = {}
+        for name, layout in dist["arrays"].items():
+            if name in scalar_names:
+                raise ValueError(f"distribution names scalar {name!r}; scalars are broadcast by value "
+                                 f"(identical on every rank) and cannot be distributed")
+            if name not in ptrs:
+                raise ValueError(f"distribution names unknown array {name!r}; "
+                                 f"binding arrays are {sorted(ptrs)}")
+            ad = _array_dist_from_layout(name, layout, grid)
+            if not ad.replicated and name in ndims and len(ad.axes) != ndims[name]:
+                raise ValueError(f"distribution.arrays[{name!r}] declares {len(ad.axes)} axis/axes but "
+                                 f"the array has {ndims[name]} dimension(s)")
+            resolved[name] = ad
+        # Every array the agent did not distribute -- and every scalar / length-1 array --
+        # is replicated: it lives on every rank, rank 0 authoritative on gather.
+        for name in ptrs:
+            resolved.setdefault(name, ArrayDist(replicated=True))
+
+        derived = _symbol_axes_from_binding(binding)
+        for sym, pair in (symbol_axes or {}).items():
+            derived[sym] = [tuple(pair)]  # explicit manifest mapping wins for this symbol
+        return cls(grid=grid, arrays=resolved, symbol_axes=derived)
+
+    def dist_for(self, name: str, global_shape: Optional[Sequence[int]] = None) -> ArrayDist:
+        """The :class:`ArrayDist` used to scatter/gather ``name``. When the concrete
+        ``global_shape`` has <= 1 element the array is a wrapped scalar (a length-1
+        reduction output or a 0-d value): forced to ``replicated`` so it is broadcast to
+        every rank and gathered from rank 0 -- per the distribution contract."""
+        if global_shape is not None and math.prod(tuple(global_shape)) <= 1:
+            return ArrayDist(replicated=True)
+        return self.arrays[name]
+
+    def local_shape(self, name: str, global_shape: Sequence[int], rank: int) -> Tuple[int, ...]:
+        """Shape of ``rank``'s owned-interior tile of array ``name``."""
+        return local_shape(global_shape, self.dist_for(name, global_shape), self.grid, rank)
+
+    def scatter(self, name: str, a: np.ndarray) -> List[np.ndarray]:
+        """Partition array ``name`` into one owned-interior tile per rank (the reference the
+        driver's ``Scatterv``/Cart send-recv reproduces)."""
+        return scatter(a, self.dist_for(name, a.shape), self.grid)
+
+    def gather(self, name: str, tiles: Sequence[np.ndarray], global_shape: Sequence[int],
+               dtype: np.dtype) -> np.ndarray:
+        """Reconstruct the global array ``name`` from per-rank owned-interior tiles -- the
+        exact inverse of :meth:`scatter` (replicated => rank 0 is authoritative)."""
+        return gather(tiles, self.dist_for(name, global_shape), self.grid, global_shape, dtype)
+
+    def local_size_scalars(self, global_scalars: Dict[str, int], rank: int) -> Dict[str, int]:
+        """Each size symbol mapped to its value AT ``rank``: the LOCAL owned-interior extent
+        on a distributed axis, the GLOBAL value otherwise. Feeds the unchanged
+        :func:`~optarena.agent_bench.native_call._workspace_bytes` (and the driver's local
+        size arguments), so a per-rank ``8*N`` scratch request scales with the local tile.
+
+        A symbol tied to several axes takes the first distributed one (candidates are in the
+        binding's canonical order); a symbol on no distributed axis is unchanged."""
+        coords = self.grid.coords_of(rank)
+        out = dict(global_scalars)
+        for sym, candidates in self.symbol_axes.items():
+            if sym not in global_scalars:
+                continue
+            for arr, axis in candidates:
+                ad = self.arrays.get(arr)
+                if ad is None or ad.replicated or axis >= len(ad.axes):
+                    continue
+                axdist = ad.axes[axis]
+                if axdist.grid_dim is None:
+                    continue
+                out[sym] = int(len(owned_indices(int(global_scalars[sym]), axdist, self.grid, coords)))
+                break
+        return out
