@@ -12,7 +12,7 @@ import copy
 import importlib
 import time
 from dataclasses import replace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -122,25 +122,39 @@ def _time_numpy(spec: BenchSpec, data: Dict, repeat: int) -> int:
     return min(_time_numpy_samples(spec, data, repeat))
 
 
+def bind_kernel_outputs(result, call_args: List, input_args: Sequence[str],
+                        output_args: Sequence[str]) -> Dict[str, np.ndarray]:
+    """Map a kernel's return value (or its mutated input buffers) to
+    ``{output_name: array}`` -- the ONE binding convention shared by the NumPy
+    reference and a python-delivery submission, so the two can never disagree on
+    what a return value means.
+
+    * functional (``result is not None``): a single output takes the whole result;
+      multiple outputs bind ``output_args`` to the returned sequence in order -- a
+      tuple OR a list, matching the reference.
+    * in-place (``result is None``): each output is read back from the mutated
+      positional argument of the same name.
+    """
+    if result is not None:
+        if len(output_args) == 1:
+            return {output_args[0]: result}
+        return dict(zip(output_args, result))
+    by_name = dict(zip(input_args, call_args))
+    return {o: by_name[o] for o in output_args}
+
+
 def _numpy_reference(spec: BenchSpec, data: Dict) -> Dict[str, np.ndarray]:
     """Run the NumPy reference on a deep copy of ``data`` -> expected outputs.
 
     Supports both the C-style in-place convention (kernel mutates an output
     buffer, returns None) and the legacy functional form (kernel returns the
-    output array(s)); both bind to ``spec.output_args``.
+    output array(s)); both bind to ``spec.output_args`` via :func:`bind_kernel_outputs`.
     """
     module = _import_reference(spec)
     func = vars(module)[spec.func_name]
-    call_order = spec.input_args
-    args = [copy.deepcopy(data[name]) for name in call_order]
+    args = [copy.deepcopy(data[name]) for name in spec.input_args]
     result = func(*args)
-    if result is not None:
-        names = spec.output_args
-        if len(names) == 1:
-            return {names[0]: result}
-        return dict(zip(names, result))
-    by_name = dict(zip(call_order, args))
-    return {o: by_name[o] for o in spec.output_args}
+    return bind_kernel_outputs(result, args, spec.input_args, spec.output_args)
 
 
 #: Valid values for the ``oracle`` (correctness reference) and ``baseline``

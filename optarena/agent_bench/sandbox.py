@@ -124,6 +124,14 @@ class Sandbox:
         short = self.binding.kernel
         lib = self.root / f"lib{short}.so"
 
+        if submission.is_python:
+            # A python delivery is NOT compiled: stash the source as a .py "artifact"
+            # (returned as BuildResult.lib), which native_call._call_python then loads
+            # and invokes directly (functional or in-place ABI).
+            py = self.root / f"{short}_submission.py"
+            py.write_text(submission.source or "")
+            return BuildResult(True, py, "")
+
         if submission.source is None:
             src_lib = pathlib.Path(submission.library)
             if not src_lib.exists():
