@@ -14,9 +14,6 @@ while the mpi4py path needs the launcher that matches mpi4py's own MPI. Every la
 wrapped in a timeout and the test SKIPS cleanly when no working launcher is present (e.g. a
 sandbox whose process manager cannot bootstrap), exactly like the gcc-gated native tests.
 """
-import functools
-import shutil
-import subprocess
 import textwrap
 
 import numpy as np
@@ -27,69 +24,9 @@ from optarena.agent_bench.mpi_wire import pack_infile, unpack_outfile
 from optarena.bindings.contract import Arg, Binding
 from optarena.bindings.mpi_driver import gen_mpi_driver
 from optarena.bindings.stubs import LANGS
+from tests.mpi_launch_helpers import c_toolchain as _c_toolchain, mpi4py_launcher as _mpi4py_launcher, run_cmd as _run
 
 RANKS = 4
-_HELLO_C = r"""
-#include <mpi.h>
-#include <stdio.h>
-int main(int argc, char **argv) {
-    MPI_Init(&argc, &argv);
-    int r; MPI_Comm_rank(MPI_COMM_WORLD, &r);
-    printf("rank %d\n", r);
-    MPI_Finalize();
-    return 0;
-}
-"""
-#: (compiler, launcher-prefix) candidates, MPICH first (the track default).
-_C_TOOLCHAINS = [
-    ("mpicc.mpich", ["mpiexec.mpich", "-n"]),
-    ("mpicc", ["mpirun", "--oversubscribe", "-n"]),
-    ("mpicc.openmpi", ["mpirun.openmpi", "--oversubscribe", "-n"]),
-]
-
-
-def _run(cmd, timeout=25, **kw):
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw)
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return None
-
-
-@functools.lru_cache(maxsize=1)
-def _c_toolchain(tmp="/tmp"):
-    """First (compiler, launcher_prefix) that compiles + launches a 2-rank hello, or None."""
-    import os
-    import tempfile
-    for cc, launch in _C_TOOLCHAINS:
-        if shutil.which(cc) is None or shutil.which(launch[0]) is None:
-            continue
-        with tempfile.TemporaryDirectory() as d:
-            src, exe = os.path.join(d, "h.c"), os.path.join(d, "h")
-            open(src, "w").write(_HELLO_C)
-            if (_run([cc, "-O0", src, "-o", exe]) or subprocess.CompletedProcess([], 1)).returncode != 0:
-                continue
-            r = _run(launch + ["2", exe], timeout=20)
-            if r is not None and r.returncode == 0 and r.stdout.count("rank ") == 2:
-                return cc, launch
-    return None
-
-
-@functools.lru_cache(maxsize=1)
-def _mpi4py_launcher():
-    """The launcher prefix that runs mpi4py (its own MPI), or None if none bootstraps here."""
-    try:
-        import mpi4py  # noqa: F401
-    except ImportError:
-        return None
-    import sys
-    prog = "from mpi4py import MPI; print('rank', MPI.COMM_WORLD.rank, flush=True)"
-    for launch in (["mpiexec.mpich", "-n"], ["mpirun", "--oversubscribe", "-n"]):
-        if shutil.which(launch[0]) is None:
-            continue
-        r = _run(launch + ["2", sys.executable, "-c", prog], timeout=20)
-        if r is not None and r.returncode == 0 and r.stdout.count("rank ") == 2:
-            return launch
-    return None
 
 
 def _yax_binding() -> Binding:
