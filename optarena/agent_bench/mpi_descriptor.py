@@ -10,18 +10,27 @@ numpy (no ``mpi4py``), so the exhaustive distribution tests run in ordinary CI w
 cluster.
 
 A distribution assigns every element of a global array to exactly one rank (or to all
-ranks, for ``replicated``). Per array axis the scheme is one of:
+ranks, when it is replicated). Each array axis is either bound to one grid dimension --
+then it is SPLIT across that dimension's ``P`` coordinates by one of the three
+:data:`AXIS_SCHEMES` -- or left unbound (``grid_dim is None``), which REPLICATES it (full
+extent on every rank). The three split schemes:
 
 * ``block``        -- one contiguous, load-balanced block per grid coordinate (the
                       structured-stencil choice; supports a ``halo`` ghost margin).
-* ``block_cyclic`` -- ScaLAPACK-style: tiles of ``tile`` elements dealt round-robin
-                      across the grid coordinate (``owner(i) = (i // tile) % P``).
-* ``cyclic``       -- ``block_cyclic`` with ``tile == 1``.
-* ``replicated``   -- the whole axis on every rank.
+* ``block_cyclic`` -- ScaLAPACK-style: blocks of ``block_size`` elements dealt round-robin
+                      across the grid coordinate (ScaLAPACK ``INDXG2P``,
+                      ``owner(i) = (i // block_size) % P``); the per-axis ``block_size`` is
+                      ScaLAPACK's block size ``MB`` (a row axis) / ``NB`` (a column axis),
+                      so a 2-D array carries the block-tuple ``(MB, NB)``.
+* ``cyclic``       -- ``block_cyclic`` with ``block_size == 1``.
 
-Ranks and grid coordinates map row-major (``rank = coords . strides``). A grid dim of
-``P`` splits the axis it owns into ``P`` shares; array axes not bound to a grid dim are
-replicated.
+Replication is thus STRUCTURAL, not a fourth split scheme: an unbound axis
+(``grid_dim=None``) replicates that axis, and ``ArrayDist(replicated=True)`` replicates a
+whole array. Binding every axis of an N-D array to its own grid dimension gives the
+processor-grid decomposition -- e.g. a 2-D array on a ``2x2`` grid, each rank owning one
+quarter.
+
+Ranks and grid coordinates map row-major (``rank = coords . strides``).
 """
 from __future__ import annotations
 
@@ -35,7 +44,10 @@ if TYPE_CHECKING:  # hints only -- the math core stays free of the binding/envel
     from optarena.agent_bench.envelope import Submission
     from optarena.bindings.contract import Binding
 
-SCHEMES = ("block", "block_cyclic", "cyclic", "replicated")
+#: The per-axis SPLIT schemes (an axis bound to a grid dim takes one of these). Replication
+#: is deliberately NOT here: it is structural -- an unbound ``grid_dim=None`` axis, or a
+#: whole-array ``ArrayDist(replicated=True)`` -- so it can never be mistaken for a split.
+AXIS_SCHEMES = ("block", "block_cyclic", "cyclic")
 
 
 @dataclass(frozen=True)
@@ -43,13 +55,13 @@ class AxisDist:
     """How ONE array axis is laid out across the grid.
 
     ``grid_dim is None`` => the axis is replicated (full extent on every rank). Otherwise
-    the axis is split across ``grid.dims[grid_dim]`` coordinates by ``scheme`` (``tile``
+    the axis is split across ``grid.dims[grid_dim]`` coordinates by ``scheme`` (``block_size``
     is the block width for ``block_cyclic``; ignored by ``block``/``cyclic``). ``halo`` is
     the ghost margin added on each side of a ``block`` share (clamped at the global edge).
     """
     grid_dim: Optional[int] = None
     scheme: str = "block"
-    tile: int = 1
+    block_size: int = 1
     halo: int = 0
 
 
@@ -66,7 +78,12 @@ class ArrayDist:
 
 @dataclass(frozen=True)
 class Grid:
-    """The processor grid. ``math.prod(dims)`` must equal the rank count."""
+    """The processor grid; ``math.prod(dims)`` must equal the rank count.
+
+    The N-D generalization of ScaLAPACK's 2-D BLACS grid: for a 2-D grid ``dims == (NPROW,
+    NPCOL)`` and a rank's ``coords == (MYROW, MYCOL)``. Rank <-> coords is row-major (BLACS
+    conventionally uses column-major, but ours is self-consistent across scatter/gather).
+    """
     dims: Tuple[int, ...]
 
     @property
@@ -99,8 +116,10 @@ def _block_bounds(n: int, parts: int, coord: int) -> Tuple[int, int]:
 def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> np.ndarray:
     """The global indices of a length-``n`` axis owned by grid ``coords`` under ``axis``.
 
-    Excludes the halo (that is the owned *interior*); use :func:`halo_slice` for the
-    ghost-padded read extent. For a replicated axis this is ``arange(n)`` on every rank.
+    The set ``{i : INDXG2P(i) == coord}`` (ScaLAPACK's local index map); its length is
+    ScaLAPACK's ``NUMROC``. Excludes the halo (that is the owned *interior*); use
+    :func:`halo_slice` for the ghost-padded read extent. For a replicated axis this is
+    ``arange(n)`` on every rank.
     """
     if axis.grid_dim is None:
         return np.arange(n, dtype=np.int64)
@@ -110,10 +129,11 @@ def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> 
         lo, hi = _block_bounds(n, parts, coord)
         return np.arange(lo, hi, dtype=np.int64)
     if axis.scheme in ("block_cyclic", "cyclic"):
-        tile = 1 if axis.scheme == "cyclic" else max(1, axis.tile)
+        block_size = 1 if axis.scheme == "cyclic" else max(1, axis.block_size)
         idx = np.arange(n, dtype=np.int64)
-        return idx[(idx // tile) % parts == coord]
-    raise ValueError(f"unknown scheme {axis.scheme!r}; known: {SCHEMES}")
+        return idx[(idx // block_size) % parts == coord]
+    raise ValueError(f"unknown axis scheme {axis.scheme!r}; split schemes are {AXIS_SCHEMES} "
+                     f"(to replicate an axis leave grid_dim=None)")
 
 
 def halo_slice(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> Tuple[int, int]:
@@ -203,8 +223,8 @@ def factor_grid(nranks: int, ndim: int) -> Grid:
     return Grid(tuple(dims))
 
 
-def default_distribution(shape: Sequence[int], grid: Grid, tile: int = 1) -> ArrayDist:
-    """The default N-D **block-cyclic** layout: each array axis is dealt in ``tile``-wide
+def default_distribution(shape: Sequence[int], grid: Grid, block_size: int = 1) -> ArrayDist:
+    """The default N-D **block-cyclic** layout: each array axis is dealt in ``block_size``-wide
     blocks round-robin across the matching grid dimension (ScaLAPACK-style). Array axes
     beyond the grid rank are replicated; a size-1 grid dim leaves its axis whole."""
     # Every split (size>1) grid dim must map to an array axis, else its extra coordinates
@@ -218,7 +238,7 @@ def default_distribution(shape: Sequence[int], grid: Grid, tile: int = 1) -> Arr
     axes: List[AxisDist] = []
     for d in range(len(shape)):
         if d < len(grid.dims) and grid.dims[d] > 1:
-            axes.append(AxisDist(grid_dim=d, scheme="block_cyclic", tile=max(1, tile)))
+            axes.append(AxisDist(grid_dim=d, scheme="block_cyclic", block_size=max(1, block_size)))
         else:
             axes.append(AxisDist(grid_dim=None))
     return ArrayDist(axes=tuple(axes))
@@ -253,7 +273,7 @@ def _array_dist_from_layout(name: str, layout: dict, grid: Grid) -> ArrayDist:
             raise ValueError(f"distribution.arrays[{name!r}] axis {i}: halo={halo} requires "
                              f"scheme 'block' (a ghost margin is only defined for a contiguous "
                              f"block), got scheme {scheme!r}")
-        axes.append(AxisDist(grid_dim=ax.get("grid_dim"), scheme=scheme, tile=int(ax.get("tile", 1)), halo=halo))
+        axes.append(AxisDist(grid_dim=ax.get("grid_dim"), scheme=scheme, block_size=int(ax.get("block_size", 1)), halo=halo))
     return ArrayDist(axes=tuple(axes))
 
 
@@ -277,7 +297,8 @@ def _symbol_axes_from_binding(binding: "Binding") -> Dict[str, List[Tuple[str, i
 
 @dataclass
 class Descriptor:
-    """The resolved MPI distribution for one ``(submission, binding)`` pair.
+    """The resolved MPI distribution for one ``(submission, binding)`` pair -- the analog of a
+    ScaLAPACK ``DESCA`` array descriptor, generalized to N-D and per-array.
 
     Built once via :meth:`from_submission`; both the C-driver codegen and the mpi4py
     launcher drive scatter/gather + per-rank size scalars through it, so they can never
@@ -376,7 +397,7 @@ class Descriptor:
 
     def local_size_scalars(self, global_scalars: Dict[str, int], rank: int) -> Dict[str, int]:
         """Each size symbol mapped to its value AT ``rank``: the LOCAL owned-interior extent
-        on a distributed axis, the GLOBAL value otherwise. Feeds the unchanged
+        (ScaLAPACK ``NUMROC``) on a distributed axis, the GLOBAL value otherwise. Feeds the unchanged
         :func:`~optarena.agent_bench.native_call._workspace_bytes` (and the driver's local
         size arguments), so a per-rank ``8*N`` scratch request scales with the local tile.
 

@@ -27,8 +27,8 @@ def _arange(shape, dtype):
     return np.arange(math.prod(shape), dtype=dtype).reshape(shape)
 
 
-def _dist_1d(scheme, parts, tile=1):
-    return Grid((parts, )), ArrayDist(axes=(AxisDist(grid_dim=0, scheme=scheme, tile=tile), ))
+def _dist_1d(scheme, parts, block_size=1):
+    return Grid((parts, )), ArrayDist(axes=(AxisDist(grid_dim=0, scheme=scheme, block_size=block_size), ))
 
 
 # --- Grid rank <-> coords is a bijection --------------------------------------------
@@ -83,7 +83,7 @@ def test_roundtrip_1d(shape, parts, scheme, dtype):
     if scheme == "replicated":
         g, dist = Grid((parts, )), ArrayDist(replicated=True)
     else:
-        g, dist = _dist_1d(scheme, parts, tile=2)
+        g, dist = _dist_1d(scheme, parts, block_size=2)
     tiles = scatter(a, dist, g)
     assert len(tiles) == parts
     assert [t.shape for t in tiles] == [local_shape(shape, dist, g, r) for r in range(parts)]
@@ -108,7 +108,7 @@ def test_roundtrip_2d_grid(shape, grid_dims, axes, dtype):
         if sch == "replicated_axis":
             axdefs.append(AxisDist(grid_dim=None))
         else:
-            axdefs.append(AxisDist(grid_dim=d, scheme=sch, tile=2))
+            axdefs.append(AxisDist(grid_dim=d, scheme=sch, block_size=2))
     dist = ArrayDist(axes=tuple(axdefs))
     a = _arange(shape, dtype)
     tiles = scatter(a, dist, g)
@@ -123,7 +123,7 @@ def test_roundtrip_nd_leading_axis(shape, scheme):
     # distribute only the leading axis over a 1D grid of ranks (the common stencil case)
     for parts in (1, 2, 3):
         g = Grid((parts, ) + (1, ) * (len(shape) - 1))
-        axes = [AxisDist(grid_dim=0, scheme=scheme, tile=2)] + [AxisDist(grid_dim=None)] * (len(shape) - 1)
+        axes = [AxisDist(grid_dim=0, scheme=scheme, block_size=2)] + [AxisDist(grid_dim=None)] * (len(shape) - 1)
         dist = ArrayDist(axes=tuple(axes))
         a = _arange(shape, np.float64)
         back = gather(scatter(a, dist, g), dist, g, shape, np.dtype(np.float64))
@@ -135,12 +135,12 @@ def test_roundtrip_nd_leading_axis(shape, scheme):
 
 
 def test_block_cyclic_owner_formula():
-    # owner(i) = (i // tile) % parts -- verify against the descriptor
-    n, parts, tile = 20, 3, 2
-    g, dist = _dist_1d("block_cyclic", parts, tile=tile)
+    # owner(i) = (i // block_size) % parts -- verify against the descriptor
+    n, parts, block_size = 20, 3, 2
+    g, dist = _dist_1d("block_cyclic", parts, block_size=block_size)
     for coord in range(parts):
         got = set(owned_indices(n, dist.axes[0], g, (coord, )).tolist())
-        want = {i for i in range(n) if (i // tile) % parts == coord}
+        want = {i for i in range(n) if (i // block_size) % parts == coord}
         assert got == want
 
 
@@ -150,7 +150,7 @@ def test_block_cyclic_owner_formula():
 @pytest.mark.parametrize("n,parts,halo", [(12, 3, 1), (10, 4, 2), (7, 3, 1), (5, 5, 1)])
 def test_halo_slice_widens_interior_and_clamps(n, parts, halo):
     g = Grid((parts, ))
-    ax = AxisDist(grid_dim=0, scheme="block", tile=1, halo=halo)
+    ax = AxisDist(grid_dim=0, scheme="block", block_size=1, halo=halo)
     for coord in range(parts):
         interior = owned_indices(n, AxisDist(grid_dim=0, scheme="block"), g, (coord, ))
         lo, hi = halo_slice(n, ax, g, (coord, ))
@@ -184,7 +184,7 @@ def test_factor_grid_product_exact(nranks, ndim):
 @pytest.mark.parametrize("shape", [(12, ), (8, 8), (6, 6, 6)])
 def test_default_distribution_is_a_roundtrip_partition(nranks, shape):
     g = factor_grid(nranks, len(shape))
-    dist = default_distribution(shape, g, tile=2)
+    dist = default_distribution(shape, g, block_size=2)
     a = _arange(shape, np.float64)
     back = gather(scatter(a, dist, g), dist, g, shape, np.dtype(np.float64))
     assert np.array_equal(back, a)
@@ -197,7 +197,7 @@ def test_default_distribution_is_a_roundtrip_partition(nranks, shape):
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 def test_more_ranks_than_elements(scheme):
     shape, parts = (3, ), 5  # 5 ranks, 3 elements -> some ranks own nothing
-    g, dist = _dist_1d(scheme, parts, tile=1)
+    g, dist = _dist_1d(scheme, parts, block_size=1)
     a = _arange(shape, np.float64)
     tiles = scatter(a, dist, g)
     assert sum(t.size for t in tiles) == a.size  # still a complete partition
@@ -239,7 +239,7 @@ def test_default_distribution_replicates_trailing_axes():
     """More array axes than grid dims -> trailing axes replicate whole, still an exact
     roundtrip partition."""
     shape, g = (6, 6), Grid((2, ))  # a 1-D grid over a 2-D array
-    dist = default_distribution(shape, g, tile=2)
+    dist = default_distribution(shape, g, block_size=2)
     assert dist.axes[1].grid_dim is None  # trailing axis replicated
     a = _arange(shape, np.float64)
     back = gather(scatter(a, dist, g), dist, g, shape, np.dtype(np.float64))
@@ -276,9 +276,9 @@ def _sub(dist) -> Submission:
     return Submission(language="c", source="x", distribution=dist)
 
 
-def _block_axis0(scheme="block", tile=1, halo=0):
+def _block_axis0(scheme="block", block_size=1, halo=0):
     # array laid out block over grid dim 0 (the leading axis), axis 1 whole.
-    return {"axes": [{"grid_dim": 0, "scheme": scheme, "tile": tile, "halo": halo}, {"grid_dim": None}]}
+    return {"axes": [{"grid_dim": 0, "scheme": scheme, "block_size": block_size, "halo": halo}, {"grid_dim": None}]}
 
 
 def test_from_submission_resolves_declared_and_replicates_the_rest():

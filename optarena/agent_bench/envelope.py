@@ -66,10 +66,10 @@ def extract_json_object(text: str) -> Dict[str, Any]:
 def _validate_distribution(dist: Any) -> None:
     """Structural validation of an MPI ``distribution`` request: a processor ``grid``
     (list of positive ints) plus a per-array ``arrays`` map, each entry either
-    ``replicated`` or a non-empty ``axes`` list (grid_dim / scheme / tile / halo). Only
+    ``replicated`` or a non-empty ``axes`` list (grid_dim / scheme / block_size / halo). Only
     the SHAPE is checked here; the semantic match against the binding + the rank count is
     deferred to the descriptor when the distributed track runs."""
-    from optarena.agent_bench.mpi_descriptor import SCHEMES
+    from optarena.agent_bench.mpi_descriptor import AXIS_SCHEMES
 
     def _pos_int(v) -> bool:
         return isinstance(v, int) and not isinstance(v, bool) and v >= 1
@@ -96,9 +96,11 @@ def _validate_distribution(dist: Any) -> None:
             gd = ax.get("grid_dim")
             if gd is not None and not (isinstance(gd, int) and not isinstance(gd, bool) and 0 <= gd < len(grid)):
                 raise ValueError(f"distribution.arrays[{name!r}] grid_dim must be null or 0..{len(grid) - 1}")
-            if ax.get("scheme", "block") not in SCHEMES:
-                raise ValueError(f"distribution.arrays[{name!r}] scheme {ax.get('scheme')!r} not in {list(SCHEMES)}")
-            for k in ("tile", "halo"):
+            if ax.get("scheme", "block") not in AXIS_SCHEMES:
+                raise ValueError(f"distribution.arrays[{name!r}] scheme {ax.get('scheme')!r} is not a split "
+                                 f"scheme {list(AXIS_SCHEMES)}; to replicate an axis use 'grid_dim': null, or "
+                                 f"'replicated': true for the whole array")
+            for k in ("block_size", "halo"):
                 if k in ax and not (isinstance(ax[k], int) and not isinstance(ax[k], bool) and ax[k] >= 0):
                     raise ValueError(f"distribution.arrays[{name!r}] {k} must be a non-negative int")
 

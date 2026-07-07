@@ -267,6 +267,12 @@ def test_submission_distribution_structural_validation():
     with pytest.raises(ValueError, match="scheme"):
         Submission(language="c", source="x",
                    distribution={"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "bogus"}]}}})
+    # 'replicated' is STRUCTURAL (grid_dim: null, or a whole-array replicated: true), not a
+    # per-axis split scheme -- an axis that names it is rejected here rather than crashing later
+    # in owned_indices.
+    with pytest.raises(ValueError, match="scheme"):
+        Submission(language="c", source="x",
+                   distribution={"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "replicated"}]}}})
     with pytest.raises(ValueError, match="arrays"):
         Submission(language="c", source="x", distribution={"grid": [2]})
 
