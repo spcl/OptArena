@@ -1288,6 +1288,12 @@ class _FortranBodyEmitter(BaseEmitter):
             # np.conj / np.conjugate (vexx) -> Fortran CONJG intrinsic.
             if attr in {"conj", "conjugate"} and len(args_e) == 1:
                 return f"CONJG({args_e[0]})"
+            # ``np.real(z)`` / ``np.imag(z)`` -- the canonical function form the
+            # ``.real`` / ``.imag`` accessor desugars to. ``real(z, kind)`` is the
+            # real part (identity on a real operand); ``aimag(z)`` the imaginary
+            # part (used only on complex operands, like the eigh Jacobi accessor).
+            if attr in {"real", "imag"} and len(args_e) == 1:
+                return f"real({args_e[0]}, {self._rk})" if attr == "real" else f"aimag({args_e[0]})"
             # ``np.sign(x)`` in scalar context -> -1 / 0 / +1 (numpy: sign(0)==0,
             # unlike Fortran SIGN which gives +1 at 0). Built from MERGE, same as
             # the array ``__npb_sign`` marker. cloudsc scalar np.sign.

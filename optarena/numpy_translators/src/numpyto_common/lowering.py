@@ -1907,6 +1907,60 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
     ast.fix_missing_locations(tree)
 
 
+class _FlattenChainedSubscripts(ast.NodeTransformer):
+    """Flatten a chained subscript ``B[inner][outer]`` into ONE combined subscript
+    ``B[combined]`` -- the outer index addresses the axes the inner FULL-slices, in
+    order. ``deexx[:, ii][ikb]`` -> ``deexx[ikb, ii]``; ``tabxx_qr[ia, :, :][:, k]``
+    -> ``tabxx_qr[ia, :, k]``. Unlike :func:`_fold_subarray_aliases` (scalar-prefix
+    aliases), this handles slices interleaved in the inner index and applies to any
+    chained subscript, not just single-assign aliases -- the QE ultrasoft
+    augmentation reads ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` / ``deexx[:, ii][ikb]``.
+    A non-full inner slice (``a[1:5][k]``) carries an offset the flat combine can't
+    express, so it is left untouched."""
+
+    def __init__(self, shapes: Dict[str, List[str]]):
+        self.shapes = shapes
+
+    @staticmethod
+    def _is_full_slice(e) -> bool:
+        return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
+
+    @staticmethod
+    def _is_special(e) -> bool:  # np.newaxis (``None``) / Ellipsis -- rank-shifting
+        return isinstance(e, ast.Constant) and (e.value is None or e.value is Ellipsis)
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)  # flatten inner chains first (bottom-up)
+        inner = node.value
+        if not (isinstance(inner, ast.Subscript) and isinstance(inner.value, ast.Name)):
+            return node
+        shape = self.shapes.get(inner.value.id)
+        if not shape:
+            return node
+        rank = len(shape)
+        inner_idx = list(inner.slice.elts) if isinstance(inner.slice, ast.Tuple) else [inner.slice]
+        if len(inner_idx) > rank or any(self._is_special(e) for e in inner_idx):
+            return node
+        inner_idx = inner_idx + [ast.Slice() for _ in range(rank - len(inner_idx))]  # pad trailing ``:``
+        if any(isinstance(e, ast.Slice) and not self._is_full_slice(e) for e in inner_idx):
+            return node
+        outer_idx = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        n_kept = sum(1 for e in inner_idx if isinstance(e, ast.Slice))
+        if len(outer_idx) != n_kept or any(self._is_special(e) for e in outer_idx):
+            return node
+        combined: List[ast.expr] = []
+        oi = 0
+        for e in inner_idx:
+            if isinstance(e, ast.Slice):
+                combined.append(copy.deepcopy(outer_idx[oi]))
+                oi += 1
+            else:
+                combined.append(copy.deepcopy(e))
+        sl = ast.Tuple(elts=combined, ctx=ast.Load()) if len(combined) > 1 else combined[0]
+        return ast.copy_location(
+            ast.Subscript(value=ast.Name(id=inner.value.id, ctx=ast.Load()), slice=sl, ctx=node.ctx), node)
+
+
 class SliceFusion(ast.NodeTransformer):
     """Rewrite slice-bearing assignments into a single fused loop.
 
@@ -3112,6 +3166,36 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
     return False
 
 
+class _PromoteMixedComplexIfExp(ast.NodeTransformer):
+    """Make a mixed real/complex conditional's two branches the SAME type.
+
+    ``d = z.real if gamma_only else z`` pairs a REAL branch (``.real`` strips the
+    imaginary part) with a COMPLEX one. C promotes the real branch implicitly, but
+    Fortran ``merge`` -- and the numba/pythran/jax type unifiers -- are strict and
+    reject a real-vs-complex pair. Promote the real branch to complex with a
+    cast-free ``+ 0j`` (a complex-literal add, NOT a C-style cast), so every
+    backend sees a uniform-type select. Numerically identical: the promoted branch
+    carries a zero imaginary part. (QE vexx ``_add_nlxx_pot`` gamma_only path.)"""
+
+    def __init__(self, local_dtypes: Dict[str, str]):
+        self.local_dtypes = local_dtypes
+
+    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        self.generic_visit(node)
+        body_cplx = _scalar_expr_complex(node.body, self.local_dtypes)
+        else_cplx = _scalar_expr_complex(node.orelse, self.local_dtypes)
+        if body_cplx and not else_cplx:
+            node.orelse = self._to_complex(node.orelse)
+        elif else_cplx and not body_cplx:
+            node.body = self._to_complex(node.body)
+        return node
+
+    @staticmethod
+    def _to_complex(e: ast.expr) -> ast.expr:
+        return ast.copy_location(
+            ast.BinOp(left=e, op=ast.Add(), right=ast.Constant(value=0j)), e)
+
+
 class _TupleSubscriptFolder(ast.NodeTransformer):
     """Fold ``(t1, t2, ..., tn)[K]`` to ``tk`` at lowering time so
     downstream passes don''t see Tuple subscripts. Comes up when
@@ -4181,6 +4265,17 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             expanded = self._expand(node.target, node.value, node.op)
             if expanded:
                 return expanded
+        # Fancy-index scatter ACCUMULATE ``A[idx, c] += rhs`` (idx an index
+        # array): a per-element loop, exactly as the plain-store sibling in
+        # ``visit_Assign``. numpy accumulates duplicate ``idx`` entries, so the
+        # loop form ``for k: A[idx[k], c] += rhs[k]`` is the faithful lowering
+        # (the QE ultrasoft ``rhoc[nl] += aux2 * sf`` / ``rhoc[box] += ...``).
+        if (isinstance(node.target, ast.Subscript)
+                and isinstance(node.target.value, ast.Name)):
+            scattered = self._expand_fancy_scatter_store(
+                node.target, node.value, node.op)
+            if scattered:
+                return scattered
         # Partial-index subscript target: ``Sigma[k, E, a] += __mm2`` on a
         # rank-5 Sigma indexes only 3 axes, leaving a (Norb, Norb) residual
         # slice. Loop the residual axes so the matrix accumulate lands
@@ -4778,6 +4873,11 @@ def lower(kir: KernelIR) -> KernelIR:
                 if ((isinstance(_dv, ast.Attribute) and _dv.attr in ("bool_", "bool"))
                         or (isinstance(_dv, ast.Name) and _dv.id == "bool")):
                     local_dtypes.setdefault(_s.targets[0].id, "bool_")
+    # Unify a mixed real/complex conditional's branches (``d = z.real if flag else
+    # z``) BEFORE any downstream pass, using the now-seeded signature dtypes -- so
+    # Fortran ``merge`` (strict same-type) and the JIT type unifiers see a uniform
+    # complex select instead of a real-vs-complex pair (QE vexx gamma_only path).
+    _PromoteMixedComplexIfExp(local_dtypes).visit(lowered.tree)
     # SSA-style rename for Names reassigned with different broadcast
     # extents (hdiff / vadv ``res = ...; res = ...`` with two distinct
     # shapes). Runs BEFORE harvest so each version registers under its
@@ -4928,6 +5028,17 @@ def lower(kir: KernelIR) -> KernelIR:
     for name, shape in lib_shape_table.items():
         if name not in shapes:
             shapes[name] = list(shape)
+    # Normalise subscript forms BEFORE the slice lifter so a row/column read
+    # ``box = tabxx_box[ia]`` / ``qr = tabxx_qr[ia][:, k]`` (QE ultrasoft
+    # augmentation) is materialised into a rank-1 local the fancy scatter /
+    # gather can index. Flatten chained subscripts ``B[inner][outer]`` into one
+    # combined index, fold scalar-prefix sub-array aliases (``low = A[i, j];
+    # low[k]`` -> ``A[i, j, k]``, xsbench -- runs before padding so its bare
+    # ``A[i]`` def is dropped and not lifted into a copy), then make numpy's
+    # implicit trailing axes explicit (``tabxx_box[ia]`` -> ``[ia, :]``).
+    _FlattenChainedSubscripts(shapes).visit(lowered.tree)
+    _fold_subarray_aliases(lowered.tree, shapes)
+    _PadImplicitTrailingSlices(shapes).visit(lowered.tree)
     # Lift array-valued RHS (slice-bearing BinOp / Call / etc) on a
     # bare-Name LHS to a ``Name = np.zeros(extent); Name[:] = expr``
     # pair so slice fusion can lower the per-element loop. Computes the
@@ -4943,6 +5054,13 @@ def lower(kir: KernelIR) -> KernelIR:
     # The lifter may have inferred complex dtypes; propagate to the
     # tree-side local_dtypes the emitter consumes.
     lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
+    # Re-resolve ``.size`` / ``.shape`` / ``len(..)`` over the NOW-materialised
+    # locals (``box = tabxx_box[ia, :]`` -> a rank-1 local). The early pass at
+    # parse-shape time saw only params, so ``box.size == 0`` (the QE ultrasoft
+    # empty-box guard) survived unresolved; with ``box`` in ``shapes`` it folds
+    # to its extent. Already-resolved references are bare Names now, so the
+    # other branches are no-ops.
+    _ShapeMidExpressionRewriter(shapes).visit(lowered.tree)
     # ``_ZerosRewriter`` re-derives the ``np.empty`` shape straight from the
     # AST tuple, so ``__inl<k>_`` tokens reappear in ``zeros_locals`` /
     # ``shapes`` even after the early ``lib_shape_table`` resolve. These are
@@ -4953,11 +5071,6 @@ def lower(kir: KernelIR) -> KernelIR:
         _resolve_inl_table(zeros_locals)
         _resolve_inl_table(shapes)
         lowered.tree.zeros_locals = zeros_locals  # type: ignore[attr-defined]
-    # Fold partial sub-array aliases (``low = A[i, j]; low[k]`` -> ``A[i, j, k]``)
-    # BEFORE padding, so the emitter emits one flat multi-dim index rather than a
-    # chained ``A[i][j]`` on a flat pointer (xsbench channel-vector reads).
-    _fold_subarray_aliases(lowered.tree, shapes)
-    _PadImplicitTrailingSlices(shapes).visit(lowered.tree)
     SliceFusion(shapes).visit(lowered.tree)
     # Final pass: resolve any surviving ``arr.shape[i]`` references to
     # the concrete shape token from the harvested table. These survive

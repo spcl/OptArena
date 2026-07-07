@@ -680,6 +680,17 @@ class _CBodyEmitter(BaseEmitter):
                     and node.func.value.id in ("np", "numpy")
                     and attr in {"conj", "conjugate"} and len(node.args) == 1):
                 return f"__npb_conj({self.emit_expr(node.args[0])})"
+            # ``np.real(z)`` / ``np.imag(z)`` -- the canonical function form the
+            # ``.real`` / ``.imag`` accessor desugars to. Complex operand ->
+            # ``creal`` / ``cimag``; a real operand is the value / 0 (numpy allows
+            # ``.real`` / ``.imag`` on a real too).
+            if (isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in ("np", "numpy")
+                    and attr in {"real", "imag"} and len(node.args) == 1):
+                x = self.emit_expr(node.args[0])
+                if self._is_complex_operand(node.args[0]):
+                    return f"creal({x})" if attr == "real" else f"cimag({x})"
+                return f"({x})" if attr == "real" else "0.0"
             # ``z.real`` / ``z.imag`` -- accessor on a complex scalar.
             # (Not reached for an Attribute Load, only Call here, but
             # kept symmetric for an Attribute-call form.)

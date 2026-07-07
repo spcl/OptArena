@@ -200,8 +200,16 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
 
     # ``np.multiply(a, b, out=c)`` and the other binary-ufunc ``out=`` forms ->
     # ``c = a <op> b`` (the native backends have no ufunc dispatch; minife axpby).
-    from numpyto_common.numpy_desugar import _DropValidationGuards, _UfuncOutInline
+    from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
+                                              _UfuncOutInline)
     _UfuncOutInline().visit(fn)
+    # ``X[..] = np.roll(X[..], shift, axis)`` on a sliced operand/target -> bare-name
+    # temps so the native roll expander applies and a self-roll snapshots its input.
+    _DecomposeRollSlice().visit(fn)
+    # Canonicalise complex accessors to their function form so the native emitter
+    # has ONE handler per op: ``z.real`` -> ``np.real(z)``, ``z.imag`` ->
+    # ``np.imag(z)``, ``z.conjugate()`` / ``z.conj()`` -> ``np.conj(z)``.
+    _ComplexAccessorToFunc().visit(fn)
     # Drop input-validation guards (``if array.ndim != 1: raise ...``) whole, so their
     # unemittable ``.ndim`` / ``.flags`` conditions do not reach a native emitter.
     _DropValidationGuards().visit(fn)
