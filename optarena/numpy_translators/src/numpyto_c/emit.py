@@ -465,14 +465,9 @@ class _CBodyEmitter(BaseEmitter):
             return (f"({self.emit_expr(node.test)} ? "
                     f"{self.emit_expr(node.body)} : "
                     f"{self.emit_expr(node.orelse)})")
-        # ``z.real`` / ``z.imag`` accessor on a complex scalar -> ``creal``/
-        # ``cimag`` (C99 <complex.h>); on a real operand ``.real`` is the value and
-        # ``.imag`` is 0. Used by the complex-Hermitian eigh Jacobi.
-        if isinstance(node, ast.Attribute) and node.attr in ("real", "imag"):
-            x = self.emit_expr(node.value)
-            if self._is_complex_operand(node.value):
-                return f"creal({x})" if node.attr == "real" else f"cimag({x})"
-            return f"({x})" if node.attr == "real" else "0.0"
+        # A bare ``z.real`` / ``z.imag`` Attribute never reaches emit: ``native_desugar``
+        # rewrites the accessor to ``np.real(z)`` / ``np.imag(z)`` at parse time, and the
+        # ``creal`` / ``cimag`` lowering lives on that canonical call form in ``_emit_call``.
         raise NotImplementedError(
             f"expression {type(node).__name__} "
             f"(line {getattr(node, 'lineno', '?')}): {ast.unparse(node)[:120]}")
@@ -667,13 +662,9 @@ class _CBodyEmitter(BaseEmitter):
             # element loop where the operand becomes ``r[i]``.
             if attr in {"flip", "copy", "transpose"} and len(node.args) == 1:
                 return self.emit_expr(node.args[0])
-            # ``z.conjugate()`` / ``z.conj()`` -- complex conjugate on a
-            # scalar value. Routes to ``conj(z)`` in both C and C++ via
-            # the ``__npb_make_complex(creal(z), -cimag(z))`` macro
-            # provided in the prelude.
-            if attr in {"conjugate", "conj"} and not node.args:
-                z = self.emit_expr(node.func.value)
-                return f"__npb_conj({z})"
+            # The method form ``z.conjugate()`` / ``z.conj()`` never reaches emit:
+            # ``native_desugar`` rewrites it to ``np.conj(z)`` at parse time, handled by
+            # the function-form branch just below.
             # ``np.conj(z)`` / ``np.conjugate(z)`` -- function form (vexx
             # ``np.conj(exxbuff)``, scalarised to a per-element operand).
             if (isinstance(node.func.value, ast.Name)
@@ -691,9 +682,6 @@ class _CBodyEmitter(BaseEmitter):
                 if self._is_complex_operand(node.args[0]):
                     return f"creal({x})" if attr == "real" else f"cimag({x})"
                 return f"({x})" if attr == "real" else "0.0"
-            # ``z.real`` / ``z.imag`` -- accessor on a complex scalar.
-            # (Not reached for an Attribute Load, only Call here, but
-            # kept symmetric for an Attribute-call form.)
             # ``np.where(cond, a, b)`` in scalar context (inside an
             # already-scalarised per-element body) -- numpy semantics
             # are ``(a if cond else b)`` per element. Lower to the C

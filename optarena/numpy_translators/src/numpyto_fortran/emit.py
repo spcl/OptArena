@@ -843,13 +843,9 @@ class _FortranBodyEmitter(BaseEmitter):
             return (f"merge({self._emit_merge_branch(node.body, node.orelse)}, "
                     f"{self._emit_merge_branch(node.orelse, node.body)}, "
                     f"{self.emit_expr(node.test)})")
-        # ``z.real`` / ``z.imag`` accessor on a complex scalar -> Fortran
-        # ``real(z, kind)`` / ``aimag(z)`` (the complex-Hermitian eigh Jacobi uses
-        # them only on complex operands). ``real(z, rk)`` is also the identity on a
-        # real operand.
-        if isinstance(node, ast.Attribute) and node.attr in ("real", "imag"):
-            x = self.emit_expr(node.value)
-            return f"real({x}, {self._rk})" if node.attr == "real" else f"aimag({x})"
+        # A bare ``z.real`` / ``z.imag`` Attribute never reaches emit: ``native_desugar``
+        # rewrites the accessor to ``np.real(z)`` / ``np.imag(z)`` at parse time, and the
+        # ``real(z, kind)`` / ``aimag(z)`` lowering lives on that canonical call form.
         raise NotImplementedError(f"expression {type(node).__name__} (line {getattr(node, 'lineno', '?')})")
 
     def _emit_merge_branch(self, branch: ast.AST, partner: ast.AST) -> str:

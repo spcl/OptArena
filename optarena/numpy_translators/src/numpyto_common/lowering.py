@@ -33,6 +33,7 @@ inert until a kernel that uses them lands.
 
 import ast
 import copy
+import os
 import re
 from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
@@ -5301,6 +5302,49 @@ _LOWER_PHASES: List[Tuple[str, Callable[["LoweringContext"], None]]] = [
     ("lower-helpers", _lp_lower_helpers),
 ]
 
+#: Environment flag that turns on the between-phase invariant checks below.
+#: Off by default (production emit pays nothing); flip it on to localise a
+#: pipeline regression to the exact phase that corrupted the shared state.
+_INVARIANT_ENV = "OPTARENA_LOWER_INVARIANTS"
+
+
+def _assert_lowering_invariants(phase_name: str, ctx: LoweringContext) -> None:
+    """Check the cross-phase invariants that must hold after ``phase_name``.
+
+    Debug-only (gated by :data:`_INVARIANT_ENV`). Every failure names the phase
+    that broke it, so a side-table assigned the wrong container type or an AST
+    the context stopped tracking is caught at the phase boundary that introduced
+    it -- not later, as an inscrutable emit-time ``KeyError`` or ``AttributeError``.
+    """
+    kir = ctx.kir
+    # The context's tree handle must remain the kir's tree: a phase that rebuilds
+    # the AST has to write it back to both, or later phases rewrite an orphan.
+    if ctx.tree is not kir.tree:
+        raise AssertionError(f"lowering invariant after '{phase_name}': ctx.tree no "
+                             "longer aliases ctx.kir.tree (a phase rebuilt the AST "
+                             "without writing it back to both handles)")
+    if not isinstance(kir.tree, ast.FunctionDef):
+        raise AssertionError(f"lowering invariant after '{phase_name}': kir.tree is "
+                             f"{type(kir.tree).__name__}, expected ast.FunctionDef")
+    # The typed side-tables keep their declared container type -- a phase that
+    # assigns the wrong shape surfaces here, not at the emitter reader.
+    for _fld, _typ in (("int_locals", list), ("local_dtypes", dict), ("zeros_locals", dict), ("zeros_fills", dict),
+                       ("scalar_call_temps", list), ("reassign_shapes", dict)):
+        _val = vars(kir)[_fld]
+        if not isinstance(_val, _typ):
+            raise AssertionError(f"lowering invariant after '{phase_name}': kir.{_fld} "
+                                 f"is {type(_val).__name__}, expected {_typ.__name__}")
+    # The AST stays structurally well-formed: a rewriter that leaves a bad field
+    # (a raw string where a node belongs, a Call missing args) fails to unparse.
+    # Unparse a fixed-up copy -- synthetic nodes legitimately lack ``lineno``
+    # mid-lowering, so filling locations on a throwaway keeps the check about
+    # structure (and leaves the real tree untouched).
+    try:
+        ast.unparse(ast.fix_missing_locations(copy.deepcopy(kir.tree)))
+    except Exception as exc:
+        raise AssertionError(f"lowering invariant after '{phase_name}': kir.tree does "
+                             f"not round-trip through ast.unparse ({exc})") from exc
+
 
 def lower(kir: KernelIR) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
@@ -5315,10 +5359,16 @@ def lower(kir: KernelIR) -> KernelIR:
     :class:`_MatmulCallRewriter`) is loop-lowered uniformly for every target;
     the Fortran ``MATMUL`` intrinsic is reserved for the rare unresolved-shape
     case the loop hoister cannot lower (handled in the Fortran emitter).
+
+    Set :data:`_INVARIANT_ENV` in the environment to run
+    :func:`_assert_lowering_invariants` after every phase.
     """
+    check = _assert_lowering_invariants if _INVARIANT_ENV in os.environ else None
     ctx = LoweringContext(kir, copy.deepcopy(kir))
     for _name, _phase in _LOWER_PHASES:
         _phase(ctx)
+        if check is not None:
+            check(_name, ctx)
     return ctx.kir
 
 
