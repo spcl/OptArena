@@ -844,17 +844,21 @@ class _EnumerateZipRewriter(ast.NodeTransformer):
         return node
 
 
-class _TransposeAttrRewriter(ast.NodeTransformer):
-    """Replace ``A.T`` (the numpy transpose property) with
-    ``np.transpose(A)`` so the existing LibNodeRewriter / matmul
-    pipeline can hoist + lower it uniformly.
+class _TransposeRewriter(ast.NodeTransformer):
+    """Normalize both transpose spellings to the ``np.transpose(A[, axes])``
+    function form so the single ``expand_transpose`` path serves every spelling:
+
+    * the property ``A.T`` -> ``np.transpose(A)``;
+    * the method ``A.transpose()`` / ``A.transpose(axes)`` / ``A.transpose(1, 0)``
+      -> ``np.transpose(A[, (axes)])`` (the varargs ints are packed into a tuple).
     """
 
     def __init__(self, sparse_names=None):
-        #: Logical sparse matrices whose ``A.T`` must stay a transpose ATTRIBUTE
-        #: -- the sparse matmul hoister turns ``A.T @ x`` into a transpose SpMV
-        #: on A's own buffers (CSR<->CSC). Densifying it via np.transpose would
-        #: index the sparse buffers as a dense 2-D matrix (wrong + uncompilable).
+        #: Logical sparse matrices whose ``A.T`` / ``A.transpose()`` must stay a
+        #: transpose ATTRIBUTE/method -- the sparse matmul hoister turns ``A.T @
+        #: x`` into a transpose SpMV on A's own buffers (CSR<->CSC). Densifying it
+        #: via np.transpose would index the sparse buffers as a dense 2-D matrix
+        #: (wrong + uncompilable).
         self.sparse_names = set(sparse_names or ())
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
@@ -869,6 +873,26 @@ class _TransposeAttrRewriter(ast.NodeTransformer):
                 args=[node.value],
                 keywords=[])
         return node
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        f = node.func
+        if not (isinstance(f, ast.Attribute) and f.attr == "transpose"):
+            return node
+        if isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy"):
+            return node  # already the ``np.transpose(...)`` function form
+        if isinstance(f.value, ast.Name) and f.value.id in self.sparse_names:
+            return node  # sparse transpose stays a method on its own buffers
+        base = f.value
+        if len(node.args) == 1 and isinstance(node.args[0], (ast.Tuple, ast.List)):
+            args = [base, node.args[0]]            # x.transpose((1, 0))
+        elif node.args:
+            args = [base, ast.Tuple(elts=list(node.args), ctx=ast.Load())]  # x.transpose(1, 0)
+        else:
+            args = [base]                          # x.transpose() -- full reverse
+        return ast.copy_location(
+            ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
+                     args=args, keywords=[]), node)
 
 
 class _ShapeMidExpressionRewriter(ast.NodeTransformer):
@@ -900,6 +924,20 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
             if shape and 0 <= node.slice.value < len(shape):
                 return _token_to_ast(shape[node.slice.value])
         self.generic_visit(node)
+        return node
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        # ``len(arr)`` -> the array's FIRST-dim size symbol (numpy ``len`` is
+        # ``shape[0]``). C / C++ have no array ``len`` and Fortran's ``len`` is
+        # the CHARACTER-length intrinsic, so the literal call fails to compile;
+        # the python backends (numba / pythran / jax) run the body verbatim and
+        # keep the builtin, so they never reach this native-only rewriter.
+        if (isinstance(node.func, ast.Name) and node.func.id == "len" and len(node.args) == 1 and not node.keywords
+                and isinstance(node.args[0], ast.Name)):
+            shape = self.arrays_shapes.get(node.args[0].id)
+            if shape:
+                return _token_to_ast(shape[0])
         return node
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
@@ -934,20 +972,31 @@ class _ShapeMidExpressionRewriter(ast.NodeTransformer):
 
 
 class _BuiltinCastRewriter(ast.NodeTransformer):
-    """Drop Python's ``float(x)`` / ``int(x)`` casts on the kernel body.
+    """Drop Python's ``float(x)`` cast on the kernel body.
 
     In C / Fortran the surrounding operation promotes int -> double
-    automatically; the explicit cast Python uses for division
-    semantics is unnecessary (and the emitter would otherwise produce
-    ``float(x)`` literally, which is not valid C).
-    """
+    automatically, so the ``float(x)`` Python uses for division
+    semantics is a genuine no-op (and the emitter would otherwise
+    produce ``float(x)`` literally, which is not valid C).
 
-    _DROP_CALLS = {"float", "int"}
+    ``int(x)`` is NOT dropped: it is a value-changing TRUNCATION, not a
+    no-op. Dropping it relied on the target being int-declared so the
+    assignment truncated implicitly -- but that is fragile (``y =
+    int(x) + 0.5`` with a double ``y`` would silently keep the fraction)
+    and, worse, it erases the barrier that keeps int-ness from
+    propagating BACKWARD into a float source: after ``ri = int(rs)``
+    became ``ri = rs``, the used-as-int analysis walked from the
+    index ``ri`` into ``rs`` and mistyped the whole GROMACS distance
+    chain (``rsq``/``rinv``/``dx``) as int, truncating every force to
+    zero. Every native emitter already renders a bare ``int(x)`` (C/C++
+    ``(int)(x)``, Fortran ``INT(x, kind)``), so leaving it in place is
+    both correct and faithful.
+    """
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         if (isinstance(node.func, ast.Name)
-                and node.func.id in self._DROP_CALLS
+                and node.func.id == "float"
                 and len(node.args) == 1):
             return node.args[0]
         return node
@@ -1469,6 +1518,68 @@ class _FullLikeRewriter(ast.NodeTransformer):
         ast.fix_missing_locations(alloc)
         ast.fix_missing_locations(fill)
         return [alloc, fill]
+
+
+class _EyeToZerosDiagonal(ast.NodeTransformer):
+    """``X = np.eye(n)`` / ``np.eye(m, n)`` / ``np.identity(n)`` -> a zeros
+    allocation plus an explicit diagonal fill::
+
+        X = np.zeros((n, n))            # or (m, n)
+        for __eye<k> in range(n):       # range(min(m, n)) when rectangular
+            X[__eye<k>, __eye<k>] = 1.0
+
+    Built from primitives every backend already lowers (``np.zeros`` + a loop +
+    a scalar store), so no per-emitter identity path is needed. The zeros
+    harvest then declares X and picks up the ``(n, n)`` shape as usual. Native
+    lowering only -- the python backends keep the builtin ``np.eye``.
+    """
+
+    def __init__(self):
+        self._n = 0
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        self.generic_visit(node)
+        v = node.value
+        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(v, ast.Call)
+                and isinstance(v.func, ast.Attribute) and v.func.attr in ("eye", "identity")
+                and isinstance(v.func.value, ast.Name) and v.func.value.id in ("np", "numpy") and v.args):
+            return node
+        tgt = node.targets[0].id
+        rows = v.args[0]
+        # ``eye(m, n)`` with a real second extent is rectangular (diagonal =
+        # min(m, n)); ``eye(n)`` / ``identity(n)`` (or ``eye(n, None)``) is square.
+        rectangular = (v.func.attr == "eye" and len(v.args) >= 2
+                       and not (isinstance(v.args[1], ast.Constant) and v.args[1].value is None))
+        if rectangular:
+            cols = v.args[1]
+            diag = ast.Call(func=ast.Name(id="min", ctx=ast.Load()),
+                            args=[copy.deepcopy(rows), copy.deepcopy(cols)], keywords=[])
+        else:
+            cols = copy.deepcopy(rows)
+            diag = copy.deepcopy(rows)
+        dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
+        zeros = ast.Assign(
+            targets=[ast.Name(id=tgt, ctx=ast.Store())],
+            value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                           args=[ast.Tuple(elts=[copy.deepcopy(rows), cols], ctx=ast.Load())], keywords=dtype_kw))
+        it = f"__diag{self._n}"
+        self._n += 1
+        loop = ast.For(
+            target=ast.Name(id=it, ctx=ast.Store()),
+            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[diag], keywords=[]),
+            body=[ast.Assign(
+                targets=[ast.Subscript(
+                    value=ast.Name(id=tgt, ctx=ast.Load()),
+                    slice=ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()),
+                                          ast.Name(id=it, ctx=ast.Load())], ctx=ast.Load()),
+                    ctx=ast.Store())],
+                value=ast.Constant(value=1.0))],
+            orelse=[])
+        for s in (zeros, loop):
+            ast.copy_location(s, node)
+        ast.fix_missing_locations(zeros)
+        ast.fix_missing_locations(loop)
+        return [zeros, loop]
 
 
 class _ZerosRewriter(ast.NodeTransformer):
@@ -4580,9 +4691,12 @@ def lower(kir: KernelIR) -> KernelIR:
     # (the backends have no ``None``; reads are guarded by the same ``cond``).
     _ConditionalNoneAllocRewriter().visit(lowered.tree)
     _FullLikeRewriter().visit(lowered.tree)
+    # ``np.eye`` / ``np.identity`` -> zeros + diagonal fill, BEFORE the zeros
+    # harvest so the resulting ``np.zeros((n, n))`` is picked up normally.
+    _EyeToZerosDiagonal().visit(lowered.tree)
     _MatmulCallRewriter().visit(lowered.tree)
     _ScatterAtRewriter(arrays_shapes).visit(lowered.tree)
-    _TransposeAttrRewriter(set(kir.sparse or {})).visit(lowered.tree)
+    _TransposeRewriter(set(kir.sparse or {})).visit(lowered.tree)
     _AstypeRewriter({a.name: a.dtype for a in lowered.arrays if a.dtype}).visit(lowered.tree)
     _MethodCallRewriter().visit(lowered.tree)
     iter_rewriter = _ArrayIterRewriter(arrays_shapes)
@@ -4894,6 +5008,10 @@ def lower(kir: KernelIR) -> KernelIR:
             if not (_dt and _dt.startswith(("int", "uint"))):
                 local_dtypes[_nm] = "int64"
     lowered.tree.local_dtypes = local_dtypes  # type: ignore[attr-defined]
+    # Lower each non-inlinable helper the same way -- it is a self-contained
+    # sub-kernel (own params + body). Its early ``return`` survives lowering
+    # (the return-extraction is a parse_kernel step, not a lowering pass).
+    lowered.helpers = [lower(h) for h in kir.helpers]
     return lowered
 
 
@@ -5036,6 +5154,13 @@ def _promote_free_names_to_params(kir: KernelIR) -> None:
     # never be promoted to scalar int params even if a residual
     # reference survives lowering. The matmul hoister consumes them.
     declared.update(getattr(kir, "sparse", {}) or {})
+    # Non-inlinable helpers emitted as their own native functions: their names
+    # appear as CALL funcs (``classify(x[i])``), never as scalar parameters.
+    declared.update(h.kernel_name for h in getattr(kir, "helpers", []) or [])
+    # A Name used as a call function is never a scalar parameter either.
+    for node in ast.walk(kir.tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            declared.add(node.func.id)
     # Names assigned anywhere in the body are local variables, not params.
     def _names_in_target(tgt: ast.AST) -> List[str]:
         """Collect every bare Name id appearing as an assignment target,

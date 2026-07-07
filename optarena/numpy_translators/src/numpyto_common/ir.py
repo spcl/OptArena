@@ -157,6 +157,17 @@ class KernelIR:
     #: layout (CSR / CSC / ...). Empty for dense kernels. Consumed by
     #: the matmul hoister to route ``A @ B`` through the sparse path.
     sparse: Dict[str, "SparseArrayDesc"] = field(default_factory=dict)
+    #: One sub-:class:`KernelIR` per top-level helper that is CALLED in the kernel
+    #: body but could not be inlined (an early ``return`` / recursion). Built by
+    #: :func:`parse_kernel` (params inferred from the call site) and lowered by
+    #: :func:`lower`; every emitter emits each as its own native function, so the
+    #: early ``return`` is just a native ``return``.
+    helpers: List["KernelIR"] = field(default_factory=list)
+    #: When this KernelIR IS a helper: how its value comes back --
+    #: ``None`` for a void/in-place helper, ``"scalar"`` for a by-value return
+    #: (the return dtype is the sole :attr:`scalars` entry marked ``is_output``),
+    #: or the out-parameter array name for an array return.
+    return_kind: Optional[str] = None
 
     def param_order(self) -> List[str]:
         """Return the argument names in **ABI order**.

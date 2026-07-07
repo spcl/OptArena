@@ -65,20 +65,21 @@ def _array_signature(arr: ArrayDesc) -> str:
     return f"{qual}{base} *restrict {arr.name}"
 
 
-def _emit_signature(kir: KernelIR, fn_name: str) -> str:
-    """Emit the C signature in ``kir.input_args`` order.
+def _emit_signature(kir: KernelIR, fn_name: str, order: Optional[List[str]] = None) -> str:
+    """Emit the C signature in ABI (``kir.param_order()``) order, or in an
+    explicit ``order`` when given.
 
-    The original OptArena JSON's ``input_args`` list controls the
-    positional argument order the harness uses to call the kernel.
-    Emitting in any other order would make every ctypes call swap
-    array pointers with int sizes -- which is precisely the bug
-    that surfaced as `llvm_auto` validation failures on s111.
+    The harness calls the top-level kernel through ``param_order()`` (arrays then
+    scalars, each sorted), so that order is the ABI. A captured HELPER, though, is
+    called only by generated code, and its call site emits args in source
+    (``input_args``) order -- so helpers pass ``order=input_args`` to keep the
+    signature and the call site aligned (and the trailing out-param last).
     """
     parts: List[str] = []
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
-    for name in kir.param_order():
+    for name in (order if order is not None else kir.param_order()):
         if name in sym_by_name:
             parts.append(f"{dtypes.c_type('int')} {name}")  # int64_t (canonical)
         elif name in arr_by_name:
@@ -89,7 +90,6 @@ def _emit_signature(kir: KernelIR, fn_name: str) -> str:
             parts.append(f"{c_ty} {name}")
         else:
             raise ValueError(f"unknown parameter {name!r} in kernel {kir.kernel_name}")
-    parts.append("int64_t *restrict time_ns")
     return f"void {fn_name}({', '.join(parts)})"
 
 
@@ -130,6 +130,11 @@ class _CBodyEmitter(BaseEmitter):
         self.multidim_arrays: Set[str] = multidim_arrays or set()
         #: Pluto only: emit local arrays as multidimensional pointer-to-array.
         self.pluto: bool = False
+        #: Return handling when this body is a HELPER function rather than the
+        #: (void) kernel: ``None`` -> drop the return; ``"scalar"`` -> emit
+        #: ``return <expr>;``; an out-param array name -> copy the returned array
+        #: into that param, then ``return;``.
+        self.return_mode: Optional[str] = None
         #: Pluto only: ``name -> "[d1][d2]"`` trailing-dim string for a local
         #: array declared as a pointer-to-array (so its deferred-malloc marker
         #: casts to the matching multidimensional pointer type).
@@ -207,6 +212,26 @@ class _CBodyEmitter(BaseEmitter):
         return (f"{indent}while ({self.emit_expr(node.test)}) {{\n"
                 f"{body}\n"
                 f"{indent}}}")
+
+    def _emit_return(self, node: ast.Return, indent: str) -> str:
+        # In the (void) kernel, a ``return`` is dropped (outputs go through array
+        # params). In a HELPER function it is a real C ``return``.
+        mode = self.return_mode
+        if mode is None:
+            return ""
+        if node.value is None or mode == "scalar":
+            val = "" if node.value is None else f" {self.emit_expr(node.value)}"
+            return f"{indent}return{val};"
+        # Array return: write the value into the out-param, then return void.
+        # ``return X`` -> ``memcpy``/elementwise copy handled as a whole-array
+        # assign ``__hret[:] = X`` reusing the existing slice-assign path.
+        assign = ast.Assign(
+            targets=[ast.Subscript(value=ast.Name(id=mode, ctx=ast.Load()),
+                                   slice=ast.Slice(lower=None, upper=None, step=None), ctx=ast.Store())],
+            value=node.value)
+        ast.copy_location(assign, node)
+        ast.fix_missing_locations(assign)
+        return f"{self._emit_assign(assign, indent)}\n{indent}return;"
 
     def _emit_if(self, node: ast.If, indent: str) -> str:
         then = self.emit_block(node.body, indent + "  ")
@@ -470,7 +495,50 @@ class _CBodyEmitter(BaseEmitter):
             cur = cur.value
         return cur, chain
 
+    def _dim_minus_k(self, dim_token: str, k: int, orig: ast.AST) -> ast.AST:
+        """Build the index AST ``<dim> - k`` from a shape token, or return the
+        original node when the extent will not parse (a compound token stays a
+        negative index rather than a broken expression)."""
+        try:
+            dim_ast = ast.parse(str(dim_token), mode="eval").body
+        except SyntaxError:
+            return orig
+        return ast.copy_location(ast.BinOp(left=dim_ast, op=ast.Sub(), right=ast.Constant(value=k)), orig)
+
+    def _normalize_negative_indices(self, node: ast.Subscript) -> None:
+        """Rewrite a negative CONSTANT index into an explicit ``dim - k`` in place
+        so C / C++ read the element numpy's ``a[-k]`` denotes -- C has no negative
+        indexing, so ``a[-1]`` underflows the pointer and reads garbage (fortran /
+        numba / pythran / jax wrap negatives natively; the C ABI addresses raw
+        memory). Only a DIRECT ``Subscript(Name)`` with a known shape is touched: a
+        bare index counts from axis 0; a fully-positional tuple index (no newaxis /
+        ellipsis, one entry per axis) counts each index from its own axis. Anything
+        else -- a chained subscript, an unknown shape, a newaxis-shifted tuple -- is
+        left verbatim rather than normalized against a mis-identified axis."""
+        if not isinstance(node.value, ast.Name):
+            return
+        shape = self.array_shapes.get(node.value.id)
+        if not shape:
+            return
+        sl = node.slice
+        if isinstance(sl, ast.Tuple):
+            elts = sl.elts
+            if len(elts) != len(shape) or any(_is_newaxis_or_ellipsis(e) for e in elts):
+                return
+            for axis, e in enumerate(elts):
+                k = _negative_const_k(e)
+                if k is not None:
+                    elts[axis] = self._dim_minus_k(shape[axis], k, e)
+        else:
+            k = _negative_const_k(sl)
+            if k is not None:  # a bare index indexes axis 0 (of any rank)
+                node.slice = self._dim_minus_k(shape[0], k, sl)
+
     def _emit_subscript(self, node: ast.Subscript) -> str:
+        # numpy negative index ``a[-1]`` -> explicit ``a[N-1]`` (C has no negative
+        # indexing). Done first so both the flatten and chained paths below see the
+        # normalized index. Slices (``a[:-1]``) are untouched -- handled elsewhere.
+        self._normalize_negative_indices(node)
         # Fold a constant-index subscript of a tuple literal: ``(n,)[0]`` -> ``n``.
         # This arises when a 1-D ``x.shape`` is substituted to its tuple form and
         # then indexed (``int(x.shape[0])`` in xsbench's ``n = x.shape[0]``).
@@ -822,6 +890,29 @@ class _CBodyEmitter(BaseEmitter):
 # ---------------------------------------------------------------------------
 
 
+def _negative_const_k(node: ast.AST):
+    """If ``node`` is a negative integer index constant, return its magnitude
+    ``k > 0`` (the index is ``-k``); else None. A literal ``-1`` parses as
+    ``UnaryOp(USub, Constant(1))``, but a folded ``Constant(-1)`` is handled too.
+    ``bool`` is excluded (``a[True]`` is not a negative index)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value,
+                                                                                         bool) and node.value < 0:
+        return -node.value
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant)
+            and isinstance(node.operand.value, int) and not isinstance(node.operand.value, bool)):
+        return node.operand.value
+    return None
+
+
+def _is_newaxis_or_ellipsis(e: ast.AST) -> bool:
+    """A ``None`` / ``np.newaxis`` / ``...`` element -- either shifts the
+    position->axis mapping (newaxis adds a dim) or spans several axes (ellipsis),
+    so a positional negative-index normalization must not fire when one is present."""
+    if isinstance(e, ast.Constant) and (e.value is None or e.value is Ellipsis):
+        return True
+    return isinstance(e, ast.Attribute) and e.attr == "newaxis"
+
+
 def _c_shape_token(tok: str) -> str:
     """Translate a Python shape token to a C-valid integer expression.
 
@@ -962,9 +1053,11 @@ def _md_trailing(shape) -> str:
 
 def _emit_body(kir: KernelIR, indent: str = "  ",
                multidim_arrays: Optional[Set[str]] = None,
-               pluto: bool = False, return_parts: bool = False):
+               pluto: bool = False, return_parts: bool = False,
+               return_mode: Optional[str] = None):
     emitter = _CBodyEmitter(kir, multidim_arrays=multidim_arrays)
     emitter.pluto = pluto
+    emitter.return_mode = return_mode
     zeros = getattr(kir.tree, "zeros_locals", {}) or {}
     zeros_fills = vars(kir.tree).get("zeros_fills", {}) or {}
     int_locals = getattr(kir.tree, "int_locals", []) or []
@@ -1301,42 +1394,54 @@ _CPP_HEADER = ('#include <chrono>\n#include <cstdint>\n#include <cmath>\n'
                'extern "C" {\n')
 _CPP_FOOTER = '} // extern "C"\n'
 
-_C_PRELUDE = ("    struct timespec __t1, __t2;\n"
-              "    int64_t __dsec, __dnsec;\n"
-              "    clock_gettime(CLOCK_MONOTONIC, &__t1);\n"
-              "    {\n")
+# Timing is owned by the harness bracket externally (abi_contract.md §6); the emitted
+# kernel neither self-times nor receives a timer argument.
+_C_PRELUDE = ""
+_C_EPILOGUE = ""
+_CPP_PRELUDE = ""
+_CPP_EPILOGUE = ""
 
-_C_EPILOGUE = ("    }\n"
-               "    clock_gettime(CLOCK_MONOTONIC, &__t2);\n"
-               "    __dsec  = __t2.tv_sec  - __t1.tv_sec;\n"
-               "    __dnsec = __t2.tv_nsec - __t1.tv_nsec;\n"
-               "    time_ns[0] = __dsec * 1000000000LL + __dnsec;\n")
 
-_CPP_PRELUDE = ("    auto __t1 = std::chrono::high_resolution_clock::now();\n"
-                "    {\n")
+def _helper_return_ctype(hkir: KernelIR) -> str:
+    """C return type for a scalar-returning helper: int64 when every ``return``
+    value is an integer literal, else double (the common physics-helper case)."""
+    returns = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
+    if returns and all(isinstance(v, ast.Constant) and isinstance(v.value, int) and not isinstance(v.value, bool)
+                       for v in returns):
+        return _c_type("int")
+    return _c_type("float64")
 
-_CPP_EPILOGUE = ("    }\n"
-                 "    auto __t2 = std::chrono::high_resolution_clock::now();\n"
-                 "    time_ns[0] = std::chrono::duration_cast<std::chrono::nanoseconds>(\n"
-                 "                       __t2 - __t1).count();\n")
+
+def _emit_c_helper(hkir: KernelIR, cpp: bool = False) -> str:
+    """Emit one non-inlinable helper as a ``static`` C/C++ function. A scalar
+    return keeps its value type; an array return is a leading out-param and the
+    function is ``void`` (each ``return X`` copies X into the out-param)."""
+    rettype = "void" if hkir.return_kind != "scalar" else _helper_return_ctype(hkir)
+    signature = _emit_signature(hkir, hkir.kernel_name, order=hkir.input_args).replace("void ", f"{rettype} ", 1)
+    if cpp:
+        signature = signature.replace("*restrict ", "*__restrict__ ")
+    body = _emit_body(hkir, indent="    ", return_mode=hkir.return_kind)
+    return f"static {signature} {{\n{body}\n}}\n\n"
 
 
 def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d_c"
+    helpers = "".join(_emit_c_helper(h) for h in kir.helpers)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
-    return f"{_C_HEADER}\n{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+    return f"{_C_HEADER}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
 
 
 def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d"
+    helpers = "".join(_emit_c_helper(h, cpp=True) for h in kir.helpers)
     signature = _emit_signature(kir, name)
     # ``restrict`` is a C99 keyword; C++ accepts it under the
     # ``__restrict__`` GCC / Clang extension. Rewrite for the C++ output
     # so the same body string serves both targets.
     signature = signature.replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ")
-    return (f"{_CPP_HEADER}\n{signature} {{\n{_CPP_PRELUDE}{body}\n"
+    return (f"{_CPP_HEADER}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
             f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
 
 
@@ -1359,7 +1464,7 @@ def _emit_pluto_signature(kir: KernelIR, fn_name: str, multidim: Set[str]) -> st
     """Pluto signature with rank>=2 arrays as direct VLA params (see
     :func:`_pluto_multidim_array_signature`). Because a VLA dim must be lexically
     in scope, the order is regrouped from the canonical C-ABI: SIZE SYMBOLS first,
-    then array params, then scalars, then ``time_ns``. :func:`emit_pluto_binding`
+    then array params, then scalars. :func:`emit_pluto_binding`
     emits the matching arg order so the harness marshals correctly."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
@@ -1374,7 +1479,6 @@ def _emit_pluto_signature(kir: KernelIR, fn_name: str, multidim: Set[str]) -> st
             arr = arr_by_name[nm]
             parts.append(_pluto_multidim_array_signature(arr) if nm in multidim else _array_signature(arr))
     parts += [f"{_c_type(sca_by_name[nm].dtype)} {nm}" for nm in order if nm in sca_by_name]
-    parts.append("int64_t *restrict time_ns")
     return f"void {fn_name}({', '.join(parts)})"
 
 
