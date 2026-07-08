@@ -1722,11 +1722,14 @@ class _CollapseChainedSubscripts(ast.NodeTransformer):
             return node
         inner_idx = _slice_dims(inner)
         outer_idx = _slice_dims(node)
-        # A newaxis in either subscript shifts the axis alignment -- bail.
-        if any(isinstance(x, ast.Constant) and x.value is None for x in inner_idx + outer_idx):
+        # A newaxis or ellipsis in either subscript shifts the axis alignment by an
+        # unknown number of axes -- basic-index associativity no longer holds, bail.
+        if any(isinstance(x, ast.Constant) and (x.value is None or x.value is Ellipsis)
+               for x in inner_idx + outer_idx):
             return node
         # Map inner indices onto base axes: a full ``:`` survives as a result axis,
-        # a scalar consumes its axis. Anything else (partial / strided slice) bails.
+        # a scalar consumes its axis. Anything else (partial / strided slice, or a
+        # fancy index-array) bails.
         new_idx: List[ast.AST] = []
         result_axes: List[int] = []
         for ix in inner_idx:
@@ -1734,6 +1737,13 @@ class _CollapseChainedSubscripts(ast.NodeTransformer):
                 result_axes.append(len(new_idx))
                 new_idx.append(ix)
             elif isinstance(ix, ast.Slice):
+                return node
+            elif isinstance(ix, ast.Name) and ix.id in self.shape_table:
+                # An inner index that is itself an ARRAY is a fancy GATHER, not a
+                # scalar axis-consume: ``A[idx][j] == A[idx[j]]`` (a gathered row),
+                # NOT the ``A[idx, j]`` a collapse would emit. numpy basic-index
+                # associativity does not hold for an advanced index, so leave the
+                # chain untouched (the docstring's gather exclusion).
                 return node
             else:
                 new_idx.append(ix)
@@ -2298,7 +2308,9 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             if isinstance(start, ast.Constant) and start.value == 0:
                 elts.append(ivar)
             else:
-                elts.append(_binop(ivar, ast.Sub(), start))
+                # Copy the shared ``start`` node (also the loop-header bound) so the
+                # bare-operand offset does not alias it into two tree positions.
+                elts.append(_binop(ivar, ast.Sub(), copy.deepcopy(start)))
         slot = elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
         return ast.Subscript(value=node, slice=slot, ctx=ast.Load())
 
@@ -2310,7 +2322,10 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         iv = ast.Name(id=iter_name.id, ctx=ast.Load())
         if isinstance(start, ast.Constant) and start.value == 0:
             return iv
-        return _binop(iv, ast.Sub(), start)
+        # Copy ``start``: it is the SAME node object as the loop-header ``range``
+        # lower bound, so embedding it directly would alias one mutable subtree into
+        # two live tree positions (a later in-place rewrite of one corrupts both).
+        return _binop(iv, ast.Sub(), copy.deepcopy(start))
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         # Pure broadcast-reshape on a NON-Name value (a BinOp / Call result):
@@ -2405,12 +2420,18 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                     and len(dims) < len(source_shape)
                     and not any(isinstance(d, ast.Constant) and d.value is None
                                 for d in dims)):
-                lhs_iters = [iv for iv, dim in zip(self.iter_vars, self.lhs_dims)
+                lhs_pairs = [(iv, rng[0]) for iv, dim, rng in
+                             zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
                              if isinstance(dim, ast.Slice) and iv is not None]
                 n_trailing = len(source_shape) - len(dims)
-                if 0 < n_trailing <= len(lhs_iters):
-                    pad = [ast.Name(id=iv.id, ctx=ast.Load())
-                           for iv in lhs_iters[-n_trailing:]]
+                if 0 < n_trailing <= len(lhs_pairs):
+                    # The implicit trailing source axes read at the LOCAL slice
+                    # position ``iter - lhs_start`` -- a partial-scalar read
+                    # (``out[k:k+m] = dH[a, b]``) into a NON-zero-start destination
+                    # must span the source's length-``m`` trailing axis from 0, not
+                    # from ``k`` (the sibling gather branch applies the same offset).
+                    pad = [self._iter_minus_start(iv, st)
+                           for iv, st in lhs_pairs[-n_trailing:]]
                     new_slice = ast.Tuple(elts=list(dims) + pad, ctx=ast.Load())
                     return ast.Subscript(value=node.value, slice=new_slice,
                                          ctx=node.ctx)

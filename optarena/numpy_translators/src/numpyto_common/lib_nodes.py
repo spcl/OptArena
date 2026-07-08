@@ -221,6 +221,23 @@ def _is_shape_scalar(node: ast.AST) -> bool:
             and node.value.attr == "shape")
 
 
+def _reads_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
+    """``True`` iff evaluating ``expr`` reads a complex value: a ``Constant(complex)``
+    or a ``Name`` tagged complex in ``local_dtypes``. A ``.shape`` access yields
+    integer dimensions (never a value read), so its subtree is skipped -- both
+    ``qgm.shape[0]`` and the compound ``qgm.shape[0] - 1`` are integer bounds even
+    when ``qgm`` is complex. The single complex predicate for the dtype-propagation
+    passes (``_CallHoister._infer_complex`` and ``LibNodeRewriter.visit_Assign``)."""
+    if _is_shape_scalar(expr):
+        return False
+    if isinstance(expr, ast.Constant):
+        return isinstance(expr.value, complex)
+    if isinstance(expr, ast.Name):
+        dt = local_dtypes.get(expr.id)
+        return bool(dt and dt.startswith("complex"))
+    return any(_reads_complex(c, local_dtypes) for c in ast.iter_child_nodes(expr))
+
+
 def _slice_axes(node: ast.AST) -> List[ast.AST]:
     """Return a flat list of per-axis index nodes for any Subscript.
 
@@ -6068,18 +6085,8 @@ class _CallHoister(ast.NodeTransformer):
         self.pre_stmts: List[ast.stmt] = []
 
     def _infer_complex(self, expr: ast.AST) -> bool:
-        """``True`` iff ``expr`` reads a complex value: any Constant(complex) or
-        Name tagged complex. A ``.shape`` access is NOT a value read (it yields
-        integer dimensions), so its subtree is skipped -- ``qgm.shape[0]`` is an
-        integer bound even though ``qgm`` is complex."""
-        if _is_shape_scalar(expr):
-            return False
-        if isinstance(expr, ast.Constant):
-            return isinstance(expr.value, complex)
-        if isinstance(expr, ast.Name):
-            dt = self.local_dtypes.get(expr.id)
-            return bool(dt and dt.startswith("complex"))
-        return any(self._infer_complex(c) for c in ast.iter_child_nodes(expr))
+        """``True`` iff ``expr`` reads a complex value (skipping ``.shape`` reads)."""
+        return _reads_complex(expr, self.local_dtypes)
 
     def _key_of(self, call: ast.Call):
         func = call.func
@@ -6680,21 +6687,13 @@ class LibNodeRewriter(ast.NodeTransformer):
                 if target_id not in self.local_dtypes:
                     self.local_dtypes[target_id] = "int64"
                 return
-            # Complex-dtype propagation for BinOp / UnaryOp / Call:
-            # a subtree carrying a complex Constant or a Name tagged
-            # complex promotes the LHS so subsequent statements see
-            # the right dtype.
-            if target_id not in self.local_dtypes:
-                for sub in ast.walk(rhs):
-                    if (isinstance(sub, ast.Constant)
-                            and isinstance(sub.value, complex)):
-                        self.local_dtypes[target_id] = "complex128"
-                        break
-                    if isinstance(sub, ast.Name):
-                        dt = self.local_dtypes.get(sub.id)
-                        if dt and dt.startswith("complex"):
-                            self.local_dtypes[target_id] = "complex128"
-                            break
+            # Complex-dtype propagation for BinOp / UnaryOp / Call: a subtree that
+            # READS a complex Constant or Name promotes the LHS so subsequent
+            # statements see the right dtype. ``.shape`` subtrees are skipped, so a
+            # dimension read off a complex array (``ngm = qgm.shape[0] - 1``) is a
+            # complex-free integer expression and is NOT mis-tagged complex.
+            if target_id not in self.local_dtypes and _reads_complex(rhs, self.local_dtypes):
+                self.local_dtypes[target_id] = "complex128"
             return
 
     def _lookup(self, call: ast.Call):
