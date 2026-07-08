@@ -26,10 +26,10 @@ From: optarena-cpu.sif
     setup.py /opt/optarena/setup.py
 
 %post
-    # Editable installs of both distributions: pip-managed, no hand-set PYTHONPATH,
-    # and the benchmark/config data tree stays readable from the source layout.
+    # Editable install (pip-managed, no hand-set PYTHONPATH): ships the optarena
+    # harness and the numpyto_* translators, and keeps the benchmark/config data
+    # tree readable from the source layout.
     pip install --break-system-packages -e /opt/optarena
-    pip install --break-system-packages -e /opt/optarena/optarena/NumpyTranslators
 
 %environment
     export LC_ALL=C

@@ -24,8 +24,8 @@ _FUZZ_KERNEL = "tsvc_2_s212"  # real, fuzzable LEN_1D, O(N) -> cheap C reference
 
 
 def _emitter_and_gcc():
-    from optarena.emit_bridge import _TRANSLATORS_SRC
-    return (_TRANSLATORS_SRC / "numpyto_c" / "cli.py").exists() and shutil.which("gcc")
+    import importlib.util
+    return importlib.util.find_spec("numpyto_c") is not None and shutil.which("gcc")
 
 
 # --- pure aggregation -------------------------------------------------------
@@ -88,6 +88,7 @@ def test_aggregate_reports_token_cost():
 # --- the seeded fuzz sweep --------------------------------------------------
 
 
+@pytest.mark.real_fuzz  # this test asserts on the real large/distinct draws -> no size cap
 def test_fuzz_iteration_draws_distinct_sizes():
     """seeds.fuzz makes consecutive iterations draw DIFFERENT samples, and
     ``fuzz_iteration`` now reaches ``_data_seeded`` -- the regression guard for the

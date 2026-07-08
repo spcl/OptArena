@@ -83,7 +83,7 @@ def bootstrap_ci(data, statfunction=np.median, alpha=0.05, n_samples=300):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--preset", choices=['S', 'M', 'L', 'paper'], nargs="?", default='S')
+    parser.add_argument("-p", "--preset", choices=['S', 'M', 'L', 'XL', 'paper'], nargs="?", default='S')
     parser.add_argument("-d",
                         "--datatype",
                         choices=['float32', 'float64'],

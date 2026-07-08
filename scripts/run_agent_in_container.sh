@@ -29,6 +29,14 @@ if [ "$#" -lt 1 ]; then
 fi
 
 TAG="${HW}"
+# GPU passthrough per hardware: nvidia -> --nv (apptainer) / --gpus all (docker);
+# amd -> --rocm / kfd+dri devices. CPU adds nothing (empty-array expansion is a
+# no-op under bash 4.4+). Without this the GPU is never visible inside the image.
+APPTAINER_GPU=(); DOCKER_GPU=()
+case "$HW" in
+  nvidia) APPTAINER_GPU=(--nv);   DOCKER_GPU=(--gpus all) ;;
+  amd)    APPTAINER_GPU=(--rocm); DOCKER_GPU=(--device /dev/kfd --device /dev/dri --group-add video) ;;
+esac
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RESULTS="${REPO_ROOT}/results"
 mkdir -p "$RESULTS"
@@ -46,7 +54,7 @@ run_apptainer() {
   for k in "${PASS_ENV[@]}"; do [ -n "${!k:-}" ] && envargs+=(--env "${k}=${!k}"); done
   # apptainer shares the host network by default -> localhost:11434 reaches the
   # host Ollama server; bind the repo so results land back on the host.
-  apptainer exec "${envargs[@]}" --bind "${REPO_ROOT}:${REPO_ROOT}" --pwd "${REPO_ROOT}" \
+  apptainer exec "${APPTAINER_GPU[@]}" "${envargs[@]}" --bind "${REPO_ROOT}:${REPO_ROOT}" --pwd "${REPO_ROOT}" \
     "$sif" python -m optarena.cli agent "$@"
 }
 
@@ -57,7 +65,7 @@ run_docker() {
   local envargs=(-e "OPTARENA_IMAGE=${TAG}")
   for k in "${PASS_ENV[@]}"; do [ -n "${!k:-}" ] && envargs+=(-e "${k}=${!k}"); done
   # --network host (Linux) so localhost:11434 reaches the host Ollama server.
-  docker run --rm --network host "${envargs[@]}" \
+  docker run --rm --network host "${DOCKER_GPU[@]}" "${envargs[@]}" \
     -v "${REPO_ROOT}:${REPO_ROOT}" -w "${REPO_ROOT}" \
     "$image" python -m optarena.cli agent "$@"
 }

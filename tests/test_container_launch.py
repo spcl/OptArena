@@ -18,6 +18,7 @@ Two layers:
 """
 import json
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -33,7 +34,6 @@ from optarena.agent_bench import tools
 REPO = paths.ROOT
 SCRIPT = REPO / "scripts" / "run_agent_in_container.sh"
 COMPOSE = REPO / "containers" / "agentbench.compose.yml"
-PYPATH = str(REPO / "optarena" / "NumpyTranslators" / "src")
 
 
 # --------------------------------------------------------------------------- #
@@ -92,11 +92,18 @@ def _free_port():
 
 
 def _exec(sif, *cmd, env=None, background=False):
-    """``apptainer exec`` ``cmd`` in ``sif`` with the repo bound + PYTHONPATH set."""
-    argv = ["apptainer", "exec", "--env", f"PYTHONPATH={PYPATH}", "--bind", f"{REPO}:{REPO}", "--pwd", str(REPO)]
+    """``apptainer exec`` ``cmd`` in ``sif`` with the repo bound + editable-installed.
+
+    The cpu SIF is deps-only (no optarena harness); editable-install the bound
+    repo into a tmpfs overlay so optarena + numpyto_* import normally -- no
+    PYTHONPATH.
+    """
+    argv = ["apptainer", "exec", "--writable-tmpfs", "--bind", f"{REPO}:{REPO}", "--pwd", str(REPO)]
     for k, v in (env or {}).items():
         argv += ["--env", f"{k}={v}"]
-    argv += [sif, *cmd]
+    inner = (f"pip install --break-system-packages -e {shlex.quote(str(REPO))} >/dev/null 2>&1 && "
+             "exec " + shlex.join(str(c) for c in cmd))
+    argv += [sif, "sh", "-c", inner]
     if background:
         # New session so the whole `apptainer exec` -> starter -> python serve
         # process tree can be signalled as a group at teardown (a bare SIGTERM

@@ -9,7 +9,7 @@ batched 3-D form) is validated against an INDEPENDENT naive triple-loop referenc
 
 C/C++/Fortran EMISSION is NOT validated here: it depends on the batched (>=3-D)
 matmul translator extension being finalized (a parallel workstream that owns the
-NumpyTranslators source -- not touched here). The emission probe below is marked
+numpy_translators source -- not touched here). The emission probe below is marked
 pending, not failed, so the port stands on its Tier-1 numpy-vs-naive guarantee.
 """
 import importlib.util
@@ -68,7 +68,7 @@ def test_star_sparsity_is_real():
 
 
 @pytest.mark.skip(reason="batched >=3-D matmul translator extension pending "
-                  "(parallel workstream owns NumpyTranslators src); validate "
+                  "(parallel workstream owns numpy_translators src); validate "
                   "C/C++/Fortran emission once np.matmul batched form lands")
 def test_emission_pending():
     pass
