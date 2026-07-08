@@ -35,7 +35,7 @@ from optarena.spec import BenchSpec
 #: ``_pluto_input`` C variant is excluded by requiring the bare ``_fp64`` suffix).
 _REF_GLOB = {"c": "*_fp64.c", "cpp": "*_fp64.cpp", "fortran": "*_fp64.f90"}
 
-#: agent language -> NumpyTranslators ``--target``. The C target emits the whole
+#: agent language -> numpy_translators ``--target``. The C target emits the whole
 #: C-family (.c + .cpp) in one run, so ``cpp`` reuses it; ``fortran`` is its own
 #: target. (cuda/hip have no translator -- they are agent-authored only.)
 _LANG_TARGET = {"c": "c", "cpp": "c", "fortran": "fortran"}

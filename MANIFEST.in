@@ -1,0 +1,9 @@
+# Ship the library's data files inside the wheel. setup.py sets
+# include_package_data=True, which -- WITHOUT this manifest -- only picks up data
+# files when setuptools' VCS file-finder happens to be active (true in a local git
+# checkout with an egg-info cache, FALSE in CI's `pip wheel --no-build-isolation`).
+# That gap silently dropped optarena/config.yaml (loaded at import by config.py) and
+# every schema/taxonomy/env spec from the wheel. Listing them here makes inclusion
+# deterministic across environments.
+recursive-include optarena *.yaml
+recursive-include optarena *.schema.yaml

@@ -31,6 +31,10 @@ fuzz:
   # Dimension range = [paper_size * lo, paper_size * hi]; "big enough" => >= paper.
   size_lo_mult: 1.0
   size_hi_mult: 4.0
+  # Absolute clamp on every drawn size dimension. 0 = off (full GPU-scale range).
+  # Unit tests set $OPTARENA_FUZZ_SIZE_CAP to a tiny value so grade() wiring tests
+  # stay sub-second instead of drawing ~10^8-element shapes.
+  size_cap: 0
   size_distribution: log_uniform
   data_distribution: uniform
   error_distribution: well_conditioned

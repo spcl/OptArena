@@ -199,8 +199,8 @@ def test_record_trajectory_empty_is_noop(tmp_path):
 
 def _emitter_and_gcc():
     import shutil
-    from optarena.emit_bridge import _TRANSLATORS_SRC
-    return (_TRANSLATORS_SRC / "numpyto_c" / "cli.py").exists() and shutil.which("gcc")
+    import importlib.util
+    return importlib.util.find_spec("numpyto_c") is not None and shutil.which("gcc")
 
 
 def test_end_to_end_score_verify_record(tmp_path):

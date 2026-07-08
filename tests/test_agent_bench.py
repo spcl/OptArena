@@ -112,8 +112,8 @@ def test_ollama_agent_registered_in_cli():
 
 
 def test_reference_source_emits_c_for_gemm():
-    from optarena.emit_bridge import _TRANSLATORS_SRC
-    if not (_TRANSLATORS_SRC / "numpyto_c" / "cli.py").exists():
+    import importlib.util
+    if importlib.util.find_spec("numpyto_c") is None:
         pytest.skip("NumpyToC emitter source absent")
     src = reference_source(Task("gemm", "restricted", "c"))
     assert "gemm" in src.lower() and len(src) > 50
@@ -169,8 +169,8 @@ def test_cuda_hip_registered_everywhere():
 
 def _emitter_and_gcc_available():
     import shutil
-    from optarena.emit_bridge import _TRANSLATORS_SRC
-    return (_TRANSLATORS_SRC / "numpyto_c" / "cli.py").exists() and shutil.which("gcc")
+    import importlib.util
+    return importlib.util.find_spec("numpyto_c") is not None and shutil.which("gcc")
 
 
 def test_score_stub_agent_gemm_correct():
@@ -194,8 +194,8 @@ def test_score_stub_agent_gemm_correct():
 def test_reference_source_multitarget_renames_symbol():
     """The auto path emits via the unified driver for c/cpp/fortran + renames to
     the canonical symbol (cpp uses the C target; fortran its own)."""
-    from optarena.emit_bridge import _TRANSLATORS_SRC
-    if not (_TRANSLATORS_SRC / "numpyto_c" / "cli.py").exists():
+    import importlib.util
+    if importlib.util.find_spec("numpyto_c") is None:
         pytest.skip("translators absent")
     for lang, sym in (("c", "gemm_fp64"), ("cpp", "gemm_fp64"), ("fortran", "gemm_fp64")):
         src = reference_source(Task("gemm", "restricted", lang))
@@ -204,8 +204,8 @@ def test_reference_source_multitarget_renames_symbol():
 
 def test_score_stub_agent_gemm_fortran():
     import shutil
-    from optarena.emit_bridge import _TRANSLATORS_SRC
-    if not (_TRANSLATORS_SRC / "numpyto_c" / "cli.py").exists() or not shutil.which("gfortran"):
+    import importlib.util
+    if importlib.util.find_spec("numpyto_c") is None or not shutil.which("gfortran"):
         pytest.skip("translators or gfortran absent")
     from optarena.agent_bench.scoring import score
     task = Task("gemm", "restricted", "fortran")
@@ -530,7 +530,7 @@ def test_cli_tasks_residency_sweep(capsys):
 
 def test_residency_invariant_all_or_nothing_scalars_host():
     """abi_contract §10: pointers share residency uniformly; scalars ALWAYS host."""
-    from optarena.agent_bench.scoring import _arg_residence
+    from optarena.agent_bench.native_call import _arg_residence
     from optarena.bindings import binding_from_spec
     from optarena.spec import BenchSpec
     b = binding_from_spec(BenchSpec.load("gemm"))

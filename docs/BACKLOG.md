@@ -2,6 +2,55 @@
 
 Tracked work that is scoped but not yet done. Newest on top.
 
+## Translator capability gaps — empirically verified 2026-07-04
+
+Each claimed gap was probed with a minimal kernel through c/cpp/fortran via the
+op-oracle (`run_op`). Most catalogued "gaps" are DEAD `raise`s in secondary
+paths shadowed by the real lowering — do NOT re-implement those. The ones that
+ACTUALLY fail today:
+
+- **`np.pad` reflect / wrap / symmetric** (c/cpp/fortran): only `constant` /
+  `edge` lower to a native pad; other modes raise. (numba/pythran already inline
+  an edge-pad copy nest.) Pure index-remap → bit-exact-testable.
+- **matrix `np.linalg.norm(A, 1)` / `(A, inf)`** (max col / row abs-sum): the
+  VECTOR ord=1/inf forms now lower (fixed 2026-07-04); the matrix forms raise
+  cleanly (a different reduction).
+- **einsum ellipsis `...`**: raises by design
+  (`test_parse_einsum_ellipsis_unsupported` asserts it); needs a rank-aware
+  ellipsis expansion of the subscript before the contraction lowering.
+- **axis-aware L2 norm `np.linalg.norm(x, axis=1)`**: PRE-EXISTING compile bug
+  (`__cb1 undeclared`, from the `_expand_axis_reduction` post-fn temp); the
+  full-reduction `norm(r)` and Frobenius forms are fine.
+
+Confirmed ALREADY DONE (catalog was stale — do not re-implement): batched ≥3-D
+matmul, `tril`, N-D `argmax`, einsum / tensordot / inner / vdot,
+cumsum / cumprod / diagonal / trace / median, method `.reshape`, ellipsis
+INDEXING (`a[..., 0]`), Frobenius / L2 norm.
+
+NOT here — the OTHER chat owns it: strided slice-assign `out[::2] = a[::2]`
+(their in-progress step-handling in `lowering.py`; currently miscompiles — leave
+it alone). The naive-lowering and contraction-family sections below are DONE.
+
+## Translator BUG: batched-einsum Fortran emit non-determinism (flaky, real)
+
+`np.einsum('...ij,...jk->...ik', ...)` — and the explicit `'Bij,Bjk->Bik'`
+batched-GEMM form — emit CORRECT c/c++, but the FORTRAN emit
+non-deterministically declares a size symbol `REAL` instead of `INTEGER`
+(`out(N, M, B)` → "Expression must be of INTEGER type, found REAL"), so ~40% of
+runs fail to compile. The einsum LOWERING (`expand_einsum`) is deterministic
+(dict/list, insertion-ordered); the non-determinism is in the Fortran emit's
+size-symbol type resolution — hash / iteration-order dependent (a fixed
+`PYTHONHASHSEED` is stable per-seed; it only surfaces in the c→cpp→fortran
+multi-emit sequence of one `run_op` — ~40% of `pytest` runs). Pre-existing —
+reproduces on the EXPLICIT form, so it is NOT the ellipsis expansion. NOTE: the
+`_const` numpy-scalar coercion (emit `0` not `np.int64(0)`) is ORTHOGONAL and
+does NOT fix this — the numpy scalar reaches the size-symbol classification via a
+different path (the `_is_int_scalar`/`is_int_expr` gate in numpyto_fortran/emit.py
+~L393, `isinstance(_, int)`). FIX: make the emit's size-symbol integer
+classification order-independent (sort the symbol set, or type size symbols
+int64 unconditionally). Relevant to the SeisSol batched-GEMM / tensor-contraction
+kernels. Repro: einsum matmul via the op-oracle on c/cpp/fortran, ~5 pytest runs.
+
 ## FV3 dycore — remaining after the gt==4 dry core (assembled + validated)
 
 `hpc/structured_grids/fv3_dycore/` has a FULL gt==4 dry nonhydrostatic dycore
@@ -173,7 +222,7 @@ Lower to straightforward naive implementations (user-approved):
 - **median** -> sort the (copied) data + pick middle / mean of the two middles
   (needs a small emitted sort routine; `percentile/quantile` follow once sort lands).
 
-## Translator: lulesh advanced-indexing gaps (HIGH) + tril expander
+## Translator: lulesh advanced-indexing gaps (HIGH)
 
 Blocking lulesh's NumpyToX auto-emit (currently allowlisted in
 `tests/e2e_known_failures.txt`):
@@ -182,8 +231,7 @@ Blocking lulesh's NumpyToX auto-emit (currently allowlisted in
 - **2-D fancy gather `xe[:, idx]`** (slice axis + N-D index array -> higher-rank
   result): extend `_WholeArrayAssignRewriter._expand` / `_SubscriptifyNames`.
 - **ellipsis `...`** indexing: a `_ExpandEllipsis` pre-pass using the array rank.
-- **`tril` BUG**: in the dispatch set (lib_nodes.py:4744) but NO expander -> raises
-  if hit; 5-line clone of `expand_triu` with `j <= i + k`.
+  (`tril` is done: `expand_tril` at lib_nodes.py:3476, registered at :4764.)
 
 ## YAML style: stencil manifests missing final newline / header
 

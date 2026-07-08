@@ -54,8 +54,7 @@ def test_container_defs_are_well_formed():
     assert "-e /opt/optarena" not in cpu and "/opt/optarena/optarena" not in cpu
 
     assert "From: optarena-cpu.sif" in judge  # layered on the agent image
-    assert "pip install --break-system-packages -e /opt/optarena" in judge  # the package
-    assert "/opt/optarena/optarena/NumpyTranslators" in judge  # the translators distribution
+    assert "pip install --break-system-packages -e /opt/optarena" in judge  # the package (ships numpyto_* too)
     assert "export PYTHONPATH" not in judge  # pip-managed, no hand-set path directive
 
     for spec in (cpu, judge):

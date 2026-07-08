@@ -18,8 +18,7 @@ import tempfile
 
 import pytest
 
-from optarena.sanitize import build_name_map, mangle, strip_comments
-from optarena.sanitize.comments import tree_sitter_available
+from optarena.sanitize import build_name_map, mangle, strip_comments, tree_sitter_available
 
 TREE_SITTER = tree_sitter_available()
 
@@ -86,6 +85,92 @@ def test_strip_comments_python_removes_comments_and_keeps_strings():
     # Code survives.
     assert "def relu(a):" in out
     assert "def helper(x):" in out
+
+
+# --------------------------------------------------------------------------- #
+# License / attribution preservation
+# --------------------------------------------------------------------------- #
+
+APP_PY = '''\
+# All content is under Creative Commons Attribution CC-BY 4.0,
+# and all code is under the BSD-3 license.
+import numpy as np
+
+
+def cavity(u):
+    return u + 1  # hint: fuse the update
+'''
+
+MICROKERNEL_PY = '''\
+# spmv: sparse matvec reference
+import numpy as np
+
+
+def spmv(a):
+    return a  # accumulate the row
+'''
+
+
+def test_ported_kernel_keeps_attribution_header():
+    """A microapp's leading CC-BY / license block is preserved VERBATIM (the
+    license requires the notice to survive redistribution); only the body is
+    stripped -- so the whole leading block, not just the marked line, stays."""
+    out = strip_comments(APP_PY, "python")
+    assert "Creative Commons Attribution CC-BY 4.0" in out
+    assert "BSD-3 license" in out
+    assert "hint: fuse" not in out  # body comment still stripped
+
+
+def test_synthetic_kernel_header_fully_stripped():
+    """A synthetic microkernel has no license header, so its leading description
+    comment is stripped like any other comment (nothing to attribute)."""
+    out = strip_comments(MICROKERNEL_PY, "python")
+    assert "spmv: sparse matvec" not in out
+    assert "accumulate the row" not in out
+    assert "def spmv(a):" in out
+
+
+def test_c_license_block_preserved():
+    """A multi-line C ``/* ... */`` license header survives; body comments do not."""
+    src = ("/*\n * Copyright 2020 The Authors.\n"
+           " * SPDX-License-Identifier: MIT\n */\n"
+           "int main(void) { return 0; /* drop me */ }\n")
+    out = strip_comments(src, "c")
+    assert "Copyright 2020 The Authors" in out
+    assert "SPDX-License-Identifier: MIT" in out
+    assert "drop me" not in out
+
+
+def test_description_below_notice_is_stripped():
+    """A description block separated from the license by a blank comment line (the
+    force_lj pattern) is NOT preserved -- only the notice itself survives."""
+    src = ("# Copyright 2021 ETH Zurich.\n"
+           "# SPDX-License-Identifier: GPL-3.0-or-later\n"
+           "#\n"
+           "# Lennard-Jones force: f_pair = 48 * r**-14 - 24 * r**-8, a fast closed form.\n"
+           "import numpy as np\n")
+    out = strip_comments(src, "python")
+    assert "Copyright 2021 ETH Zurich" in out  # the notice is kept
+    assert "SPDX-License-Identifier" in out
+    assert "f_pair = 48" not in out  # the description/formula below the blank `#` is stripped
+
+
+def test_c_preprocessor_after_license_not_leaked():
+    """A C `#include` / `*ptr` line after a `//` license is CODE, not header (# and *
+    are not C comment starts), so its trailing comment is stripped."""
+    src = ("// Copyright 2020 Acme.\n"
+           "#include <internal.h>  // TODO: remove before ship\n"
+           "int f(int *p){ *p = 1;  /* secret */ return 0; }\n")
+    out = strip_comments(src, "c")
+    assert "Copyright 2020 Acme" in out
+    assert "TODO: remove" not in out
+    assert "secret" not in out
+
+
+def test_paren_c_only_notice_preserved():
+    """A notice whose only marker is the ASCII `(c)` is detected and preserved."""
+    out = strip_comments("# (c) 2020 Jane Doe. Redistribution permitted.\nimport numpy as np\n", "python")
+    assert "(c) 2020 Jane Doe" in out
 
 
 # --------------------------------------------------------------------------- #

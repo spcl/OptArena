@@ -74,19 +74,47 @@ equals the native score by construction (the parity Harbor expects).
    the verifier grades standalone (no bind-mount, no hand-set `PYTHONPATH`). The
    agent image stays lean so it can't read the hidden tests.
 
-2. **Generate the tasks:**
+2. **Generate + run a subset in one command** — `--run` writes the selected tasks
+   into a clean per-selector dir, emits a Harbor `JobConfig` pointing at it, and
+   execs `harbor run`. Any flag the adapter doesn't recognise
+   (`--agent`/`--model`/`--n-concurrent`/…) is **forwarded verbatim to Harbor**:
+
+   ```bash
+   # optimize every HPC kernel with claude-code, 4 trials in parallel
+   python adapters/optarena/run_adapter.py --selector hpc --run \
+       --agent claude-code --model anthropic/claude-opus-4-1 --n-concurrent 4
+   ```
+
+   `--selector` chooses the subset (the same grammar as the rest of OptArena):
+
+   | selector | tasks |
+   |---|---|
+   | `all` | every kernel |
+   | `hpc` / `foundation` / `ml` | one track |
+   | `hpc@lvl3` | one track at a difficulty level (`@lvl1`/`@lvl2`/`@lvl3`) |
+   | `dense_linear_algebra` | one HPC dwarf |
+   | `hpc/structured_grids` | one directory |
+   | `gemm` | a single kernel |
+
+   The `@lvl<n>` suffix filters by KernelBench-style difficulty (per track): `@lvl1`
+   single ops, `@lvl2` multi-loop / branchy kernels, `@lvl3` full apps (HPC/ML) or
+   the most control-complex loops (foundation). So `--selector hpc@lvl3` runs only
+   the HPC mini-apps. Add `--group dir` to bundle microkernels per directory
+   (microapps stay per-app).
+
+3. **Or split generation and running** — generate once, point Harbor at the dir
+   yourself (e.g. to reuse one generation across several agents):
 
    ```bash
    python adapters/optarena/run_adapter.py --output-dir adapters/optarena/tasks --selector all
-   # a subset:           --selector hpc | --selector dense_linear_algebra | --selector gemm
-   # bundle by directory: --selector hpc --group dir
+   harbor run -c adapters/optarena/optarena.yaml   # datasets.path -> the tasks dir
    ```
 
-3. **Run with Harbor**, pointing it at your agent:
-
-   ```bash
-   harbor run -c adapters/optarena/optarena.yaml
-   ```
+> **Smoke-check the scoring without an agent.** The verifier is `harbor_grade`
+> (what `tests/test.sh` runs). Feeding it the reference implementation — a no-op
+> agent that returns the code unchanged — scores **solved at ~1× the C baseline**,
+> the parity anchor (covered by
+> `tests/test_harbor_adapter.py::test_harbor_noop_agent_scores_tsvc_reference_as_solved_1x`).
 
 ## Suite score
 
