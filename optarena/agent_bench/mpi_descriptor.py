@@ -105,6 +105,15 @@ def _block_bounds(n: int, parts: int, coord: int) -> Tuple[int, int]:
     return lo, hi
 
 
+def _effective_block_size(axis: AxisDist) -> int:
+    """Block width :func:`owned_indices` applies on a split axis: declared width (>=1) for
+    ``block_cyclic``, else 1. ``block``/``cyclic``/``block_cyclic``-width-1 share one per-coord
+    owned COUNT, so 1 is canonical for all three. Shared by the ownership math and the extent
+    signature in :meth:`Descriptor.local_size_scalars` -- so the guard can't key on a width the
+    ownership drops (a false-positive conflict)."""
+    return max(1, axis.block_size) if axis.scheme == "block_cyclic" else 1
+
+
 def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> np.ndarray:
     """The global indices of a length-``n`` axis owned by grid ``coords`` under ``axis``.
 
@@ -119,7 +128,7 @@ def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> 
         lo, hi = _block_bounds(n, parts, coord)
         return np.arange(lo, hi, dtype=np.int64)
     if axis.scheme in ("block_cyclic", "cyclic"):
-        block_size = 1 if axis.scheme == "cyclic" else max(1, axis.block_size)
+        block_size = _effective_block_size(axis)
         idx = np.arange(n, dtype=np.int64)
         return idx[(idx // block_size) % parts == coord]
     raise ValueError(f"unknown axis scheme {axis.scheme!r}; split schemes are {AXIS_SCHEMES} "
@@ -242,7 +251,8 @@ def distribution_from_shapes(array_shapes: Dict[str, Sequence[str]],
                              axis_symbols: Sequence[str],
                              ranks: int,
                              *,
-                             scheme: str = "block") -> dict:
+                             scheme: str = "block",
+                             block_size: int = 1) -> dict:
     """A submission-style ``distribution`` dict from an explicit ``{array: (shape tokens)}`` map:
     over a 1-D size-``ranks`` grid, split the FIRST axis of each array whose token names one of
     ``axis_symbols`` and replicate every other axis; omit an array with no decomposed axis (the
@@ -252,23 +262,29 @@ def distribution_from_shapes(array_shapes: Dict[str, Sequence[str]],
     shape is ``None`` (a legacy ``func_name: initialize`` kernel like the jacobi/heat stencils) can
     declare its array ranks in the ``mpi:`` manifest ``arrays`` block and still get the default 1-D
     block layout. Only the first matching axis is split (a 1-D grid drives one axis; binding two
-    array axes to it cannot tile the array). Raises ``ValueError`` when no array carries a
-    decomposed axis (nothing to split).
+    array axes to it cannot tile the array).
+
+    ``block_size`` (ScaLAPACK ``MB``) is emitted ONLY for ``block_cyclic``, where the wrap width is
+    load-bearing; ``block``/``cyclic`` omit it. Without threading it a 1-D ``block_cyclic`` split
+    degraded to unit-block ``cyclic`` (the axis defaulted ``block_size`` to 1). Raises ``ValueError``
+    when no array carries a decomposed axis.
     """
     wanted = set(axis_symbols)
+
+    def _split_axis() -> dict:
+        # a fresh dict per axis (never share one dict object across arrays); block_size is
+        # meaningful only for block_cyclic, so it is the only scheme that carries it.
+        ax = {"grid_dim": 0, "scheme": scheme}
+        if scheme == "block_cyclic":
+            ax["block_size"] = int(block_size)
+        return ax
+
     arrays: Dict[str, dict] = {}
     for name, shape in array_shapes.items():
         split = next((d for d, tok in enumerate(shape) if tok in wanted), None)
         if split is None:
             continue
-        arrays[name] = {
-            "axes": [{
-                "grid_dim": 0,
-                "scheme": scheme
-            } if d == split else {
-                "grid_dim": None
-            } for d in range(len(shape))]
-        }
+        arrays[name] = {"axes": [_split_axis() if d == split else {"grid_dim": None} for d in range(len(shape))]}
     if not arrays:
         raise ValueError(f"no array has an axis named by {sorted(wanted)}; nothing to distribute")
     return {"grid": [int(ranks)], "arrays": arrays}
@@ -320,7 +336,8 @@ def distribution_over_symbol(binding: "Binding",
                              axis_symbols: Sequence[str],
                              ranks: int,
                              *,
-                             scheme: str = "block") -> dict:
+                             scheme: str = "block",
+                             block_size: int = 1) -> dict:
     """A submission-style ``distribution`` dict that splits, over a 1-D size-``ranks`` grid, each
     array axis whose declarative binding shape token names one of ``axis_symbols``; every other
     axis (and every array with no matching axis) is replicated.
@@ -335,7 +352,7 @@ def distribution_over_symbol(binding: "Binding",
     decomposed axis.
     """
     shapes = {p.name: p.shape for p in binding.pointers if p.shape is not None}
-    return distribution_from_shapes(shapes, axis_symbols, ranks, scheme=scheme)
+    return distribution_from_shapes(shapes, axis_symbols, ranks, scheme=scheme, block_size=block_size)
 
 
 def distribution_for_kernel(mpi_block: Optional[dict],
@@ -362,18 +379,18 @@ def distribution_for_kernel(mpi_block: Optional[dict],
     manifest_shapes = mpi.get("arrays")
     decomp_scheme = decomp.get("scheme", scheme)
     grid_ndim = int(decomp.get("grid_ndim", 1))
+    block_size = int(decomp.get("block_size", 1))
     if decomp_scheme in ("block_cyclic", "cyclic") and grid_ndim > 1:
         # A multi-dim block-cyclic decomposition deals array-axis-d over grid-dim-d, so it needs
         # each array's rank (axis count), not a named split axis. Read shapes from the manifest
         # map or the binding's declarative shapes.
         shapes = manifest_shapes or {p.name: p.shape for p in binding.pointers if p.shape is not None}
-        return blockcyclic_distribution_from_shapes(shapes,
-                                                    ranks,
-                                                    grid_ndim=grid_ndim,
-                                                    block_size=int(decomp.get("block_size", 1)))
+        return blockcyclic_distribution_from_shapes(shapes, ranks, grid_ndim=grid_ndim, block_size=block_size)
+    # 1-D grid: thread block_size so a block_cyclic decomposition keeps its declared wrap width
+    # (else owned_indices reads the default 1 and it degrades to unit-block cyclic).
     if manifest_shapes:
-        return distribution_from_shapes(manifest_shapes, axis_syms, ranks, scheme=decomp_scheme)
-    return distribution_over_symbol(binding, axis_syms, ranks, scheme=decomp_scheme)
+        return distribution_from_shapes(manifest_shapes, axis_syms, ranks, scheme=decomp_scheme, block_size=block_size)
+    return distribution_over_symbol(binding, axis_syms, ranks, scheme=decomp_scheme, block_size=block_size)
 
 
 # --------------------------------------------------------------------------------------- #
@@ -543,9 +560,10 @@ class Descriptor:
         for sym, candidates in self.symbol_axes.items():
             if sym not in global_scalars:
                 continue
-            # Classify every axis this symbol sizes: a decomposed axis pins a LOCAL extent keyed by
-            # (grid_dim, scheme, block_size); a replicated / whole / out-of-range axis keeps the
-            # GLOBAL extent. More than one DISTINCT class => the value is ambiguous (see docstring).
+            # Key each sized axis by what sets owned_indices' per-coord COUNT: a decomposed axis ->
+            # (grid_dim, effective_block_size); a replicated/whole/out-of-range axis -> GLOBAL extent.
+            # (Keying on raw scheme/block_size flagged count-equal layouts as conflicting.) More than
+            # one DISTINCT class => ambiguous (see docstring).
             signatures = set()
             local_val: Optional[int] = None
             for arr, axis in candidates:
@@ -554,7 +572,7 @@ class Descriptor:
                     signatures.add(("global", ))
                     continue
                 axdist = ad.axes[axis]
-                signatures.add((axdist.grid_dim, axdist.scheme, axdist.block_size))
+                signatures.add((axdist.grid_dim, _effective_block_size(axdist)))
                 if local_val is None:
                     local_val = int(len(owned_indices(int(global_scalars[sym]), axdist, self.grid, coords)))
             if len(signatures) > 1:

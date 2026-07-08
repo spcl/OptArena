@@ -18,8 +18,9 @@ from optarena.agent_bench import mpi_sizing
 from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.mpi_descriptor import (AxisDist, ArrayDist, Descriptor, Grid,
                                                  blockcyclic_distribution_from_shapes, default_distribution,
-                                                 distribution_for_kernel, distribution_over_symbol, factor_grid, gather,
-                                                 hypercube_grid, is_partition, local_shape, owned_indices, scatter)
+                                                 distribution_for_kernel, distribution_from_shapes,
+                                                 distribution_over_symbol, factor_grid, gather, hypercube_grid,
+                                                 is_partition, local_shape, owned_indices, scatter)
 from optarena.bindings.contract import Arg, Binding, binding_from_spec
 from optarena.spec import BenchSpec
 
@@ -489,6 +490,41 @@ def test_local_size_scalars_allows_symbol_on_several_identically_split_axes():
     assert d.local_size_scalars({"LEN": 16}, 0)["LEN"] == 4
 
 
+def test_local_size_scalars_allows_symbol_on_count_equivalent_schemes():
+    # Regression (false-positive guard): one symbol sizing two axes declared with DIFFERENT scheme
+    # spellings that owned_indices treats identically -- `cyclic` and `block_cyclic` with block_size 1
+    # both deal round-robin in unit blocks, so the per-rank COUNT is the same. The old signature keyed
+    # on (grid_dim, scheme, block_size) and rejected this as a conflict; keying on the effective block
+    # size (both -> 1) localises it cleanly.
+    args = (
+        Arg(name="x", kind="ptr", dtype="float64", is_const=True, shape=("LEN", )),
+        Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("LEN", ), role="output"),
+        Arg(name="LEN", kind="scalar", dtype="int64", is_const=True, role="symbol"),
+    )
+    b = Binding(kernel="k1d", config="dense", args=args, symbols={})
+    sub = _sub({
+        "grid": [4],
+        "arrays": {
+            "x": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "cyclic"
+                }]
+            },
+            "y": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "block_cyclic",
+                    "block_size": 1
+                }]
+            },
+        },
+    })
+    d = Descriptor.from_submission(sub, b, ranks=4)
+    # 16 elements, 4 ranks, unit-block round-robin -> 4 owned per rank, and no ambiguity is raised.
+    assert d.local_size_scalars({"LEN": 16}, 0)["LEN"] == 4
+
+
 # --- A real v2 no-halo kernel: CLOUDSC column physics decomposed over `klon` --------------
 #
 # CLOUDSC's columns (the `klon` axis) are independent -- the vertical loop couples LEVELS
@@ -718,6 +754,31 @@ def test_distribution_for_kernel_dispatches_blockcyclic_2d():
     # Default (no scheme / grid_ndim) is the 1-D block split over a size-ranks line.
     dist1d = distribution_for_kernel({"decomposition": {"axis": ["M"]}}, binding, 4)
     assert dist1d["grid"] == [4]
+
+
+def test_distribution_for_kernel_1d_block_cyclic_keeps_block_size():
+    # Regression: a 1-D (grid_ndim omitted / 1) block_cyclic decomposition must carry block_size
+    # through to the emitted axis, else owned_indices reads the default 1 and it degrades to
+    # unit-block cyclic. `block` (contiguous) still omits the irrelevant key.
+    binding = binding_from_spec(BenchSpec.load("mat_scaled_add"))
+    bc = distribution_for_kernel({"decomposition": {
+        "axis": ["M"],
+        "scheme": "block_cyclic",
+        "block_size": 4
+    }}, binding, 4)
+    assert bc["grid"] == [4]
+    assert bc["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "block_cyclic", "block_size": 4}
+    # block scheme: no block_size key (the contiguous builder never emitted one).
+    blk = distribution_for_kernel({"decomposition": {"axis": ["M"], "scheme": "block"}}, binding, 4)
+    assert blk["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "block"}
+
+
+def test_distribution_from_shapes_emits_block_cyclic_width():
+    # The shape-map builder carries the wrap width for block_cyclic only.
+    bc = distribution_from_shapes({"A": ("M", "N")}, ["M"], 4, scheme="block_cyclic", block_size=3)
+    assert bc["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "block_cyclic", "block_size": 3}
+    cyc = distribution_from_shapes({"A": ("M", "N")}, ["M"], 4, scheme="cyclic")
+    assert cyc["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "cyclic"}
 
 
 # --- Per-array residency: any array on host or device, independently -----------------------
