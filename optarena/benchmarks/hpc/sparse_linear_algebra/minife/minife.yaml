@@ -76,4 +76,3 @@ taxonomy:
   domain: Solver
 precisions:
 - fp64
-norm_error: 1.0e-10
