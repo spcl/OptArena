@@ -125,7 +125,9 @@ def grade(kernel: str,
           verify: bool = True,
           c_max: Optional[float] = None,
           distribution: Optional[dict] = None,
-          residency: str = "host") -> dict:
+          residency: str = "host",
+          repo_dir: Optional[str] = None,
+          speedup_min: Optional[float] = None) -> dict:
     """Grade one artifact for ``kernel`` and return its reward dict. Unset measurement
     args fall back to ``config.yaml`` ``measurement.*`` / ``service.*``.
 
@@ -135,7 +137,13 @@ def grade(kernel: str,
 
     ``residency="distributed"`` (with the agent's ``distribution``) takes the multi-node MPI
     scaling path: ``score_task_fuzzed`` launches ``mpi.ranks`` ranks and reduces to one measured,
-    re-verified iteration instead of the single-node configs x shapes sweep."""
+    re-verified iteration instead of the single-node configs x shapes sweep.
+
+    ``repo_dir`` (the repo task layout) additionally reconstructs the agent's pull request from that
+    git repo and applies the acceptance rule: the reward is floored to ``1.0`` unless the PR opened,
+    changes only ``src/``, merges cleanly into ``main``, is correct, AND clears ``speedup_min``
+    (default ``config.yaml`` ``repo.speedup_min``). The ``pr`` / ``accepted`` / ``accept_reason``
+    fields record the decision."""
     baseline = baseline or config.get("measurement.baseline", "c")
     datatype = datatype or config.get("service.datatype", "float64")
     repeat = repeat if repeat is not None else config.get("measurement.repeat", 20)
@@ -161,7 +169,7 @@ def grade(kernel: str,
              if it.correct and it.verified and it.speedup > 0]
     gsd = _gsd([s for s, _, _ in valid])
     gated = ts.solved and ts.s_i > 1.0 and ts.s_i / gsd**z <= 1.0  # win inside the noise band
-    return {
+    reward = {
         "reward": 1.0 if gated else ts.s_i,
         "solved": ts.solved,
         "speedup": ts.s_i,  # the clamped geomean before the dispersion gate
@@ -176,6 +184,26 @@ def grade(kernel: str,
         } for s, n, b in valid],
         "suspect": ts.suspect_count > 0,
     }
+    if repo_dir is not None:
+        _gate_repo_pr(reward, repo_dir, speedup_min)
+    return reward
+
+
+def _gate_repo_pr(reward: dict, repo_dir: str, speedup_min: Optional[float]) -> None:
+    """Apply the repo-task PR acceptance rule to ``reward`` in place: reconstruct the PR from
+    ``repo_dir``, decide acceptance against ``speedup_min`` (default ``config.yaml``
+    ``repo.speedup_min``), record ``pr``/``accepted``/``accept_reason``/``speedup_min``, and floor
+    the reward to ``1.0`` when the PR is not accepted."""
+    from optarena.agent_bench import repo_pr as _pr
+    smin = speedup_min if speedup_min is not None else config.get("repo.speedup_min", 1.2)
+    pr = _pr.evaluate(repo_dir)
+    accepted, why = _pr.accepts(pr, solved=bool(reward["solved"]), speedup=reward["speedup"], speedup_min=smin)
+    reward["pr"] = pr.to_dict()
+    reward["accepted"] = accepted
+    reward["accept_reason"] = why
+    reward["speedup_min"] = smin
+    if not accepted:
+        reward["reward"] = 1.0
 
 
 def combine(rewards: Sequence[dict]) -> dict:
@@ -205,12 +233,15 @@ def _grade_one(kernel: str,
                k: Optional[int],
                verify: bool,
                distribution_path: Optional[str] = None,
-               residency: str = "host") -> dict:
+               residency: str = "host",
+               repo_dir: Optional[str] = None,
+               speedup_min: Optional[float] = None) -> dict:
     """Grade one (kernel, artifact) item, never raising: a grading failure is a
     neutral ``1.0`` reward for that kernel, so one bad kernel cannot crash a bundle.
 
     A ``distributed`` item additionally reads the agent's ``distribution.json`` (its declared MPI
-    layout); a missing or malformed one is caught here as a neutral reward, never a crash."""
+    layout); a missing or malformed one is caught here as a neutral reward, never a crash. A
+    ``repo_dir`` item applies the PR acceptance rule (:func:`grade`)."""
     try:
         source = pathlib.Path(source_path).read_text() if source_path else None
         distribution = json.loads(pathlib.Path(distribution_path).read_text()) if distribution_path else None
@@ -222,7 +253,9 @@ def _grade_one(kernel: str,
                      baseline=baseline,
                      verify=verify,
                      distribution=distribution,
-                     residency=residency)
+                     residency=residency,
+                     repo_dir=repo_dir,
+                     speedup_min=speedup_min)
     except Exception as exc:  # noqa: BLE001 -- neutral reward, never a crash (see docstring)
         return {"reward": 1.0, "solved": False, "error": f"{type(exc).__name__}: {exc}", "kernel": kernel}
 
@@ -236,12 +269,16 @@ def grade_items(kernels: Sequence[str],
                 k: Optional[int] = None,
                 verify: bool = True,
                 distributions: Optional[Sequence[Optional[str]]] = None,
-                residency: str = "host") -> dict:
+                residency: str = "host",
+                repo_dirs: Optional[Sequence[Optional[str]]] = None,
+                speedup_min: Optional[float] = None) -> dict:
     """Grade one or more items and reduce to a single reward. A single item returns
     its reward verbatim; two or more are :func:`combine`-d into the geomean. ``distributions``
-    (one path per kernel, distributed track) carries each agent's declared MPI layout."""
+    (one path per kernel, distributed track) carries each agent's declared MPI layout; ``repo_dirs``
+    (one per kernel, repo layout) carries each agent's git repo for the PR acceptance rule."""
     libs = list(libraries) if libraries is not None else [None] * len(kernels)
     dists = list(distributions) if distributions is not None else [None] * len(kernels)
+    repos = list(repo_dirs) if repo_dirs is not None else [None] * len(kernels)
     rewards = [
         _grade_one(kern,
                    src,
@@ -251,7 +288,10 @@ def grade_items(kernels: Sequence[str],
                    k=k,
                    verify=verify,
                    distribution_path=dist,
-                   residency=residency) for kern, src, lib, dist in zip(kernels, sources, libs, dists)
+                   residency=residency,
+                   repo_dir=repo,
+                   speedup_min=speedup_min)
+        for kern, src, lib, dist, repo in zip(kernels, sources, libs, dists, repos)
     ]
     return rewards[0] if len(rewards) == 1 else combine(rewards)
 
@@ -266,6 +306,14 @@ def main(argv=None) -> int:
                    action="append",
                    default=[],
                    help="path to the agent's distribution.json (per --kernel; distributed track)")
+    p.add_argument("--repo-dir",
+                   action="append",
+                   default=[],
+                   help="path to the agent's git repo (per --kernel; repo layout -> PR acceptance)")
+    p.add_argument("--speedup-min",
+                   type=float,
+                   default=None,
+                   help="repo layout: min speedup to accept a PR (default config repo.speedup_min)")
     p.add_argument("--language", default="c", help="implementation language (default c)")
     p.add_argument("--residency",
                    default="host",
@@ -281,11 +329,12 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     n = len(args.kernel)
-    if len(args.source) > n or len(args.library) > n or len(args.distribution) > n:
-        p.error("more --source/--library/--distribution than --kernel")
+    if len(args.source) > n or len(args.library) > n or len(args.distribution) > n or len(args.repo_dir) > n:
+        p.error("more --source/--library/--distribution/--repo-dir than --kernel")
     sources: List[Optional[str]] = list(args.source) + [None] * (n - len(args.source))
     libraries: List[Optional[str]] = list(args.library) + [None] * (n - len(args.library))
     distributions: List[Optional[str]] = list(args.distribution) + [None] * (n - len(args.distribution))
+    repo_dirs: List[Optional[str]] = list(args.repo_dir) + [None] * (n - len(args.repo_dir))
     if not any(sources) and not any(libraries):
         p.error("at least one --source or --library is required")
 
@@ -299,7 +348,9 @@ def main(argv=None) -> int:
                              k=args.k,
                              verify=args.verify,
                              distributions=distributions,
-                             residency=args.residency)
+                             residency=args.residency,
+                             repo_dirs=repo_dirs,
+                             speedup_min=args.speedup_min)
 
     with open(args.reward, "w") as f:
         json.dump(reward, f)
