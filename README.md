@@ -352,7 +352,8 @@ the order once.
 
 > **⚠️ Still open (security boundary):** the workspace makes *agent-built* libraries
 > first-class, but **fetching arbitrary libraries from the internet** (an allow-list
-> + network inside the agent container) is the remaining supply-chain /
+>
+> - network inside the agent container) is the remaining supply-chain /
 > reproducibility decision. Today the agent builds against the offline fixed
 > toolchain + the workspace. See [Under Construction].
 
@@ -450,6 +451,11 @@ optarena/benchmarks/foundation/<kernel>_numpy.py              (foundation -- fla
 optarena/benchmarks/hpc/<dwarf>/<kernel>/<kernel>_numpy.py    (hpc)
 optarena/benchmarks/ml/<kernel>/<kernel>_numpy.py             (ml)
 ```
+
+If you are curating raw source corpora for translation work rather than OptArena
+benchmarks, keep them under `optarena/PytorchToNumpy/level1/`, `level2/`, and
+`level3/`, with generated NumPy outputs in the matching `result/level*/`
+directories. Do not place those source corpora under `optarena/benchmarks/`.
 
 Write it the everyday NumPy way. The reference may either **write into
 pre-allocated output buffers** (C-style, no `return`) *or* **return its result
@@ -588,6 +594,7 @@ rust:
   compile: ["{cc}", "-O", "--crate-type=cdylib", "{baseline}", "{src}", "-o", "{lib}"]
   link: []                       # cdylib already links a C-ABI shared object
 ```
+
 ```python
 # optarena/languages.py
 LANG_EXT = { ..., "rust": ".rs" }
@@ -671,6 +678,8 @@ OptArena adapts scientific Python/NumPy codes from many sources:
 - 2-D discrete wavelet transform adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (dwt2d)
 - HotSpot 3D thermal simulation adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (hotspot3D)
 - Gaussian elimination adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (gaussian)
+- lavaMD cell-list molecular dynamics adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (lavaMD)
+- ML kernels from [KernelBench](https://github.com/ScalingIntelligence/KernelBench)
 - Band-parallel exact-exchange (Fock) operator adapted from [Quantum ESPRESSO](https://www.quantum-espresso.org/) (vexx_k)
 
 Each adapted kernel retains the license of its original source (all GPLv3-compatible);

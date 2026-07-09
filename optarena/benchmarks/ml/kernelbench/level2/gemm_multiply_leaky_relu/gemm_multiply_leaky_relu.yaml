@@ -1,0 +1,44 @@
+# OptArena benchmark manifest (KernelBench port).
+name: gemm_multiply_leaky_relu
+func_name: gemm_multiply_leaky_relu
+kind: microkernel
+level: 2
+parameters:
+  S:
+    batch_size: 4
+    in_features: 6
+    multiplier: 2.0
+    negative_slope: 0.1
+    out_features: 8
+  M:
+    batch_size: 8
+    in_features: 12
+    multiplier: 2.0
+    negative_slope: 0.1
+    out_features: 16
+  L:
+    batch_size: 16
+    in_features: 24
+    multiplier: 2.0
+    negative_slope: 0.1
+    out_features: 32
+  XL:
+    batch_size: 32
+    in_features: 48
+    multiplier: 2.0
+    negative_slope: 0.1
+    out_features: 64
+init:
+  arrays:
+    x: (batch_size, in_features)
+    gemm_weight: (out_features, in_features)
+    gemm_bias: (out_features,)
+    out: (batch_size, out_features)
+  scalars:
+    leaky_relu_negative_slope: 0.1
+output_args:
+- out
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

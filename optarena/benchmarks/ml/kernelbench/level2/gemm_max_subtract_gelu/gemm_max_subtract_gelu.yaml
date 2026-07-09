@@ -1,0 +1,38 @@
+# OptArena benchmark manifest (KernelBench port).
+name: gemm_max_subtract_gelu
+func_name: gemm_max_subtract_gelu
+kind: microkernel
+level: 2
+parameters:
+  S:
+    batch_size: 4
+    in_features: 6
+    max_dim: 1
+    out_features: 8
+  M:
+    batch_size: 8
+    in_features: 12
+    max_dim: 2
+    out_features: 16
+  L:
+    batch_size: 16
+    in_features: 24
+    max_dim: 4
+    out_features: 32
+  XL:
+    batch_size: 32
+    in_features: 48
+    max_dim: 8
+    out_features: 64
+init:
+  arrays:
+    x: (batch_size, in_features)
+    gemm_weight: (out_features, in_features)
+    gemm_bias: (out_features,)
+    out: (batch_size, max_dim)
+output_args:
+- out
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

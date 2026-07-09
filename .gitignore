@@ -178,3 +178,4 @@ scripts/verify_tvm.py
 .gt_cache/
 *.mod
 .ruff_cache/
+.DS_Store

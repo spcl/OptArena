@@ -55,6 +55,14 @@ properties:
     description: "microkernel (a single kernel / classical optimization target)
       or microapp (a multi-kernel application). Descriptive only -- no functional
       dispatch keys on it; the track folder (hpc/foundation/ml) drives behavior."
+  level:
+    type: integer
+    enum:
+    - 1
+    - 2
+    - 3
+    description: "Explicit KernelBench-style difficulty level. When omitted,
+      loaders derive it from benchmark structure."
   parameters:
     type: object
     description: 'preset -> {symbol: value}'

@@ -1,0 +1,30 @@
+# OptArena benchmark manifest (KernelBench port).
+name: matrix_scalar_multiplication
+func_name: matrix_scalar_multiplication
+kind: microkernel
+level: 1
+parameters:
+  S:
+    M: 4
+    N: 5
+  M:
+    M: 8
+    N: 10
+  L:
+    M: 16
+    N: 20
+  XL:
+    M: 32
+    N: 40
+init:
+  scalars:
+    s: 3.14
+  arrays:
+    A: (M, N)
+    out: (M, N)
+output_args:
+- out
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning
