@@ -44,7 +44,9 @@ init:
     batch_norm_weight: (out_channels,)
     batch_norm_bias: (out_channels,)
     batch_norm_running_mean: (out_channels,)
-    batch_norm_running_var: (out_channels,)
+    batch_norm_running_var:
+      shape: (out_channels,)
+      dist: lognormal
     out: (batch_size, out_channels, 1, 1, 1)
   scalars:
     scale_factor: 2.0

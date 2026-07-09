@@ -56,7 +56,9 @@ init:
     batch_norm_weight: (out_channels,)
     batch_norm_bias: (out_channels,)
     batch_norm_running_mean: (out_channels,)
-    batch_norm_running_var: (out_channels,)
+    batch_norm_running_var:
+      shape: (out_channels,)
+      dist: lognormal
     out: (batch_size, out_channels, ((((depth - 1) * stride - 2 * padding + (kernel_size
       - 1) + output_padding + 1) - 2) // 2 + 1 - 2) // 2 + 1, ((((height - 1) * stride
       - 2 * padding + (kernel_size - 1) + output_padding + 1) - 2) // 2 + 1 - 2) //

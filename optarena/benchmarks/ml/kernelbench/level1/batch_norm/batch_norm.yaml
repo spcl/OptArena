@@ -34,7 +34,9 @@ init:
     bn_weight: (batch_size,)
     bn_bias: (batch_size,)
     bn_running_mean: (batch_size,)
-    bn_running_var: (batch_size,)
+    bn_running_var:
+      shape: (batch_size,)
+      dist: lognormal
     out: (batch_size, features, dim1, dim2)
   scalars:
     bn_eps: 1.0e-05

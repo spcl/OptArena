@@ -28,7 +28,9 @@ init:
     bn_weight: (out_features,)
     bn_bias: (out_features,)
     bn_running_mean: (out_features,)
-    bn_running_var: (out_features,)
+    bn_running_var:
+      shape: (out_features,)
+      dist: lognormal
     bias: (1,)
     out: (batch_size, out_features)
   scalars:

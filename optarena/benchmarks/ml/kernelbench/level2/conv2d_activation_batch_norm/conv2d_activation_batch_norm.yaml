@@ -40,7 +40,9 @@ init:
     bn_weight: (out_channels,)
     bn_bias: (out_channels,)
     bn_running_mean: (out_channels,)
-    bn_running_var: (out_channels,)
+    bn_running_var:
+      shape: (out_channels,)
+      dist: lognormal
     out: (batch_size, out_channels, height - kernel_size + 1, width - kernel_size + 1)
   scalars:
     conv_stride: 1
