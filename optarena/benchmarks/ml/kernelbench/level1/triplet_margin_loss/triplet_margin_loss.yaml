@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: triplet_margin_loss
-func_name: forward
+func_name: triplet_margin_loss
 kind: microkernel
 level: 1
 parameters:

@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv2d_subtract_hardswish_max_pool_mish
-func_name: forward
+func_name: conv2d_subtract_hardswish_max_pool_mish
 kind: microkernel
 level: 2
 parameters:

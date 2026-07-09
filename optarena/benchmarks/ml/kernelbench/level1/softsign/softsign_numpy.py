@@ -1,4 +1,4 @@
 import numpy as np
 
-def forward(x, out):
+def softsign(x, out):
     out[:] = x / (1 + np.abs(x))

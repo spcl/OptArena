@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: standard_matrix_multiplication
-func_name: forward
+func_name: standard_matrix_multiplication
 kind: microkernel
 level: 1
 parameters:

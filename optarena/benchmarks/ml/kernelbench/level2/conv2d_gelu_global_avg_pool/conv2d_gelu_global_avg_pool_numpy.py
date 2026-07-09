@@ -59,7 +59,7 @@ def _gelu(x):
     erf = sign * (1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * np.exp(-a * a))
     return 0.5 * x * (1.0 + erf)
 
-def forward(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, out):
+def conv2d_gelu_global_avg_pool(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, out):
     x = _conv2d(x, conv_weight, conv_bias, int(conv_stride), int(conv_padding), int(conv_dilation), int(conv_groups))
     x = _gelu(x)
     x = _adaptive_avg_pool2d(x, 1)

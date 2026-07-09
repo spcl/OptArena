@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_scaling_residual_add
-func_name: forward
+func_name: matmul_scaling_residual_add
 kind: microkernel
 level: 2
 parameters:

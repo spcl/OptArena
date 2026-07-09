@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_with_transposed_a
-func_name: forward
+func_name: matmul_with_transposed_a
 kind: microkernel
 level: 1
 parameters:

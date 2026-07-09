@@ -78,7 +78,7 @@ def _maxpool3d(x, kernel_size, stride, padding):
                         out[b, c, oz, oy, ox] = np.max(window)
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, divisor, pool_size, bias_shape, sum_dim, conv_weight, conv_bias, bias, out):
+def conv3d_divide_max_global_avg_pool_bias_add_sum(x, in_channels, out_channels, kernel_size, divisor, pool_size, bias_shape, sum_dim, conv_weight, conv_bias, bias, out):
     x = _conv3d(x, conv_weight, conv_bias, 1, 0, 1, 1)
     x = (x / divisor)
     x = _maxpool3d(x, pool_size, None, 0)

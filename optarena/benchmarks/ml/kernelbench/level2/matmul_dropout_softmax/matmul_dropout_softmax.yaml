@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_dropout_softmax
-func_name: forward
+func_name: matmul_dropout_softmax
 kind: microkernel
 level: 2
 parameters:

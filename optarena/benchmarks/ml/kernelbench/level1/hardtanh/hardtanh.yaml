@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: hardtanh
-func_name: forward
+func_name: hardtanh
 kind: microkernel
 level: 1
 parameters:

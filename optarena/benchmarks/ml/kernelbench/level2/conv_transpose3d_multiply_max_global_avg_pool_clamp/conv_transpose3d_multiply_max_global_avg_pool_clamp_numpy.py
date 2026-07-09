@@ -80,7 +80,7 @@ def _maxpool3d(x, kernel_size, stride, padding):
     return out
 
 
-def forward(x, stride, padding, conv_transpose_weight, conv_transpose_bias, scale, maxpool_kernel_size, out):
+def conv_transpose3d_multiply_max_global_avg_pool_clamp(x, stride, padding, conv_transpose_weight, conv_transpose_bias, scale, maxpool_kernel_size, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, 0, 1, 1)
     x = (x * scale)
     x = _maxpool3d(x, maxpool_kernel_size, None, 0)

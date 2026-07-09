@@ -37,5 +37,5 @@ def _conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation
     out += bias.reshape(1, -1, 1, 1)
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, stride, padding, output_padding, dilation, groups, bias, conv_transpose2d_weight, conv_transpose2d_bias, conv_transpose2d_stride, conv_transpose2d_padding, conv_transpose2d_dilation, conv_transpose2d_groups, conv_transpose2d_output_padding, out):
+def conv_transposed_2d_asymmetric_input_asymmetric_kernel(x, in_channels, out_channels, kernel_size, stride, padding, output_padding, dilation, groups, bias, conv_transpose2d_weight, conv_transpose2d_bias, conv_transpose2d_stride, conv_transpose2d_padding, conv_transpose2d_dilation, conv_transpose2d_groups, conv_transpose2d_output_padding, out):
     out[:] = _conv_transpose2d(x, conv_transpose2d_weight, conv_transpose2d_bias, conv_transpose2d_stride, conv_transpose2d_padding, conv_transpose2d_output_padding, conv_transpose2d_dilation, conv_transpose2d_groups)

@@ -1,5 +1,5 @@
 import numpy as np
 
 
-def forward(x, mask, dim, out):
+def masked_cumsum(x, mask, dim, out):
     out[:] = np.cumsum((x * mask), axis=dim)

@@ -82,7 +82,7 @@ def _layer_norm(x, weight, bias, eps):
     return (x - mean) / np.sqrt(var + eps) * weight + bias
 
 
-def forward(x, stride, padding, output_padding, conv_transpose_weight, conv_transpose_bias, sum_weight, norm_weight, norm_bias, norm_eps, pool_kernel_size, out):
+def conv_transpose3d_sum_layer_norm_avg_pool_gelu(x, stride, padding, output_padding, conv_transpose_weight, conv_transpose_bias, sum_weight, norm_weight, norm_bias, norm_eps, pool_kernel_size, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = (x + sum_weight)
     x = _layer_norm(x, norm_weight, norm_bias, norm_eps)

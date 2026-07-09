@@ -71,7 +71,7 @@ def _softmax(x, axis=-1):
     return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
 
 
-def forward(x, conv_transpose_weight, conv_transpose_bias, scale, clamp_min, clamp_max, pool_kernel_size, stride, padding, output_padding, out):
+def conv_transpose3d_avg_pool_clamp_softmax_multiply(x, conv_transpose_weight, conv_transpose_bias, scale, clamp_min, clamp_max, pool_kernel_size, stride, padding, output_padding, out):
     x = _avgpool3d(x, pool_kernel_size, None, 0)
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = np.clip(x, clamp_min, clamp_max)

@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gemm_max_subtract_gelu
-func_name: forward
+func_name: gemm_max_subtract_gelu
 kind: microkernel
 level: 2
 parameters:

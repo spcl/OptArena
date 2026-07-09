@@ -15,7 +15,7 @@ def _logsumexp(x, axis=-1, keepdims=False):
         return y
     return np.squeeze(y, axis=axis)
 
-def forward(x, in_features, out_features, bias, linear_weight, linear_bias, out):
+def gemm_logsumexp_leaky_relu_leaky_relu_gelu_gelu(x, in_features, out_features, bias, linear_weight, linear_bias, out):
     x = x @ linear_weight.T + linear_bias
     x = _logsumexp(x, axis=1, keepdims=True)
     x = np.where(x > 0, x, 0.01 * x)

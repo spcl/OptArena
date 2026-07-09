@@ -51,7 +51,7 @@ def _group_norm(x, num_groups, weight, bias, eps):
     return y * weight.reshape(shape) + bias.reshape(shape)
 
 
-def forward(x, stride, padding, groups, eps, conv_transpose_weight, conv_transpose_bias, group_norm_weight, group_norm_bias, out):
+def conv_transpose3d_swish_group_norm_hardswish(x, stride, padding, groups, eps, conv_transpose_weight, conv_transpose_bias, group_norm_weight, group_norm_bias, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, 0, 1, 1)
     x = ((1.0 / (1.0 + np.exp(-(x)))) * x)
     x = _group_norm(x, groups, group_norm_weight, group_norm_bias, eps)

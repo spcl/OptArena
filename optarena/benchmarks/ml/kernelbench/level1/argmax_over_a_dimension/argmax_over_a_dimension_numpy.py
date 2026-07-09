@@ -1,5 +1,5 @@
 import numpy as np
 
 
-def forward(x, dim, out):
+def argmax_over_a_dimension(x, dim, out):
     out[:] = np.argmax(x, axis=dim, keepdims=False)

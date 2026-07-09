@@ -1,5 +1,5 @@
 import numpy as np
 
 
-def forward(A, s, out):
+def matrix_scalar_multiplication(A, s, out):
     out[:] = (A * s)

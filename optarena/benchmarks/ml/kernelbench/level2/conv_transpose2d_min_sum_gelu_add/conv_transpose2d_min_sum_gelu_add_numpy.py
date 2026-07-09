@@ -45,7 +45,7 @@ def _gelu(x):
     return 0.5 * x * (1.0 + erf)
 
 
-def forward(x, conv_transpose_weight, conv_transpose_bias, bias, stride, padding, output_padding, out):
+def conv_transpose2d_min_sum_gelu_add(x, conv_transpose_weight, conv_transpose_bias, bias, stride, padding, output_padding, out):
     x = _conv_transpose2d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = np.min(x, axis=1, keepdims=True)
     x = np.sum(x, axis=2, keepdims=True)

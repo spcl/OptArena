@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gemm_swish_divide_clamp_tanh_clamp
-func_name: forward
+func_name: gemm_swish_divide_clamp_tanh_clamp
 kind: microkernel
 level: 2
 parameters:

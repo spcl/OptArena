@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: min_reduction_over_a_dimension
-func_name: forward
+func_name: min_reduction_over_a_dimension
 kind: microkernel
 level: 1
 parameters:

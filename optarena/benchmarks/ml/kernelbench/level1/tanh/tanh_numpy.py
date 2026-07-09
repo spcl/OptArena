@@ -1,4 +1,4 @@
 import numpy as np
 
-def forward(x, out):
+def tanh(x, out):
     out[:] = np.tanh(x)

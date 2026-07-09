@@ -37,7 +37,7 @@ def _conv2d(x, weight, bias, stride, padding, dilation, groups):
                     out[b, oc, oy, ox] = total + bias[oc]
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, scale_factor, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, out):
+def conv2d_scaling_min(x, in_channels, out_channels, kernel_size, scale_factor, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, out):
     x = _conv2d(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups)
     x = x * scale_factor
     x = np.min(x, axis=1, keepdims=True)

@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gemm_batch_norm_scaling_softmax
-func_name: forward
+func_name: gemm_batch_norm_scaling_softmax
 kind: microkernel
 level: 2
 parameters:

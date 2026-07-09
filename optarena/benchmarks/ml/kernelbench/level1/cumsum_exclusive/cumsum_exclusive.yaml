@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: cumsum_exclusive
-func_name: forward
+func_name: cumsum_exclusive
 kind: microkernel
 level: 1
 parameters:

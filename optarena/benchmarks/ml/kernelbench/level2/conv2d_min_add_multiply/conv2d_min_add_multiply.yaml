@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv2d_min_add_multiply
-func_name: forward
+func_name: conv2d_min_add_multiply
 kind: microkernel
 level: 2
 parameters:

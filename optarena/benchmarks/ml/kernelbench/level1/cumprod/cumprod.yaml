@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: cumprod
-func_name: forward
+func_name: cumprod
 kind: microkernel
 level: 1
 parameters:

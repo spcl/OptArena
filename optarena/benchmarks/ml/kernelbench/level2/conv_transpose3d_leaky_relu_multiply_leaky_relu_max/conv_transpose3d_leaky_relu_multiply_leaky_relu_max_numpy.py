@@ -66,7 +66,7 @@ def _maxpool3d(x, kernel_size, stride, padding):
     return out
 
 
-def forward(x, stride, padding, output_padding, conv_transpose_weight, conv_transpose_bias, multiplier, leaky_relu_negative_slope, max_pool_kernel_size, out):
+def conv_transpose3d_leaky_relu_multiply_leaky_relu_max(x, stride, padding, output_padding, conv_transpose_weight, conv_transpose_bias, multiplier, leaky_relu_negative_slope, max_pool_kernel_size, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = np.where((x) > 0, (x), leaky_relu_negative_slope * (x))
     x = (x * multiplier)

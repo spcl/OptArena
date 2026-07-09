@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: layer_norm
-func_name: forward
+func_name: layer_norm
 kind: microkernel
 level: 1
 parameters:

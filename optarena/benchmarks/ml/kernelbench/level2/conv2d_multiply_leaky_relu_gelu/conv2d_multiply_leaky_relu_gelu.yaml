@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv2d_multiply_leaky_relu_gelu
-func_name: forward
+func_name: conv2d_multiply_leaky_relu_gelu
 kind: microkernel
 level: 2
 parameters:

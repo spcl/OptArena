@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv_transpose3d_softmax_sigmoid
-func_name: forward
+func_name: conv_transpose3d_softmax_sigmoid
 kind: microkernel
 level: 2
 parameters:

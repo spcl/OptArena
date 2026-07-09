@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv_transpose2d_batch_norm_tanh_max_pool_group_norm
-func_name: forward
+func_name: conv_transpose2d_batch_norm_tanh_max_pool_group_norm
 kind: microkernel
 level: 2
 parameters:

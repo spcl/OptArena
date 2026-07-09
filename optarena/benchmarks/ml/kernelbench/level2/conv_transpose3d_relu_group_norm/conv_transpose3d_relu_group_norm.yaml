@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv_transpose3d_relu_group_norm
-func_name: forward
+func_name: conv_transpose3d_relu_group_norm
 kind: microkernel
 level: 2
 parameters:

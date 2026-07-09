@@ -24,5 +24,5 @@ def _maxpool1d(x, kernel_size, stride, padding):
                 out[b, c, ox] = np.max(window)
     return out
 
-def forward(x, kernel_size, stride, padding, dilation, return_indices, maxpool_kernel_size, maxpool_stride, maxpool_padding, out):
+def max_pooling_1d(x, kernel_size, stride, padding, dilation, return_indices, maxpool_kernel_size, maxpool_stride, maxpool_padding, out):
     out[:] = _maxpool1d(x, maxpool_kernel_size, maxpool_stride, maxpool_padding)

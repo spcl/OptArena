@@ -41,7 +41,7 @@ def _conv_transpose3d(x, weight, bias, stride, padding, output_padding, dilation
     return out
 
 
-def forward(x, conv_transpose_weight, conv_transpose_bias, min_value, divisor, stride, padding, output_padding, out):
+def conv_transpose3d_clamp_min_divide(x, conv_transpose_weight, conv_transpose_bias, min_value, divisor, stride, padding, output_padding, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = np.clip(x, min_value, None)
     x = (x / divisor)

@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: log_softmax
-func_name: forward
+func_name: log_softmax
 kind: microkernel
 level: 1
 parameters:

@@ -37,6 +37,6 @@ def _conv2d(x, weight, bias, stride, padding, dilation, groups):
                     out[b, oc, oy, ox] = total + bias[oc]
     return out
 
-def forward(x, num_classes, conv1_weight, conv1_bias, conv1_stride, conv1_padding, conv1_dilation, conv1_groups, out):
+def conv_standard_2d_square_input_square_kernel(x, num_classes, conv1_weight, conv1_bias, conv1_stride, conv1_padding, conv1_dilation, conv1_groups, out):
     x = _conv2d(x, conv1_weight, conv1_bias, conv1_stride, conv1_padding, conv1_dilation, conv1_groups)
     out[:] = x

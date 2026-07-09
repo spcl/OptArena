@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv3d_scaling_tanh_multiply_sigmoid
-func_name: forward
+func_name: conv3d_scaling_tanh_multiply_sigmoid
 kind: microkernel
 level: 2
 parameters:

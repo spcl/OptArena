@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv_transposed_2d_asymmetric_input_square_kernel
-func_name: forward
+func_name: conv_transposed_2d_asymmetric_input_square_kernel
 kind: microkernel
 level: 1
 parameters:

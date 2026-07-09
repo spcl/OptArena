@@ -32,5 +32,5 @@ def _conv1d(x, weight, bias, stride, padding, dilation, groups):
                 out[b, oc, ol] = total + bias[oc]
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, stride, dilation, bias, conv1d_weight, conv1d_bias, conv1d_stride, conv1d_padding, conv1d_dilation, conv1d_groups, out):
+def conv_standard_1d_dilated_strided(x, in_channels, out_channels, kernel_size, stride, dilation, bias, conv1d_weight, conv1d_bias, conv1d_stride, conv1d_padding, conv1d_dilation, conv1d_groups, out):
     out[:] = _conv1d(x, conv1d_weight, conv1d_bias, conv1d_stride, conv1d_padding, conv1d_dilation, conv1d_groups)

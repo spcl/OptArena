@@ -41,5 +41,5 @@ def _conv3d(x, weight, bias, stride, padding, dilation, groups):
                         out[b, oc, oz, oy, ox] = total + bias[oc]
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, conv3d_weight, conv3d_bias, conv3d_stride, conv3d_padding, conv3d_dilation, conv3d_groups, out):
+def conv_standard_3d_asymmetric_input_asymmetric_kernel(x, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, conv3d_weight, conv3d_bias, conv3d_stride, conv3d_padding, conv3d_dilation, conv3d_groups, out):
     out[:] = _conv3d(x, conv3d_weight, conv3d_bias, conv3d_stride, conv3d_padding, conv3d_dilation, conv3d_groups)

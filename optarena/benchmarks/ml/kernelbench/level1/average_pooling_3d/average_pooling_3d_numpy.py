@@ -28,5 +28,5 @@ def _avgpool3d(x, kernel_size, stride, padding):
                         out[b, c, oz, oy, ox] = np.mean(window)
     return out
 
-def forward(x, kernel_size, stride, padding, avg_pool_kernel_size, avg_pool_stride, avg_pool_padding, out):
+def average_pooling_3d(x, kernel_size, stride, padding, avg_pool_kernel_size, avg_pool_stride, avg_pool_padding, out):
     out[:] = _avgpool3d(x, avg_pool_kernel_size, avg_pool_stride, avg_pool_padding)

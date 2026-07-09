@@ -10,7 +10,7 @@ def _gelu(x):
     return 0.5 * x * (1.0 + erf)
 
 
-def forward(x, matmul_weight, matmul_bias, add_value, out):
+def matmul_add_swish_tanh_gelu_hardtanh(x, matmul_weight, matmul_bias, add_value, out):
     x = ((x) @ matmul_weight.T + matmul_bias)
     x = (x + add_value)
     x = ((1.0 / (1.0 + np.exp(-(x)))) * x)

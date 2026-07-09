@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_swish_sum_group_norm
-func_name: forward
+func_name: matmul_swish_sum_group_norm
 kind: microkernel
 level: 2
 parameters:

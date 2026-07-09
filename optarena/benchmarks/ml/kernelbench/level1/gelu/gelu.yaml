@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gelu
-func_name: forward
+func_name: gelu
 kind: microkernel
 level: 1
 parameters:

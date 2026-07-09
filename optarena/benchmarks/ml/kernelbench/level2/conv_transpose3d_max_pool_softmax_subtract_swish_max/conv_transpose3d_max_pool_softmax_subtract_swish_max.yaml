@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv_transpose3d_max_pool_softmax_subtract_swish_max
-func_name: forward
+func_name: conv_transpose3d_max_pool_softmax_subtract_swish_max
 kind: microkernel
 level: 2
 parameters:

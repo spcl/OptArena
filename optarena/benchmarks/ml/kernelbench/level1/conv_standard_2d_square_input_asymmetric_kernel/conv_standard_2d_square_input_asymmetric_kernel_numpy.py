@@ -37,5 +37,5 @@ def _conv2d(x, weight, bias, stride, padding, dilation, groups):
                     out[b, oc, oy, ox] = total + bias[oc]
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, conv2d_weight, conv2d_bias, conv2d_stride, conv2d_padding, conv2d_dilation, conv2d_groups, out):
+def conv_standard_2d_square_input_asymmetric_kernel(x, in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, conv2d_weight, conv2d_bias, conv2d_stride, conv2d_padding, conv2d_dilation, conv2d_groups, out):
     out[:] = _conv2d(x, conv2d_weight, conv2d_bias, conv2d_stride, conv2d_padding, conv2d_dilation, conv2d_groups)

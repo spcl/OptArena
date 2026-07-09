@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_divide_gelu
-func_name: forward
+func_name: matmul_divide_gelu
 kind: microkernel
 level: 2
 parameters:

@@ -28,5 +28,5 @@ def _maxpool3d(x, kernel_size, stride, padding):
                         out[b, c, oz, oy, ox] = np.max(window)
     return out
 
-def forward(x, kernel_size, stride, padding, dilation, return_indices, ceil_mode, maxpool_kernel_size, maxpool_stride, maxpool_padding, out):
+def max_pooling_3d(x, kernel_size, stride, padding, dilation, return_indices, ceil_mode, maxpool_kernel_size, maxpool_stride, maxpool_padding, out):
     out[:] = _maxpool3d(x, maxpool_kernel_size, maxpool_stride, maxpool_padding)

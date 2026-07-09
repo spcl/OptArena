@@ -60,7 +60,7 @@ def _conv_transpose3d(x, weight, bias, stride, padding, output_padding, dilation
     return out
 
 
-def forward(x, scale_factor, conv_transpose_weight, conv_transpose_bias, batch_norm_weight, batch_norm_bias, batch_norm_running_mean, batch_norm_running_var, batch_norm_eps, out):
+def conv_transpose3d_scale_batch_norm_global_avg_pool(x, scale_factor, conv_transpose_weight, conv_transpose_bias, batch_norm_weight, batch_norm_bias, batch_norm_running_mean, batch_norm_running_var, batch_norm_eps, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, 1, 0, 0, 1, 1)
     x = (x * scale_factor)
     x = _batch_norm(x, batch_norm_weight, batch_norm_bias, batch_norm_running_mean, batch_norm_running_var, batch_norm_eps)

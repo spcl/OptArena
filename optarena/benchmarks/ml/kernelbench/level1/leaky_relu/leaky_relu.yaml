@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: leaky_relu
-func_name: forward
+func_name: leaky_relu
 kind: microkernel
 level: 1
 parameters:

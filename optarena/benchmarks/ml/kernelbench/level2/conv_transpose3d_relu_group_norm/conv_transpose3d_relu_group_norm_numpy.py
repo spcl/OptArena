@@ -51,7 +51,7 @@ def _group_norm(x, num_groups, weight, bias, eps):
     return y * weight.reshape(shape) + bias.reshape(shape)
 
 
-def forward(x, conv_transpose_weight, conv_transpose_bias, group_norm_num_groups, group_norm_weight, group_norm_bias, group_norm_eps, out):
+def conv_transpose3d_relu_group_norm(x, conv_transpose_weight, conv_transpose_bias, group_norm_num_groups, group_norm_weight, group_norm_bias, group_norm_eps, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, 1, 0, 0, 1, 1)
     x = np.maximum(x, 0)
     x = _group_norm(x, group_norm_num_groups, group_norm_weight, group_norm_bias, group_norm_eps)

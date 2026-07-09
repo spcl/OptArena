@@ -70,7 +70,7 @@ def _softmax(x, axis=-1):
     exp_x = np.exp(shifted)
     return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
 
-def forward(x, in_channels, out_channels, kernel_size, pool_kernel_size, conv_weight, conv_bias, out):
+def conv3d_softmax_max_pool_max_pool(x, in_channels, out_channels, kernel_size, pool_kernel_size, conv_weight, conv_bias, out):
     x = _conv3d(x, conv_weight, conv_bias, 1, 0, 1, 1)
     x = _softmax(x, axis=1)
     x = _maxpool3d(x, pool_kernel_size, None, 0)

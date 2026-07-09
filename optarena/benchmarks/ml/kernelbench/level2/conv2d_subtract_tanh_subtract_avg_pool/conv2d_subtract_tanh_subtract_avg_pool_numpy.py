@@ -58,7 +58,7 @@ def _conv2d(x, weight, bias, stride, padding, dilation, groups):
                     out[b, oc, oy, ox] = total + bias[oc]
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, subtract1_value, subtract2_value, kernel_size_pool, conv_weight, conv_bias, out):
+def conv2d_subtract_tanh_subtract_avg_pool(x, in_channels, out_channels, kernel_size, subtract1_value, subtract2_value, kernel_size_pool, conv_weight, conv_bias, out):
     x = _conv2d(x, conv_weight, conv_bias, 1, 0, 1, 1)
     x = (x - subtract1_value)
     x = np.tanh(x)

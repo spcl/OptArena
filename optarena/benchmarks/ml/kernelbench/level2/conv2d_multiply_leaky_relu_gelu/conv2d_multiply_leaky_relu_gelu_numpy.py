@@ -45,7 +45,7 @@ def _gelu(x):
     erf = sign * (1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * np.exp(-a * a))
     return 0.5 * x * (1.0 + erf)
 
-def forward(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, multiplier, leaky_relu_negative_slope, out):
+def conv2d_multiply_leaky_relu_gelu(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, multiplier, leaky_relu_negative_slope, out):
     x = _conv2d(x, conv_weight, conv_bias, int(conv_stride), int(conv_padding), int(conv_dilation), int(conv_groups))
     x = (x * multiplier)
     x = np.where((x) > 0, (x), leaky_relu_negative_slope * (x))

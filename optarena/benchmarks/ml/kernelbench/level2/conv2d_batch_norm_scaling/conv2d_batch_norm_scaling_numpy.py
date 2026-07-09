@@ -41,7 +41,7 @@ def _conv2d(x, weight, bias, stride, padding, dilation, groups):
                     out[b, oc, oy, ox] = total + bias[oc]
     return out
 
-def forward(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, bn_weight, bn_bias, bn_running_mean, bn_running_var, bn_eps, scaling_factor, out):
+def conv2d_batch_norm_scaling(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, bn_weight, bn_bias, bn_running_mean, bn_running_var, bn_eps, scaling_factor, out):
     x = _conv2d(x, conv_weight, conv_bias, int(conv_stride), int(conv_padding), int(conv_dilation), int(conv_groups))
     x = _batch_norm(x, bn_weight, bn_bias, bn_running_mean, bn_running_var, bn_eps)
     x = (x * scaling_factor)

@@ -66,7 +66,7 @@ def _conv_transpose3d(x, weight, bias, stride, padding, output_padding, dilation
     return out
 
 
-def forward(x, stride, padding, conv_transpose_weight, conv_transpose_bias, scale1, avg_pool_kernel_size, bias, scale2, out):
+def conv_transpose3d_scaling_avg_pool_bias_add_scaling(x, stride, padding, conv_transpose_weight, conv_transpose_bias, scale1, avg_pool_kernel_size, bias, scale2, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, 0, 1, 1)
     x = (x * scale1)
     x = _avgpool3d(x, avg_pool_kernel_size, None, 0)

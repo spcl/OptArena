@@ -49,7 +49,7 @@ def _logsumexp(x, axis=-1, keepdims=False):
     return np.squeeze(y, axis=axis)
 
 
-def forward(x, stride, padding, conv_transpose_weight, conv_transpose_bias, bias, out):
+def conv_transpose3d_logsumexp_hardswish_subtract_clamp(x, stride, padding, conv_transpose_weight, conv_transpose_bias, bias, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, 0, 1, 1)
     x = _logsumexp(x, axis=1, keepdims=True)
     x = ((x * (1.0 / (1.0 + np.exp(-((x + 3)))))) / 6)

@@ -15,7 +15,7 @@ def _logsumexp(x, axis=-1, keepdims=False):
         return y
     return np.squeeze(y, axis=axis)
 
-def forward(x, in_features, out_features, bias, gemm_weight, gemm_bias, subtract, out):
+def gemm_subtract_global_avg_pool_logsumexp_gelu_residual_add(x, in_features, out_features, bias, gemm_weight, gemm_bias, subtract, out):
     original_x = x
     x = x @ gemm_weight.T + gemm_bias
     x = x - subtract

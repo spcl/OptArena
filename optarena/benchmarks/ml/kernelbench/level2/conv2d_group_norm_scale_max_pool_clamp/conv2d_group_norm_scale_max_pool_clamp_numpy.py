@@ -68,7 +68,7 @@ def _maxpool2d(x, kernel_size, stride, padding):
                     out[b, c, oy, ox] = np.max(window)
     return out
 
-def forward(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, group_norm_num_groups, group_norm_weight, group_norm_bias, group_norm_eps, scale, maxpool_kernel_size, maxpool_padding, clamp_min, clamp_max, out):
+def conv2d_group_norm_scale_max_pool_clamp(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, group_norm_num_groups, group_norm_weight, group_norm_bias, group_norm_eps, scale, maxpool_kernel_size, maxpool_padding, clamp_min, clamp_max, out):
     x = _conv2d(x, conv_weight, conv_bias, int(conv_stride), int(conv_padding), int(conv_dilation), int(conv_groups))
     x = _group_norm(x, int(group_norm_num_groups), group_norm_weight, group_norm_bias, group_norm_eps)
     x = (x * scale)

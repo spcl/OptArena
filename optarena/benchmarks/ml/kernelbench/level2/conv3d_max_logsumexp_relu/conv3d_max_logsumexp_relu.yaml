@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv3d_max_logsumexp_relu
-func_name: forward
+func_name: conv3d_max_logsumexp_relu
 kind: microkernel
 level: 2
 parameters:

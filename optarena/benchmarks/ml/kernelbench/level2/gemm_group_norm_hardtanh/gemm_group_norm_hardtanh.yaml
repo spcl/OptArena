@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gemm_group_norm_hardtanh
-func_name: forward
+func_name: gemm_group_norm_hardtanh
 kind: microkernel
 level: 2
 parameters:

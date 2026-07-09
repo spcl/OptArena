@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: kl_div_loss
-func_name: forward
+func_name: kl_div_loss
 kind: microkernel
 level: 1
 parameters:

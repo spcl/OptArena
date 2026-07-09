@@ -37,7 +37,7 @@ def _conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation
     out += bias.reshape(1, -1, 1, 1)
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, stride, padding, output_padding, add_value, scale, conv_transpose_weight, conv_transpose_bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_dilation, conv_transpose_groups, conv_transpose_output_padding, out):
+def conv_transpose2d_mish_add_hardtanh_scaling(x, in_channels, out_channels, kernel_size, stride, padding, output_padding, add_value, scale, conv_transpose_weight, conv_transpose_bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_dilation, conv_transpose_groups, conv_transpose_output_padding, out):
     x = _conv_transpose2d(x, conv_transpose_weight, conv_transpose_bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_output_padding, conv_transpose_dilation, conv_transpose_groups)
     x = x * np.tanh(np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0))
     x = x + add_value

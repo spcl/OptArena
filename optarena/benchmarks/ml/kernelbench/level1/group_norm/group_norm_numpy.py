@@ -9,5 +9,5 @@ def _group_norm(x, num_groups, weight, bias, eps):
     shape = (1, c) + (1,) * (x.ndim - 2)
     return y * weight.reshape(shape) + bias.reshape(shape)
 
-def forward(x, num_features, num_groups, gn_weight, gn_bias, gn_num_groups, gn_eps, out):
+def group_norm(x, num_features, num_groups, gn_weight, gn_bias, gn_num_groups, gn_eps, out):
     out[:] = _group_norm(x, gn_num_groups, gn_weight, gn_bias, gn_eps)

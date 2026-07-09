@@ -42,7 +42,7 @@ def _softmax(x, axis=-1):
     return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
 
 
-def forward(x, conv_transpose_weight, conv_transpose_bias, bias, scaling_factor, stride, padding, output_padding, out):
+def conv_transpose2d_softmax_bias_add_scaling_sigmoid(x, conv_transpose_weight, conv_transpose_bias, bias, scaling_factor, stride, padding, output_padding, out):
     x = _conv_transpose2d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = _softmax(x, axis=1)
     x = (x + bias)

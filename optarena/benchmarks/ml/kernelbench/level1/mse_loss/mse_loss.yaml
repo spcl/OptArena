@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: mse_loss
-func_name: forward
+func_name: mse_loss
 kind: microkernel
 level: 1
 parameters:

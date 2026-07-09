@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_mish_mish
-func_name: forward
+func_name: matmul_mish_mish
 kind: microkernel
 level: 2
 parameters:

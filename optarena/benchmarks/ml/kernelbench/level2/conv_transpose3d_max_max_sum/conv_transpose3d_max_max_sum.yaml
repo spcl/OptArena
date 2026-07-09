@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv_transpose3d_max_max_sum
-func_name: forward
+func_name: conv_transpose3d_max_max_sum
 kind: microkernel
 level: 2
 parameters:

@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv_transpose3d_scale_batch_norm_global_avg_pool
-func_name: forward
+func_name: conv_transpose3d_scale_batch_norm_global_avg_pool
 kind: microkernel
 level: 2
 parameters:

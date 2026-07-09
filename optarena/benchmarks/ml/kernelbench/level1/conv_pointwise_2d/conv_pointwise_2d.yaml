@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv_pointwise_2d
-func_name: forward
+func_name: conv_pointwise_2d
 kind: microkernel
 level: 1
 parameters:

@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: tanh
-func_name: forward
+func_name: tanh
 kind: microkernel
 level: 1
 parameters:

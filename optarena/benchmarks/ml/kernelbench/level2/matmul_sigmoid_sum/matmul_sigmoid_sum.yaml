@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_sigmoid_sum
-func_name: forward
+func_name: matmul_sigmoid_sum
 kind: microkernel
 level: 2
 parameters:

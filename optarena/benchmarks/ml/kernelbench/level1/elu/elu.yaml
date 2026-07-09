@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: elu
-func_name: forward
+func_name: elu
 kind: microkernel
 level: 1
 parameters:

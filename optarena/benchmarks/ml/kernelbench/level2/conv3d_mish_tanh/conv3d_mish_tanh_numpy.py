@@ -40,7 +40,7 @@ def _conv3d(x, weight, bias, stride, padding, dilation, groups):
                         out[b, oc, oz, oy, ox] = total + bias[oc]
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, stride, padding, conv_weight, conv_bias, out):
+def conv3d_mish_tanh(x, in_channels, out_channels, kernel_size, stride, padding, conv_weight, conv_bias, out):
     x = _conv3d(x, conv_weight, conv_bias, stride, padding, 1, 1)
     x = ((x) * np.tanh((np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0))))
     x = np.tanh(x)

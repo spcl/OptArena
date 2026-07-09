@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_subtract_multiply_relu
-func_name: forward
+func_name: matmul_subtract_multiply_relu
 kind: microkernel
 level: 2
 parameters:

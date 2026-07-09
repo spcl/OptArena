@@ -72,7 +72,7 @@ def _softmax(x, axis=-1):
     return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
 
 
-def forward(x, stride, padding, output_padding, conv_transpose_weight, conv_transpose_bias, subtract, pool_kernel_size, pool_stride, pool_padding, out):
+def conv_transpose3d_max_pool_softmax_subtract_swish_max(x, stride, padding, output_padding, conv_transpose_weight, conv_transpose_bias, subtract, pool_kernel_size, pool_stride, pool_padding, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = _maxpool3d(x, pool_kernel_size, pool_stride, pool_padding)
     x = _softmax(x, axis=1)

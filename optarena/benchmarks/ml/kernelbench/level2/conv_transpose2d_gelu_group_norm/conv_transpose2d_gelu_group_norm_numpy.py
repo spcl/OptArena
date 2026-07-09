@@ -54,7 +54,7 @@ def _group_norm(x, num_groups, weight, bias, eps):
     shape = (1, c) + (1,) * (x.ndim - 2)
     return y * weight.reshape(shape) + bias.reshape(shape)
 
-def forward(x, in_channels, out_channels, kernel_size, stride, groups, num_groups, conv_transpose_weight, conv_transpose_bias, group_norm_weight, group_norm_bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_dilation, conv_transpose_groups, conv_transpose_output_padding, group_norm_num_groups, group_norm_eps, out):
+def conv_transpose2d_gelu_group_norm(x, in_channels, out_channels, kernel_size, stride, groups, num_groups, conv_transpose_weight, conv_transpose_bias, group_norm_weight, group_norm_bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_dilation, conv_transpose_groups, conv_transpose_output_padding, group_norm_num_groups, group_norm_eps, out):
     x = _conv_transpose2d(x, conv_transpose_weight, conv_transpose_bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_output_padding, conv_transpose_dilation, conv_transpose_groups)
     x = _gelu(x)
     x = _group_norm(x, group_norm_num_groups, group_norm_weight, group_norm_bias, group_norm_eps)

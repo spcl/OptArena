@@ -36,7 +36,7 @@ def _conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation
     return out
 
 
-def forward(x, conv_transpose_weight, conv_transpose_bias, multiplier, stride, padding, output_padding, out):
+def conv_transpose2d_multiply_global_avg_pool_global_avg_pool_mean(x, conv_transpose_weight, conv_transpose_bias, multiplier, stride, padding, output_padding, out):
     x = _conv_transpose2d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = (x * multiplier)
     x = np.mean(x, axis=(2, 3), keepdims=True)

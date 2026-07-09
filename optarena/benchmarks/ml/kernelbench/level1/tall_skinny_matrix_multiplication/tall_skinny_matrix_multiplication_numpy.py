@@ -1,4 +1,4 @@
 import numpy as np
 
-def forward(A, B, out):
+def tall_skinny_matrix_multiplication(A, B, out):
     out[:] = np.matmul(A, B)

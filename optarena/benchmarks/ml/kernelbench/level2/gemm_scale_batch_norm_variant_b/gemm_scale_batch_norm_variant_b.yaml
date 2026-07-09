@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gemm_scale_batch_norm_variant_b
-func_name: forward
+func_name: gemm_scale_batch_norm_variant_b
 kind: microkernel
 level: 2
 parameters:

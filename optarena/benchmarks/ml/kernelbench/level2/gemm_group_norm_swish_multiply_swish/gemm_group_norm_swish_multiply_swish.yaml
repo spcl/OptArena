@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gemm_group_norm_swish_multiply_swish
-func_name: forward
+func_name: gemm_group_norm_swish_multiply_swish
 kind: microkernel
 level: 2
 parameters:

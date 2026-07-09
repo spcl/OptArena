@@ -31,7 +31,7 @@ def _gelu(x):
     return 0.5 * x * (1.0 + erf)
 
 
-def forward(x, pool_kernel_size, scale_factor, matmul_weight, matmul_bias, out):
+def matmul_avg_pool_gelu_scale_max(x, pool_kernel_size, scale_factor, matmul_weight, matmul_bias, out):
     x = ((x) @ matmul_weight.T + matmul_bias)
     x = np.squeeze(_avgpool1d(np.expand_dims(x, axis=1), pool_kernel_size, None, 0), axis=1)
     x = _gelu(x)

@@ -1,4 +1,4 @@
 import numpy as np
 
-def forward(x, out):
+def relu(x, out):
     out[:] = np.maximum(x, 0)

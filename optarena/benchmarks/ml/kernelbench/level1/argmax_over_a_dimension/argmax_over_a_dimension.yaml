@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: argmax_over_a_dimension
-func_name: forward
+func_name: argmax_over_a_dimension
 kind: microkernel
 level: 1
 parameters:

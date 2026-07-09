@@ -72,7 +72,7 @@ def _maxpool3d(x, kernel_size, stride, padding):
                         out[b, c, oz, oy, ox] = np.max(window)
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, stride, padding, conv_weight, conv_bias, out):
+def conv3d_max_logsumexp_relu(x, in_channels, out_channels, kernel_size, stride, padding, conv_weight, conv_bias, out):
     x = _conv3d(x, conv_weight, conv_bias, stride, padding, 1, 1)
     x = _maxpool3d(x, 2, 2, 0)
     x = _logsumexp(x, axis=1, keepdims=True)

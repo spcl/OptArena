@@ -58,7 +58,7 @@ def _maxpool2d(x, kernel_size, stride, padding):
                     out[b, c, oy, ox] = np.max(window)
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, scaling_factor, bias_shape, pool_kernel_size, conv_weight, conv_bias, bias, out):
+def conv2d_tanh_scaling_bias_add_max(x, in_channels, out_channels, kernel_size, scaling_factor, bias_shape, pool_kernel_size, conv_weight, conv_bias, bias, out):
     x = _conv2d(x, conv_weight, conv_bias, 1, 0, 1, 1)
     x = np.tanh(x)
     x = (x * scaling_factor)

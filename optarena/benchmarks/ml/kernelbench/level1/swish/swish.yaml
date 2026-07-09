@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: swish
-func_name: forward
+func_name: swish
 kind: microkernel
 level: 1
 parameters:

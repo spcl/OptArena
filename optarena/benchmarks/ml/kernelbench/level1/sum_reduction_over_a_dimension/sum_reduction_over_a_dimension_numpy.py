@@ -1,5 +1,5 @@
 import numpy as np
 
 
-def forward(x, dim, out):
+def sum_reduction_over_a_dimension(x, dim, out):
     out[:] = np.sum(x, axis=dim, keepdims=True)

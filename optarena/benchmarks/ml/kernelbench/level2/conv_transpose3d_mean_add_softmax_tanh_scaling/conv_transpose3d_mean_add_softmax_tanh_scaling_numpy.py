@@ -47,7 +47,7 @@ def _softmax(x, axis=-1):
     exp_x = np.exp(shifted)
     return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
 
-def forward(x, in_channels, out_channels, kernel_size, stride, padding, scaling_factor, conv_transpose_weight, conv_transpose_bias, bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_dilation, conv_transpose_groups, conv_transpose_output_padding, out):
+def conv_transpose3d_mean_add_softmax_tanh_scaling(x, in_channels, out_channels, kernel_size, stride, padding, scaling_factor, conv_transpose_weight, conv_transpose_bias, bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_dilation, conv_transpose_groups, conv_transpose_output_padding, out):
     x = _conv_transpose3d(x, conv_transpose_weight, conv_transpose_bias, conv_transpose_stride, conv_transpose_padding, conv_transpose_output_padding, conv_transpose_dilation, conv_transpose_groups)
     x = np.mean(x, axis=2, keepdims=True)
     x = x + bias

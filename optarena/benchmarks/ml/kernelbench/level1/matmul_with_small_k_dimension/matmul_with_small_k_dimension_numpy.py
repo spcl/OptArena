@@ -1,4 +1,4 @@
 import numpy as np
 
-def forward(A, B, out):
+def matmul_with_small_k_dimension(A, B, out):
     out[:] = np.matmul(A, B)

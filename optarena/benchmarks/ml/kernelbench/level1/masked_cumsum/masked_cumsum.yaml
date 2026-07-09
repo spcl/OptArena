@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: masked_cumsum
-func_name: forward
+func_name: masked_cumsum
 kind: microkernel
 level: 1
 parameters:

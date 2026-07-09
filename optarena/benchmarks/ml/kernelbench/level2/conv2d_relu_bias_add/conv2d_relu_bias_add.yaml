@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv2d_relu_bias_add
-func_name: forward
+func_name: conv2d_relu_bias_add
 kind: microkernel
 level: 2
 parameters:

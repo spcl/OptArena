@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv3d_group_norm_min_clamp_dropout
-func_name: forward
+func_name: conv3d_group_norm_min_clamp_dropout
 kind: microkernel
 level: 2
 parameters:

@@ -37,7 +37,7 @@ def _conv2d(x, weight, bias, stride, padding, dilation, groups):
                     out[b, oc, oy, ox] = total + bias[oc]
     return out
 
-def forward(x, in_channels, out_channels, kernel_size, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, out):
+def conv2d_mish_mish(x, in_channels, out_channels, kernel_size, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups, out):
     x = _conv2d(x, conv_weight, conv_bias, conv_stride, conv_padding, conv_dilation, conv_groups)
     x = x * np.tanh(np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0))
     x = x * np.tanh(np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0))

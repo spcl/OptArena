@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gemm_sigmoid_logsumexp
-func_name: forward
+func_name: gemm_sigmoid_logsumexp
 kind: microkernel
 level: 2
 parameters:

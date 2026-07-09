@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: gemm_add_relu
-func_name: forward
+func_name: gemm_add_relu
 kind: microkernel
 level: 2
 parameters:

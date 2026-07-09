@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: conv2d_min_tanh_tanh
-func_name: forward
+func_name: conv2d_min_tanh_tanh
 kind: microkernel
 level: 2
 parameters:

@@ -73,7 +73,7 @@ def _maxpool2d(x, kernel_size, stride, padding):
     return out
 
 
-def forward(x, conv_transpose_weight, conv_transpose_bias, batch_norm_weight, batch_norm_bias, batch_norm_running_mean, batch_norm_running_var, group_norm_weight, group_norm_bias, batch_norm_eps, group_norm_eps, stride, padding, output_padding, num_groups, out):
+def conv_transpose2d_batch_norm_tanh_max_pool_group_norm(x, conv_transpose_weight, conv_transpose_bias, batch_norm_weight, batch_norm_bias, batch_norm_running_mean, batch_norm_running_var, group_norm_weight, group_norm_bias, batch_norm_eps, group_norm_eps, stride, padding, output_padding, num_groups, out):
     x = _conv_transpose2d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = _batch_norm(x, batch_norm_weight, batch_norm_bias, batch_norm_running_mean, batch_norm_running_var, batch_norm_eps)
     x = np.tanh(x)

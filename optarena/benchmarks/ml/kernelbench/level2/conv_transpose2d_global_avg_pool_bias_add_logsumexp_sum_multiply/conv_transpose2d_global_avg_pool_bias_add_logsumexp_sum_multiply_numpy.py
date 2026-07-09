@@ -44,7 +44,7 @@ def _logsumexp(x, axis=-1, keepdims=False):
     return np.squeeze(y, axis=axis)
 
 
-def forward(x, conv_transpose_weight, conv_transpose_bias, bias, stride, padding, output_padding, out):
+def conv_transpose2d_global_avg_pool_bias_add_logsumexp_sum_multiply(x, conv_transpose_weight, conv_transpose_bias, bias, stride, padding, output_padding, out):
     x = _conv_transpose2d(x, conv_transpose_weight, conv_transpose_bias, stride, padding, output_padding, 1, 1)
     x = np.mean(x, axis=(2, 3), keepdims=True)
     x = (x + bias)

@@ -1,4 +1,4 @@
 import numpy as np
 
-def forward(A, B, out):
+def matrix_vector_multiplication(A, B, out):
     out[:] = np.matmul(A, B)

@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: matmul_max_pool_sum_scale
-func_name: forward
+func_name: matmul_max_pool_sum_scale
 kind: microkernel
 level: 2
 parameters:

@@ -1,6 +1,6 @@
 # OptArena benchmark manifest (KernelBench port).
 name: min_gpt_new_gelu
-func_name: forward
+func_name: min_gpt_new_gelu
 kind: microkernel
 level: 1
 parameters:

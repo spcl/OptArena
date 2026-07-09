@@ -49,7 +49,7 @@ def _gelu(x):
     erf = sign * (1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * np.exp(-a * a))
     return 0.5 * x * (1.0 + erf)
 
-def forward(x, in_channels, out_channels, kernel_size, bias_shape, conv_weight, conv_bias, bias, out):
+def conv3d_relu_leaky_relu_gelu_sigmoid_bias_add(x, in_channels, out_channels, kernel_size, bias_shape, conv_weight, conv_bias, bias, out):
     x = _conv3d(x, conv_weight, conv_bias, 1, 0, 1, 1)
     x = np.maximum(x, 0)
     x = np.where((x) > 0, (x), (0.01) * (x))
