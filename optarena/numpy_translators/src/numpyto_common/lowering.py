@@ -2106,7 +2106,7 @@ class SliceFusion(ast.NodeTransformer):
                 raise NotImplementedError("slice step != 1 not supported")
             start = self._resolve_bound(d.lower, lhs_name, axis, default=_const(0))
             stop = self._resolve_bound(d.upper, lhs_name, axis,
-                                       default=self._axis_length(lhs_name, axis))
+                                       default=lambda: self._axis_length(lhs_name, axis))
             ranges.append((start, stop))
         # Build the per-axis scalarisation: iter var ``i_axis`` ranging
         # ``[start, stop)``; every RHS subscript gets the iter var
@@ -2171,7 +2171,7 @@ class SliceFusion(ast.NodeTransformer):
         return _token_to_ast(shape[axis])
 
     def _resolve_bound(self, bound: Optional[ast.AST], array_name: str,
-                       axis: int, default: ast.AST) -> ast.AST:
+                       axis: int, default) -> ast.AST:
         """Resolve a slice bound, expanding numpy's negative-index form.
 
         A bound of ``None`` -> ``default`` (typically 0 for start,
@@ -2179,9 +2179,15 @@ class SliceFusion(ast.NodeTransformer):
         ``UnaryOp(USub, Constant)``) -> ``axis_length - K``. All other
         bounds pass through unchanged so symbolic expressions like
         ``N-1`` survive.
+
+        ``default`` may be a plain AST node or a zero-arg callable
+        producing one; the stop bound's default calls ``_axis_length``,
+        which can raise ``NotImplementedError`` on an array with unknown
+        shape, so it must only be evaluated when the bound is actually
+        omitted -- not on every explicit-stop slice (e.g. ``a[:n]``).
         """
         if bound is None:
-            return default
+            return default() if callable(default) else default
         if isinstance(bound, ast.Constant) and isinstance(bound.value, int) and bound.value < 0:
             return _binop(self._axis_length(array_name, axis),
                           ast.Sub(), _const(-bound.value))
