@@ -25,7 +25,6 @@ import contextlib
 import dataclasses
 import json
 import math
-import os
 import pathlib
 import sys
 from typing import List, Optional, Sequence
@@ -35,55 +34,7 @@ from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.metric import score_task_fuzzed
 from optarena.agent_bench.scoring import BASELINE_CHOICES
 from optarena.agent_bench.task import Task
-
-
-def _parse_cpu_list(text: str) -> set:
-    """Parse a Linux cpulist (``"0-1,4,6-7"``) into a set of CPU ids."""
-    cpus = set()
-    for part in text.strip().split(","):
-        if not part:
-            continue
-        if "-" in part:
-            lo, hi = part.split("-")
-            cpus.update(range(int(lo), int(hi) + 1))
-        else:
-            cpus.add(int(part))
-    return cpus
-
-
-def _physical_core_affinity(allowed: set) -> set:
-    """One logical CPU per physical core, dropping SMT/hyperthread siblings, intersected
-    with ``allowed``. Reads sysfs topology (no privileges needed); returns ``allowed``
-    unchanged when the topology is unreadable (non-Linux, or ``/sys`` not mounted)."""
-    chosen, seen_cores = set(), set()
-    for cpu in sorted(allowed):
-        try:
-            with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as f:
-                core = min(_parse_cpu_list(f.read()))
-        except OSError:
-            return set(allowed)  # topology unavailable -> keep the full mask
-        if core not in seen_cores:
-            seen_cores.add(core)
-            chosen.add(cpu)
-    return chosen or set(allowed)
-
-
-def pin_threads() -> None:
-    """Pin this process (and its forked timing children) to ONE thread per physical core,
-    so co-runners and SMT siblings cannot perturb the timing. Best-effort: OMP placement
-    always, OS affinity to physical cores where supported (Linux). No-op when
-    ``measurement.pin_threads`` is false.
-
-    Turbo/boost and the CPU frequency governor are NOT controlled here: disabling them needs
-    write access to root-owned sysfs (``cpufreq/boost``, ``scaling_governor``), so under a
-    sudoless judge CPU-frequency drift is a residual noise source that the same-machine ratio
-    and the dispersion gate absorb. TODO: disable turbo in the runner image where privileged."""
-    if not config.get("measurement.pin_threads", True):
-        return
-    os.environ.setdefault("OMP_PROC_BIND", "close")
-    os.environ.setdefault("OMP_PLACES", "cores")  # OpenMP places = physical cores
-    if "sched_setaffinity" in vars(os):
-        os.sched_setaffinity(0, _physical_core_affinity(os.sched_getaffinity(0)))
+from optarena.agent_bench.timing import pin_threads
 
 
 @contextlib.contextmanager
@@ -121,6 +72,7 @@ def grade(kernel: str,
           residency: str = "host",
           repo_dir: Optional[str] = None,
           speedup_min: Optional[float] = None,
+          seed_sha: Optional[str] = None,
           single_node_anchor: Optional[Submission] = None) -> dict:
     """Grade one artifact for ``kernel`` and return its reward dict. Unset measurement
     args fall back to ``config.yaml`` ``measurement.*`` / ``service.*``.
@@ -187,18 +139,18 @@ def grade(kernel: str,
         curve.pop("kernel", None)
         reward["scaling"] = curve
     if repo_dir is not None:
-        _gate_repo_pr(reward, repo_dir, speedup_min)
+        _gate_repo_pr(reward, repo_dir, speedup_min, seed_sha)
     return reward
 
 
-def _gate_repo_pr(reward: dict, repo_dir: str, speedup_min: Optional[float]) -> None:
+def _gate_repo_pr(reward: dict, repo_dir: str, speedup_min: Optional[float], seed_sha: Optional[str] = None) -> None:
     """Apply the repo-task PR acceptance rule to ``reward`` in place: reconstruct the PR from
     ``repo_dir``, decide acceptance against ``speedup_min`` (default ``config.yaml``
     ``repo.speedup_min``), record ``pr``/``accepted``/``accept_reason``/``speedup_min``, and floor
     the reward to ``1.0`` when the PR is not accepted."""
     from optarena.agent_bench import repo_pr as _pr
     smin = speedup_min if speedup_min is not None else config.get("repo.speedup_min", 1.2)
-    pr = _pr.evaluate(repo_dir)
+    pr = _pr.evaluate(repo_dir, seed_sha=seed_sha)
     # Gate acceptance on the DISPERSION-GATED reward, not the pre-gate ts.s_i: a win the noise gate
     # already floored to 1.0 must not be accepted as fast. reward["reward"] is the metric's gated
     # score (1.0 when gsd-gated or unsolved, else the clamped s_i), so acceptance and the gate agree.
@@ -261,6 +213,7 @@ def _grade_one(kernel: str,
                residency: str = "host",
                repo_dir: Optional[str] = None,
                speedup_min: Optional[float] = None,
+               seed_sha: Optional[str] = None,
                anchor_source_path: Optional[str] = None,
                anchor_library: Optional[str] = None,
                anchor_language: Optional[str] = None) -> dict:
@@ -289,6 +242,7 @@ def _grade_one(kernel: str,
                      residency=residency,
                      repo_dir=repo_dir,
                      speedup_min=speedup_min,
+                     seed_sha=seed_sha,
                      single_node_anchor=anchor)
     except Exception as exc:  # noqa: BLE001 -- neutral reward, never a crash (see docstring)
         return {"reward": 1.0, "solved": False, "error": f"{type(exc).__name__}: {exc}", "kernel": kernel}
@@ -306,6 +260,7 @@ def grade_items(kernels: Sequence[str],
                 residency: str = "host",
                 repo_dirs: Optional[Sequence[Optional[str]]] = None,
                 speedup_min: Optional[float] = None,
+                seed_shas: Optional[Sequence[Optional[str]]] = None,
                 anchor_sources: Optional[Sequence[Optional[str]]] = None,
                 anchor_libraries: Optional[Sequence[Optional[str]]] = None,
                 anchor_language: Optional[str] = None) -> dict:
@@ -318,6 +273,7 @@ def grade_items(kernels: Sequence[str],
     libs = list(libraries) if libraries is not None else [None] * len(kernels)
     dists = list(distributions) if distributions is not None else [None] * len(kernels)
     repos = list(repo_dirs) if repo_dirs is not None else [None] * len(kernels)
+    seeds = list(seed_shas) if seed_shas is not None else [None] * len(kernels)
     a_srcs = list(anchor_sources) if anchor_sources is not None else [None] * len(kernels)
     a_libs = list(anchor_libraries) if anchor_libraries is not None else [None] * len(kernels)
     rewards = [
@@ -332,10 +288,11 @@ def grade_items(kernels: Sequence[str],
                    residency=residency,
                    repo_dir=repo,
                    speedup_min=speedup_min,
+                   seed_sha=seed,
                    anchor_source_path=a_src,
                    anchor_library=a_lib,
-                   anchor_language=anchor_language)
-        for kern, src, lib, dist, repo, a_src, a_lib in zip(kernels, sources, libs, dists, repos, a_srcs, a_libs)
+                   anchor_language=anchor_language) for kern, src, lib, dist, repo, seed, a_src, a_lib in zip(
+                       kernels, sources, libs, dists, repos, seeds, a_srcs, a_libs)
     ]
     return rewards[0] if len(rewards) == 1 else combine(rewards)
 
@@ -358,6 +315,11 @@ def main(argv=None) -> int:
                    type=float,
                    default=None,
                    help="repo layout: min speedup to accept a PR (default config repo.speedup_min)")
+    p.add_argument("--seed-sha",
+                   action="append",
+                   default=[],
+                   help="repo layout: the authoritative seed commit sha recorded at ship time (per "
+                   "--kernel), so a rewritten root cannot move the PR baseline")
     p.add_argument("--anchor-source",
                    action="append",
                    default=[],
@@ -387,6 +349,8 @@ def main(argv=None) -> int:
     n = len(args.kernel)
     if len(args.source) > n or len(args.library) > n or len(args.distribution) > n or len(args.repo_dir) > n:
         p.error("more --source/--library/--distribution/--repo-dir than --kernel")
+    if len(args.seed_sha) > n:
+        p.error("more --seed-sha than --kernel")
     if len(args.anchor_source) > n or len(args.anchor_library) > n:
         p.error("more --anchor-source/--anchor-library than --kernel")
     if (args.anchor_source or args.anchor_library) and args.residency != "distributed":
@@ -395,6 +359,7 @@ def main(argv=None) -> int:
     libraries: List[Optional[str]] = list(args.library) + [None] * (n - len(args.library))
     distributions: List[Optional[str]] = list(args.distribution) + [None] * (n - len(args.distribution))
     repo_dirs: List[Optional[str]] = list(args.repo_dir) + [None] * (n - len(args.repo_dir))
+    seed_shas: List[Optional[str]] = list(args.seed_sha) + [None] * (n - len(args.seed_sha))
     anchor_sources: List[Optional[str]] = list(args.anchor_source) + [None] * (n - len(args.anchor_source))
     anchor_libraries: List[Optional[str]] = list(args.anchor_library) + [None] * (n - len(args.anchor_library))
     if not any(sources) and not any(libraries):
@@ -413,6 +378,7 @@ def main(argv=None) -> int:
                              residency=args.residency,
                              repo_dirs=repo_dirs,
                              speedup_min=args.speedup_min,
+                             seed_shas=seed_shas,
                              anchor_sources=anchor_sources,
                              anchor_libraries=anchor_libraries,
                              anchor_language=args.anchor_language)

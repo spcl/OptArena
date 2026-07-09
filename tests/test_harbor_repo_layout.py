@@ -116,6 +116,13 @@ def test_repo_test_sh_grades_in_repo_source_and_gates_the_pr(tmp_path):
     assert f"--source /app/{_KERNEL}/repo/src/{_KERNEL}.c" in sh
     assert f"--repo-dir /app/{_KERNEL}/repo" in sh
     assert "--speedup-min 1.2" in sh
+    # The authoritative seed sha is recorded (task.toml metadata) and threaded to the grader (test.sh)
+    # so a rewritten root cannot move the PR baseline (#9).
+    repo = td / "environment" / _KERNEL / "repo"
+    seed = subprocess.run(("git", "-C", str(repo), "rev-parse", "HEAD"), capture_output=True, text=True,
+                          check=True).stdout.strip()
+    assert f"--seed-sha {seed}" in sh
+    assert f'seed_sha = "{seed}"' in (td / "task.toml").read_text()
     assert "optarena.agent_bench.harbor_grade" in sh
     assert "/logs/verifier/reward.json" in sh
     assert "submission.c" not in sh

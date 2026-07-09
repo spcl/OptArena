@@ -418,7 +418,8 @@ def _test_sh(kts: List[KernelTask],
              baseline: str,
              residency: str = "host",
              layout: str = "kernel",
-             speedup_min: float = 1.2) -> str:
+             speedup_min: float = 1.2,
+             seed_sha: Optional[str] = None) -> str:
     """The verifier: grade every kernel's artifact -> /logs/verifier/reward.json.
 
     Harbor re-materializes each artifact at its source path, so the submission is read
@@ -451,6 +452,8 @@ def _test_sh(kts: List[KernelTask],
             arg += f" --distribution {shlex.quote(kt.distribution_path())}"
         if repo:  # the agent's git repo -> the grader reconstructs and gates the PR
             arg += f" --repo-dir {shlex.quote(kt.repo_dir_path())}"
+            if seed_sha:  # the authoritative seed baseline, so a rewritten root cannot move the PR (#9)
+                arg += f" --seed-sha {shlex.quote(seed_sha)}"
         lines.append(arg + ")")
     flags = ""
     if distributed:
@@ -476,7 +479,8 @@ def _task_toml(task_id: str,
                residency: str = "host",
                ranks: int = 0,
                mode: str = "",
-               layout: str = "kernel") -> str:
+               layout: str = "kernel",
+               seed_sha: Optional[str] = None) -> str:
     """Render Harbor's ``task.toml`` (schema 1.3) as text (no ``harbor`` dependency;
     a gated test validates it against the real ``TaskConfig``). The verifier runs in a
     separate harness image; each submission is an ``artifacts`` entry (``destination``
@@ -521,6 +525,8 @@ def _task_toml(task_id: str,
             meta.update(residency="distributed", ranks=ranks, mpi_mode=mode)
         if repo:  # the mock-repo framing is recorded so a run is reproducible
             meta["layout"] = "repo"
+            if seed_sha:  # provenance: the authoritative PR baseline the grader gates against (#9)
+                meta["seed_sha"] = seed_sha
 
     arts: List[Tuple[str, str, Tuple[str, ...]]] = []
     for kt in kts:
@@ -603,6 +609,7 @@ def write_task(task_id: str,
     ranks = int(config.get("mpi.ranks", 4)) if distributed else 0
     mode = str(config.get("mpi.mode", "strong")) if distributed else ""
     speedup_min = float(config.get("repo.speedup_min", 1.2))
+    seed_sha = None  # the repo layout's authoritative seed commit (set by init_base below)
     timeout_sec = _PER_KERNEL_TIMEOUT_S * len(kts) if timeout_sec is None else timeout_sec
     task_dir = out_dir / f"optarena-{_slug(task_id)}"
     (task_dir / "tests").mkdir(parents=True, exist_ok=True)
@@ -628,7 +635,9 @@ def write_task(task_id: str,
             # issue and runs `make` does not get its PR rejected for committing a disallowed build
             # artifact (the grader's `git add -A` would otherwise stage the built lib).
             (repo_dir / ".gitignore").write_text("*.so\n*.o\n*.dylib\n*.dll\n")
-            repo_pr.init_base(str(repo_dir))  # ship .git with the seed committed on `main`
+            # Ship .git with the seed committed on `main`; RECORD the returned seed sha so the grader
+            # gates the PR against this exact baseline (a rewritten root cannot move it -- #9).
+            seed_sha = repo_pr.init_base(str(repo_dir))
             continue
         (env_kdir / "reference.py").write_text(ref_text)
         (env_kdir / "signature.json").write_text(sig_text)
@@ -642,7 +651,8 @@ def write_task(task_id: str,
             (env_kdir / f"submission.{_ext(language)}").write_text(_stub(kt.row, language))
 
     (task_dir / "task.toml").write_text(
-        _task_toml(task_id, kts, language, agent_image, judge_image, timeout_sec, residency, ranks, mode, layout))
+        _task_toml(task_id, kts, language, agent_image, judge_image, timeout_sec, residency, ranks, mode, layout,
+                   seed_sha))
     if repo:
         instruction = _issue_md(kts[0], language, speedup_min)
     elif distributed:
@@ -650,7 +660,8 @@ def write_task(task_id: str,
     else:
         instruction = _instruction_md(task_id, kts, language)
     (task_dir / "instruction.md").write_text(instruction)
-    _write_exec(task_dir / "tests" / "test.sh", _test_sh(kts, language, baseline, residency, layout, speedup_min))
+    _write_exec(task_dir / "tests" / "test.sh",
+                _test_sh(kts, language, baseline, residency, layout, speedup_min, seed_sha))
     return task_dir
 
 

@@ -127,6 +127,29 @@ def test_evaluate_conflict_check_is_against_seed_not_moved_main(tmp_path):
     assert pr.head == feat and pr.opened and pr.conflict_free and pr.ok
 
 
+def test_evaluate_recorded_seed_sha_is_used_as_the_baseline(tmp_path):
+    """When the authoritative seed sha is supplied, a clean descendant PR grades against it exactly
+    (the normal path is unchanged: opened, src-only, conflict-free)."""
+    seed = _seed_repo(tmp_path)
+    (tmp_path / "src" / "k.c").write_text("int k(){return 42;}\n")
+    pr = repo_pr.evaluate(str(tmp_path), seed_sha=seed)
+    assert pr.opened and pr.only_allowed and pr.conflict_free and pr.ok
+    assert pr.changed == ("src/k.c", )
+
+
+def test_evaluate_rejects_rewritten_root_against_recorded_seed(tmp_path):
+    """An agent that rewrites the seed root (amends it) can no longer move the PR baseline: the
+    recorded seed is not an ancestor of HEAD, so the PR is rejected as a rewritten history -- even
+    though the dangling old object still resolves."""
+    seed = _seed_repo(tmp_path)
+    (tmp_path / "src" / "k.c").write_text("int k(){return 42;}\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "--amend", "-m", "rewritten seed")  # new root sha; old seed unreachable
+    assert _git(tmp_path, "cat-file", "-t", seed).stdout.strip() == "commit"  # object still exists (dangling)
+    pr = repo_pr.evaluate(str(tmp_path), seed_sha=seed)
+    assert not pr.opened and not pr.ok and "history rewritten" in pr.detail
+
+
 def test_evaluate_non_git_dir_is_not_opened(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "k.c").write_text("int k(){return 0;}\n")
