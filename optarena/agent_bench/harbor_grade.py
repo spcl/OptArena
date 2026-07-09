@@ -27,7 +27,6 @@ import json
 import math
 import os
 import pathlib
-import statistics
 import sys
 from typing import List, Optional, Sequence
 
@@ -106,13 +105,6 @@ def timing_lock():
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def _gsd(speedups: Sequence[float]) -> float:
-    """Geometric standard deviation of the per-iteration speedups (``1.0`` if too
-    few to estimate dispersion). A value near 1.0 means a stable, trustworthy ratio."""
-    pos = [s for s in speedups if s > 0]
-    return math.exp(statistics.stdev(math.log(s) for s in pos)) if len(pos) > 1 else 1.0
-
-
 def grade(kernel: str,
           language: str = "c",
           *,
@@ -150,7 +142,6 @@ def grade(kernel: str,
     datatype = datatype or config.get("service.datatype", "float64")
     repeat = repeat if repeat is not None else config.get("measurement.repeat", 20)
     c_max = c_max if c_max is not None else config.get("measurement.c_max", 100.0)
-    z = config.get("measurement.gsd_z", 1.0)
 
     mode = "restricted" if source is not None else "any"
     submission = Submission(language=language,
@@ -170,14 +161,15 @@ def grade(kernel: str,
 
     valid = [(it.speedup, it.native_ns, it.baseline_ns) for it in ts.iterations
              if it.correct and it.verified and it.speedup > 0]
-    gsd = _gsd([s for s, _, _ in valid])
-    gated = ts.solved and ts.s_i > 1.0 and ts.s_i / gsd**z <= 1.0  # win inside the noise band
+    # The reward IS the metric's ranked ``score`` (``s_i`` with the dispersion gate applied) -- the
+    # gate lives in ``metric.score_task_fuzzed`` so the native aggregate and this Harbor reward use the
+    # SAME method and agree by construction; this path no longer re-derives it.
     reward = {
-        "reward": 1.0 if gated else ts.s_i,
+        "reward": ts.score,
         "solved": ts.solved,
         "speedup": ts.s_i,  # the clamped geomean before the dispersion gate
-        "gsd": gsd,  # geometric stddev of the per-iteration speedups
-        "gsd_gated": gated,
+        "gsd": ts.gsd,  # geometric stddev of the per-cell speedups
+        "gsd_gated": ts.gsd_gated,
         "baseline": ts.baseline,
         "kernel": kernel,
         "iterations": [{
@@ -208,8 +200,8 @@ def _gate_repo_pr(reward: dict, repo_dir: str, speedup_min: Optional[float]) -> 
     smin = speedup_min if speedup_min is not None else config.get("repo.speedup_min", 1.2)
     pr = _pr.evaluate(repo_dir)
     # Gate acceptance on the DISPERSION-GATED reward, not the pre-gate ts.s_i: a win the noise gate
-    # already floored to 1.0 must not be accepted as fast. reward["reward"] is 1.0 when gsd-gated,
-    # else ts.s_i, so the acceptance and the noise gate agree.
+    # already floored to 1.0 must not be accepted as fast. reward["reward"] is the metric's gated
+    # score (1.0 when gsd-gated or unsolved, else the clamped s_i), so acceptance and the gate agree.
     accepted, why = _pr.accepts(pr, solved=bool(reward["solved"]), speedup=reward["reward"], speedup_min=smin)
     reward["pr"] = pr.to_dict()
     reward["accepted"] = accepted

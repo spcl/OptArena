@@ -27,6 +27,7 @@ timing isolation, and :mod:`optarena.fuzz` for the seeded iteration count. It ow
 no sandbox or FFI logic and only adds the aggregation policy on top.
 """
 import math
+import statistics
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence, Tuple
 
@@ -63,6 +64,15 @@ def _hmean(xs: Sequence[float]) -> float:
     """Harmonic mean; ``0.0`` on empty. The time-weighted aggregate of speedups."""
     xs = [x for x in xs if x > 0]
     return len(xs) / sum(1.0 / x for x in xs) if xs else 0.0
+
+
+def _gsd(speedups: Sequence[float]) -> float:
+    """Geometric standard deviation of the per-cell speedups (``1.0`` if too few to estimate
+    dispersion). A value near ``1.0`` means a stable, trustworthy ratio; a large one means the win
+    is inside the timing noise. This is the input to the dispersion gate (see
+    :func:`score_task_fuzzed`), computed identically to the Harbor reward so the two agree."""
+    pos = [s for s in speedups if s > 0]
+    return math.exp(statistics.stdev(math.log(s) for s in pos)) if len(pos) > 1 else 1.0
 
 
 def fast_p(
@@ -182,6 +192,16 @@ class TaskScore:
     peak_bytes: int = 0  # kernel-attributable peak RSS increment over the task's cells (bytes; the MU input)
     baseline_peak_bytes: int = 0  # baseline peak RSS increment (bytes; the NMU denominator, 0 if no C baseline)
     scaling: Optional[ScalingScore] = None  # distributed multi-node scaling curve (None unless a P-sweep ran)
+    gsd: float = 1.0  # geometric stddev of the per-cell speedups (the dispersion-gate input; 1.0 = stable)
+    gsd_gated: bool = False  # the win was inside the timing noise band -> the ranked score is floored to 1.0
+
+    @property
+    def score(self) -> float:
+        """The RANKED per-task score: ``s_i`` (the clamped geomean speedup) floored to ``1.0`` when the
+        dispersion gate fired (a win indistinguishable from timing noise). ``s_i`` itself stays the
+        pre-gate clamped value for disclosure; this is what the aggregate + the Harbor reward rank on,
+        so the two paths agree by construction."""
+        return 1.0 if self.gsd_gated else self.s_i
 
 
 @dataclass(frozen=True)
@@ -536,6 +556,12 @@ def score_task_fuzzed(submission: Submission,
     valid_speedups = [c.speedup for c in timed if c.correct and c.speedup > 0]
     raw_speedup = _geomean(valid_speedups)  # 1.0 on empty (unsolved / no timed cell); the fast_p threshold input
     s_i = _clamp(raw_speedup, 1.0, c_max) if (solved and valid_speedups) else 1.0
+    # Dispersion gate: a win indistinguishable from timing noise is floored to 1.0. Computed here (not
+    # only in the Harbor reward) so the native ranked score and the Harbor reward apply the SAME gate
+    # and agree. `s_i` stays the pre-gate clamped value for disclosure; `score` exposes the gated one.
+    gsd = _gsd(valid_speedups)
+    z = float(config.get("measurement.gsd_z", 1.0))
+    gsd_gated = bool(solved and s_i > 1.0 and s_i / gsd**z <= 1.0)
     # The ACTUAL baseline used (read back, so an emit-OK-but-build-fail kernel that
     # fell back to numpy is labelled "numpy", not "c").
     eff_baseline = cells[0].baseline if cells else requested
@@ -551,15 +577,20 @@ def score_task_fuzzed(submission: Submission,
                      perf_mode=mode,
                      raw_speedup=raw_speedup,
                      peak_bytes=peak_bytes,
-                     baseline_peak_bytes=baseline_peak_bytes)
+                     baseline_peak_bytes=baseline_peak_bytes,
+                     gsd=gsd,
+                     gsd_gated=gsd_gated)
 
 
 def aggregate(task_scores: Sequence[TaskScore]) -> SuiteScore:
     """Reduce per-task scores to the OptArena Score + the disclosure views.
 
-    The headline geomean spans ALL tasks (unsolved contribute their ``1.0`` floor,
-    so failure lowers the score but never zeroes it). ``overall_speedup`` is the
-    harmonic mean over solved tasks (the time-weighted "how much faster overall").
+    The headline geomean spans ALL tasks and ranks on each task's ``score`` (``s_i``
+    floored to ``1.0`` when unsolved OR when the dispersion gate fired -- a win inside
+    the timing noise -- so failure and noise lower the score but never zero it; this is
+    the SAME gated number the Harbor reward reports, so the two paths agree).
+    ``overall_speedup`` is the harmonic mean over solved tasks (the time-weighted
+    "how much faster overall").
     ``per_dwarf`` groups by the kernel's dwarf (``"unclassified"`` for untagged).
     ``fast_p`` is the KernelBench threshold family reported ALONGSIDE the geomean:
     the fraction of tasks that are correct AND at least ``p`` times faster, gated
@@ -574,7 +605,7 @@ def aggregate(task_scores: Sequence[TaskScore]) -> SuiteScore:
 
     by_dwarf: Dict[str, list] = {}
     for t in ts:
-        by_dwarf.setdefault(t.dwarf, []).append(t.s_i)
+        by_dwarf.setdefault(t.dwarf, []).append(t.score)
     per_dwarf = {d: _geomean(v) for d, v in by_dwarf.items()}
 
     fast_p_view = fast_p([(t.solved, t.raw_speedup) for t in ts])
@@ -583,11 +614,11 @@ def aggregate(task_scores: Sequence[TaskScore]) -> SuiteScore:
     # (tasks with no baseline peak excluded). Never enters the ranked score.
     mu = max_memory([t.peak_bytes for t in ts])
     nmu = norm_memory([(t.peak_bytes, t.baseline_peak_bytes) for t in ts])
-    optarena_score = _geomean([t.s_i for t in ts])
+    optarena_score = _geomean([t.score for t in ts])
     total_tokens = sum(t.tokens for t in ts)
     return SuiteScore(optarena_score=optarena_score,
                       solve_rate=(len(solved) / n if n else 0.0),
-                      overall_speedup=_hmean([t.s_i for t in solved]),
+                      overall_speedup=_hmean([t.score for t in solved]),
                       per_dwarf=per_dwarf,
                       n_tasks=n,
                       n_solved=len(solved),

@@ -198,9 +198,11 @@ def test_timing_lock_noop_when_unset(monkeypatch):
 
 
 def test_gsd_of_stable_speedups_is_one():
-    from optarena.agent_bench import harbor_grade
-    assert harbor_grade._gsd([2.0, 2.0, 2.0]) == pytest.approx(1.0)
-    assert harbor_grade._gsd([1.0, 4.0]) > 1.0
+    # The dispersion-gate input lives in metric (one method, shared by the native aggregate and the
+    # Harbor reward), not in harbor_grade any more.
+    from optarena.agent_bench import metric
+    assert metric._gsd([2.0, 2.0, 2.0]) == pytest.approx(1.0)
+    assert metric._gsd([1.0, 4.0]) > 1.0
 
 
 def test_combine_geomean_gated_unless_all_solved():
