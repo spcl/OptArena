@@ -3364,6 +3364,35 @@ def expand_diagonal(target: ast.expr, args: List[ast.expr],
     return _wrap_for_loops([it], [shape[0]], body)
 
 
+def _scan_target_offsets(target, ndim):
+    """Resolve a cumulative-scan assignment target into ``(base_name, starts)``.
+
+    ``starts[k]`` is the lower bound to add to the operand's index along axis
+    ``k`` (``None`` for a zero / omitted lower bound). A bare ``Name`` target
+    scans from 0 on every axis; a partial-slice target such as ``out[1:]``
+    shifts the written region by its explicit lower bound -- this is DBCSR's
+    ``row_offsets[1:] = np.cumsum(m_sizes)``, whose target is a slice one
+    element longer than the operand."""
+    if isinstance(target, ast.Name):
+        return target.id, [None] * ndim
+    if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+        slc = target.slice
+        parts = slc.elts if isinstance(slc, ast.Tuple) else [slc]
+        if len(parts) != ndim:
+            raise NotImplementedError("cumulative scan: slice-target rank mismatch")
+        starts = []
+        for p in parts:
+            if not isinstance(p, ast.Slice):
+                raise NotImplementedError("cumulative scan: non-slice index in target")
+            lo = p.lower
+            if lo is None or (isinstance(lo, ast.Constant) and lo.value == 0):
+                starts.append(None)
+            else:
+                starts.append(lo)
+        return target.value.id, starts
+    raise NotImplementedError("cumulative scan: unsupported target")
+
+
 def _expand_cumulative(target, args, shape_table, op, kwargs=None):
     """Shared prefix-scan for ``cumsum`` / ``cumprod``.
 
@@ -3392,15 +3421,26 @@ def _expand_cumulative(target, args, shape_table, op, kwargs=None):
         elts = [scan_expr if i == axis else _name(iters[i]) for i in range(n)]
         return elts[0] if n == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
 
-    out_at = lambda e: ast.Subscript(value=_name(target.id), slice=_idx(e), ctx=ast.Load())
+    target_base, t_start = _scan_target_offsets(target, n)
+
+    def _add_off(e, off):
+        return e if off is None else ast.BinOp(left=e, op=ast.Add(), right=copy.deepcopy(off))
+
+    def _tidx(scan_expr):
+        # Target index space = operand index space shifted by the slice''s
+        # per-axis lower bound (``out[1:] = np.cumsum(a)`` writes ``out[1+i]``).
+        elts = [_add_off(scan_expr if i == axis else _name(iters[i]), t_start[i]) for i in range(n)]
+        return elts[0] if n == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
+
+    out_at = lambda e: ast.Subscript(value=_name(target_base), slice=_tidx(e), ctx=ast.Load())
     a_at = lambda e: ast.Subscript(value=_name(a.id), slice=_idx(e), ctx=ast.Load())
     sc_prev = ast.BinOp(left=_name(sc), op=ast.Sub(), right=_const(1))
-    # out[..0..] = a[..0..]
-    init = ast.Assign(targets=[ast.Subscript(value=_name(target.id), slice=_idx(_const(0)), ctx=ast.Store())],
+    # out[..start+0..] = a[..0..]
+    init = ast.Assign(targets=[ast.Subscript(value=_name(target_base), slice=_tidx(_const(0)), ctx=ast.Store())],
                       value=a_at(_const(0)))
-    # for sc in 1..N: out[..sc..] = out[..sc-1..] (op) a[..sc..]
+    # for sc in 1..N: out[..start+sc..] = out[..start+sc-1..] (op) a[..sc..]
     recur = ast.Assign(
-        targets=[ast.Subscript(value=_name(target.id), slice=_idx(_name(sc)), ctx=ast.Store())],
+        targets=[ast.Subscript(value=_name(target_base), slice=_tidx(_name(sc)), ctx=ast.Store())],
         value=ast.BinOp(left=out_at(sc_prev), op=op, right=a_at(_name(sc))))
     scan_loop = ast.For(target=_store(sc),
                         iter=ast.Call(func=_name("range"), args=[_const(1), _const_or_name(shape[axis])], keywords=[]),
@@ -6502,6 +6542,14 @@ def _call_expander(expander, target, args, keywords, shape_table,
     return expander(target, args, shape_table, **extras)
 
 
+#: Expander keys that accept a partial-slice assignment target
+#: (``row_offsets[1:] = np.cumsum(m_sizes)``) in addition to a bare Name.
+#: The full-slice form is canonicalised to a Name in ``visit_Assign``; only a
+#: shifted slice reaches here, and only the cumulative scans know how to honour
+#: the lower-bound offset (via :func:`_scan_target_offsets`).
+_SLICE_TARGET_EXPANDERS = {("np", "cumsum"), ("np", "cumprod")}
+
+
 #: Expander keys that write element-wise to ``target`` (no allocation).
 #: ``target`` must already be declared at the C level. When the
 #: kernel body uses ``X = np.linspace(...)`` as the first reference
@@ -6810,6 +6858,26 @@ class LibNodeRewriter(ast.NodeTransformer):
                         return prelude + expanded
                     except NotImplementedError:
                         pass
+        # Partial-slice assignment target for a cumulative scan
+        # (``row_offsets[1:] = np.cumsum(m_sizes)``): the full-slice case is
+        # canonicalised to a bare Name above, but a shifted slice keeps its
+        # offset, so route it to the offset-aware cumulative expander.
+        if (len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Subscript)
+                and isinstance(node.targets[0].value, ast.Name)
+                and isinstance(node.value, ast.Call)):
+            key = self._lookup(node.value)
+            if key in _SLICE_TARGET_EXPANDERS:
+                try:
+                    expanded = _call_expander(
+                        NP_CALL_EXPANDERS[key], node.targets[0],
+                        node.value.args, node.value.keywords,
+                        self.shape_table,
+                        local_dtypes=self.local_dtypes,
+                        fresh_local_allocs=self.fresh_local_allocs)
+                    return prelude + expanded
+                except NotImplementedError:
+                    pass
         if prelude:
             return prelude + [node]
         return node
