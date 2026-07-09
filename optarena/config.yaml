@@ -87,6 +87,13 @@ perf:
   max_configs: 5              # cap on configs evaluated per kernel (deterministic seeded
                               # subset when a config space exceeds it -> bounded cost)
 
+# Repo task layout (harbor_adapter layout='repo', the SWE-bench-style variant): the agent is
+# handed a mock git repo (naive-but-correct seed committed on `main`) framed as a performance
+# issue, and opens a pull request. The PR is accepted only if it merges cleanly into `main`,
+# changes only files under src/, stays correct across the hidden sweep, and clears this bar.
+repo:
+  speedup_min: 1.2            # min speedup over the sequential-C baseline to accept a PR
+
 # Prompt generation (optarena/agent_bench/prompts.py). Every knob is optional with a
 # built-in default; the prompt is fully overridable WITHOUT code -- drop a template into
 # `template_dir` to shadow any section, or set `generator` to replace generation entirely.
@@ -102,6 +109,18 @@ prompt:
   include_translation: false  # embed a NumpyToX C/C++/Fortran translation of the reference
                               # as a starting point (default off: the prompt only NOTES it
                               # is available -- emitting it per-prompt is costly)
+  include_original: false     # offer the original ported source (e.g. <kernel>_original.f90)
+                              # next to the numpy reference, when such a file exists
+  strategy: default           # named optimization strategy that shapes the how-to section:
+                              # default | loopnest | profile_first | language_native
+  optimization_guidance: true # include the how-to-optimize section (loop-nest tuning,
+                              # fusion, profiling with the container perf tools)
+  language_track: false       # emphasize implementing + optimizing idiomatically in the
+                              # forced language (restricted single-language tasks)
+  variant: default            # active named prompt variant (see PROMPT_VARIANTS)
+  variants: {}                # extend/override the built-in registry WITHOUT code:
+                              #   name -> PromptConfig field overrides, e.g.
+                              #   my_exp: {strategy: profile_first, include_original: true}
 
 # Container images per hardware target (agent = toolchain only, NO harness;
 # verifier = the full harness). The Harbor adapter derives each task's images from
@@ -133,6 +152,9 @@ images:
 record:
   enabled: false                  # off by default; the agent loop opts in
   db_path: optarena.db            # shared with the legacy results/lcounts tables
+  prompt_store: ""                # content-addressed prompt store dir (empty = <db_stem>_prompts/
+                                  # beside db_path); stores each distinct prompt once, uncompressed,
+                                  # named by its sha256, linked from submissions/calls.prompt_hash
   harden: true                    # independent rebuild+re-run before a leaderboard write
   dual_oracle: true               # also require agreement with the C reference (when it builds)
   speedup_suspect_above: 1000.0   # flag implausible speedups for review (still recorded)
