@@ -98,6 +98,22 @@ def warmup_count() -> int:
     return max(0, int(config.get("measurement.warmup", 1)))
 
 
+def sampled_reps(run_once, repeat: int, warmup: int = 0):
+    """Run ``run_once(warming)`` ``warmup + max(1, repeat)`` times and return ``(last_payload,
+    [kept ns samples])``. The first ``warmup`` reps are untimed warmup reps whose samples are
+    DISCARDED; ``run_once(warming: bool)`` performs one rep and returns ``(payload, ns)``, receiving
+    whether this rep is a (discarded) warmup rep so it can skip per-rep side effects (e.g. peak-RSS
+    accumulation) on warmup reps. The single owner of the warmup-discard rule so every timed
+    collection site -- submission and every baseline -- warms identically (no site can drift)."""
+    payload, samples = None, []
+    for i in range(warmup + max(1, repeat)):
+        warming = i < warmup
+        payload, ns = run_once(warming)
+        if not warming:  # warmup reps (the first `warmup` iterations) are timed but discarded
+            samples.append(int(ns))
+    return payload, samples
+
+
 def _positive(samples: Sequence) -> list:
     return [float(s) for s in (samples or []) if s and float(s) > 0]
 

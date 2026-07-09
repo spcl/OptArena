@@ -23,6 +23,28 @@ def test_warmup_count_reads_config_and_clamps():
         config.clear_override("measurement.warmup")
 
 
+def test_sampled_reps_discards_warmup_and_flags_warming():
+    seen = []  # (index, warming) per rep
+
+    def once(warming):
+        i = len(seen)
+        seen.append(warming)
+        return f"payload-{i}", (i + 1) * 100  # ns distinct per rep
+
+    payload, samples = timing.sampled_reps(once, repeat=3, warmup=2)
+    assert seen == [True, True, False, False, False]  # 2 warmup reps flagged, then 3 timed
+    assert samples == [300, 400, 500]  # only the 3 timed reps' ns are kept
+    assert payload == "payload-4"  # last (timed) rep's payload
+
+    # warmup=0 keeps every rep; repeat floored to >=1.
+    seen.clear()
+    _, s2 = timing.sampled_reps(once, repeat=2, warmup=0)
+    assert seen == [False, False] and s2 == [100, 200]
+    seen.clear()
+    _, s3 = timing.sampled_reps(once, repeat=0, warmup=0)
+    assert len(s3) == 1  # max(1, repeat)
+
+
 def test_time_numpy_samples_runs_warmup_but_returns_only_timed(monkeypatch):
     calls = {"n": 0}
 

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from optarena.agent_bench import timing
 from optarena.agent_bench.native_call import _call_isolated
 from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.sandbox import Sandbox
@@ -111,14 +112,14 @@ def _time_numpy_samples(spec: BenchSpec, data: Dict, repeat: int, warmup: int = 
     module = _import_reference(spec)
     func = vars(module)[spec.func_name]
     call_order = spec.input_args
-    samples: List[int] = []
-    for i in range(warmup + max(1, repeat)):
-        args = [copy.deepcopy(data[name]) for name in call_order]
+
+    def once(_warming):
+        args = [copy.deepcopy(data[name]) for name in call_order]  # fresh copy OUTSIDE the timed region
         t0 = time.perf_counter()
         func(*args)
-        ns = int((time.perf_counter() - t0) * 1.0e9)  # s -> ns
-        if i >= warmup:  # discard the untimed warmup reps (cold caches / allocator warmup)
-            samples.append(ns)
+        return None, int((time.perf_counter() - t0) * 1.0e9)  # s -> ns
+
+    _, samples = timing.sampled_reps(once, repeat, warmup)
     return samples
 
 
@@ -250,17 +251,18 @@ def _run_c_reference(spec: BenchSpec,
         built = csb.build(csub, mode=Mode.SINGLE_CORE)
         if not built.ok:
             raise RuntimeError(f"C reference build failed:\n{built.log[-1500:]}")
-        outputs, samples = None, []
-        for i in range(warmup + max(1, repeat)):
-            outputs, ns, _ = _call_isolated(built.lib,
-                                            binding,
-                                            public_data,
-                                            "c",
-                                            device=False,
-                                            timeout=timeout,
-                                            memory_gb=memory_gb)
-            if i >= warmup:  # discard the untimed warmup reps (fair with the submission side)
-                samples.append(int(ns))
+
+        def once(_warming):
+            outs, ns, _ = _call_isolated(built.lib,
+                                         binding,
+                                         public_data,
+                                         "c",
+                                         device=False,
+                                         timeout=timeout,
+                                         memory_gb=memory_gb)
+            return outs, ns
+
+        outputs, samples = timing.sampled_reps(once, repeat, warmup)
         best = min(samples) if samples else 0
         hidden_out: Dict[str, Dict] = {}
         for label, hdata in hidden_data:

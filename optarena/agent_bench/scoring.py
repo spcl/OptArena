@@ -429,19 +429,18 @@ def score(submission: Submission,
             # PUBLIC: collect every repeat (each call makes fresh input copies, so
             # runs are independent; the deterministic kernel yields same outputs).
             # The full sample list feeds the configured timing backend below.
-            actual, native_samples = None, []
-            warmup = timing.warmup_count()
-            for i in range(warmup + max(1, repeat)):
-                actual, ns, _ = _call_isolated(built.lib,
-                                               binding,
-                                               data,
-                                               submission.language,
-                                               device=device,
-                                               timeout=timeout,
-                                               memory_gb=memory_gb,
-                                               workspace_bytes=submission.workspace_bytes)
-                if i >= warmup:  # discard the untimed warmup reps (cold caches / first-touch faults)
-                    native_samples.append(int(ns))
+            def _run_native(_warming):
+                act, ns, _ = _call_isolated(built.lib,
+                                            binding,
+                                            data,
+                                            submission.language,
+                                            device=device,
+                                            timeout=timeout,
+                                            memory_gb=memory_gb,
+                                            workspace_bytes=submission.workspace_bytes)
+                return act, ns
+
+            actual, native_samples = timing.sampled_reps(_run_native, repeat, timing.warmup_count())
             native_ns = min(native_samples) if native_samples else 0
             public_correct, max_err, detail = _grade_against(spec, expected_public, actual, rtol, atol)
 
@@ -943,13 +942,14 @@ def score_cells(submission: Submission,
     want_c = _wants(oracle, "c") or _wants(baseline, "c")
 
     def _run(lib, lang, data, reps, workspace_bytes=None, warmup=0):
-        # ``peak`` is the MAX kernel-attributable RSS increment over the repeats (each
-        # repeat is an independent forked child, so it has its own high-water mark);
-        # the worst-case increment is this cell's peak. Captured outside timing.
-        # ``warmup`` untimed reps run first and are DISCARDED (timed cells only, so a correctness
-        # cell -- reps=1, warmup=0 -- is never doubled).
-        outs, samples, peak = None, [], 0
-        for i in range(warmup + max(1, reps)):
+        # ``peak`` is the MAX kernel-attributable RSS increment over the TIMED repeats (each repeat is
+        # an independent forked child with its own high-water mark); the worst-case increment is this
+        # cell's peak, captured outside timing. ``warmup`` untimed reps run first and are discarded
+        # (timed cells only, so a correctness cell -- reps=1, warmup=0 -- is never doubled).
+        peak = 0
+
+        def once(warming):
+            nonlocal peak
             outs, ns, mem = _call_isolated(lib,
                                            binding,
                                            data,
@@ -958,9 +958,11 @@ def score_cells(submission: Submission,
                                            timeout=timeout,
                                            memory_gb=memory_gb,
                                            workspace_bytes=workspace_bytes)
-            if i >= warmup:
-                samples.append(int(ns))
+            if not warming:  # a warmup rep's peak is excluded, like its sample
                 peak = max(peak, int(mem.increment_bytes))
+            return outs, ns
+
+        outs, samples = timing.sampled_reps(once, reps, warmup)
         return outs, samples, peak
 
     results: List[CellScore] = []

@@ -53,6 +53,25 @@ _PER_KERNEL_TIMEOUT_S = 1200.0
 #: Above this many microkernels a directory is emitted per-kernel instead of as one
 #: bundle (a flat dir like ``foundation/`` would otherwise be one unrunnable task).
 _MAX_BUNDLE = 24
+#: What counts as a `make` build OUTPUT in the repo layout. Kept OUT of the agent's PR (the shipped
+#: ``.gitignore``) AND out of the shipped repo-dir artifact tar (the directory-artifact ``exclude``);
+#: the two must stay in lock-step, so both read this one list.
+_BUILD_ARTIFACT_GLOBS = ("*.so", "*.o", "*.dylib", "*.dll")
+
+
+def _task_dir_name(task_id: str) -> str:
+    """The Harbor task DIRECTORY name for ``task_id`` (``optarena-<slug>``). The write path and the
+    collision guard both derive it here so they can never drift out of sync."""
+    return f"optarena-{_slug(task_id)}"
+
+
+def _artifact_line(source: str, dest: str, exclude: Tuple[str, ...]) -> str:
+    """One ``task.toml`` artifact table entry. A directory artifact may carry ``exclude`` globs (tar
+    ``--exclude``); a file artifact never does. Values are JSON-escaped (a TOML basic string)."""
+    body = f"source = {json.dumps(str(source))}, destination = {json.dumps(str(dest))}"
+    if exclude:
+        body += ", exclude = [" + ", ".join(json.dumps(str(x)) for x in exclude) + "]"
+    return "    {" + body + "}"
 
 
 def images_for(hardware: str) -> Tuple[str, str]:
@@ -203,7 +222,7 @@ def _assert_unique_layout(tasks: List[Tuple[str, List[KernelTask]]]) -> None:
     slug identically) from shipping broken instead of surfacing at generation."""
     seen_dirs: Dict[str, str] = {}
     for task_id, kts in tasks:
-        d = f"optarena-{_slug(task_id)}"
+        d = _task_dir_name(task_id)
         if d in seen_dirs:
             raise ValueError(f"task dir {d!r} collides: task ids {seen_dirs[d]!r} and {task_id!r} slug "
                              f"identically -- they would overwrite each other")
@@ -535,19 +554,13 @@ def _task_toml(task_id: str,
             # SEPARATE verifier can reconstruct the agent's PR (seed root..HEAD). Shipping only the edited
             # source file left the verifier with no .git -> every repo task floored to 1.0. Exclude the
             # `make` build outputs (already gitignored) so they do not bloat the artifact tar.
-            arts.append((kt.repo_dir_path(), f"{kt.subdir}/repo", ("*.so", "*.o", "*.dylib", "*.dll")))
+            arts.append((kt.repo_dir_path(), f"{kt.subdir}/repo", _BUILD_ARTIFACT_GLOBS))
             continue
         arts.append((kt.submission_path(language), kt.submission_rel(language), ()))
         if distributed:  # the agent's declared layout crosses to the verifier alongside the source
             arts.append((kt.distribution_path(), kt.distribution_rel(), ()))
 
-    def _art(source: str, dest: str, exclude: Tuple[str, ...]) -> str:
-        body = f"source = {q(source)}, destination = {q(dest)}"
-        if exclude:  # a directory artifact may drop paths (tar --exclude); a file artifact never does
-            body += ", exclude = [" + ", ".join(q(x) for x in exclude) + "]"
-        return "    {" + body + "}"
-
-    artifact_lines = ",\n".join(_art(*a) for a in arts)
+    artifact_lines = ",\n".join(_artifact_line(*a) for a in arts)
     lines = [
         'schema_version = "1.3"',
         "artifacts = [",  # each agent submission, handed to the separate verifier
@@ -611,7 +624,7 @@ def write_task(task_id: str,
     speedup_min = float(config.get("repo.speedup_min", 1.2))
     seed_sha = None  # the repo layout's authoritative seed commit (set by init_base below)
     timeout_sec = _PER_KERNEL_TIMEOUT_S * len(kts) if timeout_sec is None else timeout_sec
-    task_dir = out_dir / f"optarena-{_slug(task_id)}"
+    task_dir = out_dir / _task_dir_name(task_id)
     (task_dir / "tests").mkdir(parents=True, exist_ok=True)
     # environment/<kernel>/ -> uploaded to /app/<kernel>/ in the agent container.
     for kt in kts:
@@ -634,7 +647,7 @@ def write_task(task_id: str,
             # Ignore the `make` build outputs (lib<short>.so + objects) so an agent that follows the
             # issue and runs `make` does not get its PR rejected for committing a disallowed build
             # artifact (the grader's `git add -A` would otherwise stage the built lib).
-            (repo_dir / ".gitignore").write_text("*.so\n*.o\n*.dylib\n*.dll\n")
+            (repo_dir / ".gitignore").write_text("\n".join(_BUILD_ARTIFACT_GLOBS) + "\n")
             # Ship .git with the seed committed on `main`; RECORD the returned seed sha so the grader
             # gates the PR against this exact baseline (a rewritten root cannot move it -- #9).
             seed_sha = repo_pr.init_base(str(repo_dir))
