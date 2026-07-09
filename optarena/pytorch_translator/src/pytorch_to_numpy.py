@@ -1104,6 +1104,8 @@ def translate_tree(root: Path, out_root: Path, levels: tuple[str, ...] = ("level
 
 
 if __name__ == "__main__":
-    root = Path(__file__).resolve().parents[1]
-    for level, name, status in translate_tree(root, root / "result"):
+    base = Path(__file__).resolve().parents[1]
+    # PyTorch sources come from the KernelBench submodule; outputs go to result/.
+    root = base / "KernelBench" / "KernelBench"
+    for level, name, status in translate_tree(root, base / "result"):
         print(f"{level}/{name}: {status}")

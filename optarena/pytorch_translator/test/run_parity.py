@@ -15,6 +15,9 @@ import torch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# PyTorch level sources live in the KernelBench submodule; translator outputs
+# (result/) stay under ROOT.
+KB_ROOT = ROOT / "KernelBench" / "KernelBench"
 
 
 DEFAULT_OVERRIDES = {
@@ -123,7 +126,7 @@ def duplicate_suffix(index: int) -> str:
 
 
 def index_map(level: str) -> dict[str, str]:
-    path = ROOT / level / "index.json"
+    path = KB_ROOT / level / "index.json"
     if not path.exists():
         return {}
     with path.open() as f:
@@ -276,7 +279,7 @@ def compare_outputs(a, b, rtol: float, atol: float):
 
 
 def run_case(level: str, filename: str, timeout: int, rtol: float, atol: float):
-    source_path = ROOT / level / filename
+    source_path = KB_ROOT / level / filename
     result_path = ROOT / "result" / level / filename
     module_stem = sanitize_name(filename[:-3])
     source = import_module(source_path, f"torch_{level}_{module_stem}")
@@ -332,13 +335,13 @@ def iter_cases(levels: list[str], ids: list[str] | None):
         mapping = index_map(level)
         if mapping:
             names = [mapping[key] for key in sorted(mapping, key=int)]
-            paths = [ROOT / level / name for name in names if (ROOT / level / name).exists()]
+            paths = [KB_ROOT / level / name for name in names if (KB_ROOT / level / name).exists()]
             paths += [
-                p for p in sorted((ROOT / level).glob("*.py"))
+                p for p in sorted((KB_ROOT / level).glob("*.py"))
                 if p.name != "index.json" and p not in paths
             ]
         else:
-            paths = sorted((ROOT / level).glob("*.py"))
+            paths = sorted((KB_ROOT / level).glob("*.py"))
         for path in paths:
             cid = case_id(level, path.name)
             wanted_names = {path.stem, f"{level}/{path.stem}"}
