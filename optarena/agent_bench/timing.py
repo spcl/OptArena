@@ -88,6 +88,16 @@ class ReducedTiming:
     delta: float = 0.0  # mannwhitney: pessimistic minimum-gain fraction (0 for min_of_k)
 
 
+def warmup_count() -> int:
+    """Untimed warmup iterations to run and DISCARD before the timed repeats, so first-touch page
+    faults, cold code/data caches, and allocator warmup do not pollute the measured samples.
+    ``measurement.warmup`` (default 1); 0 disables. Applied identically to the submission AND every
+    baseline so the ratio stays fair (warming only one side would bias it). ``min_of_k`` already
+    drops the slow cold sample via ``min``; the discard also cleans the distributional backend and
+    makes the timed sample list literally warm-only."""
+    return max(0, int(config.get("measurement.warmup", 1)))
+
+
 def _positive(samples: Sequence) -> list:
     return [float(s) for s in (samples or []) if s and float(s) > 0]
 

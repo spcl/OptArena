@@ -98,22 +98,27 @@ def _import_reference(spec: BenchSpec):
     raise ModuleNotFoundError(f"no reference module for {spec.short_name} ({base})")
 
 
-def _time_numpy_samples(spec: BenchSpec, data: Dict, repeat: int) -> List[int]:
+def _time_numpy_samples(spec: BenchSpec, data: Dict, repeat: int, warmup: int = 0) -> List[int]:
     """Per-repeat wall-clock (ns) of the NumPy reference on ``data``.
 
     Each rep gets a fresh deep copy of the inputs (so an in-place kernel sees the
     same initial state), copied OUTSIDE the timed region. The full sample list is
     returned so a distributional timing backend (Mann-Whitney) can use it; callers
-    that want the single best time take ``min`` (see :func:`_time_numpy`)."""
+    that want the single best time take ``min`` (see :func:`_time_numpy`).
+
+    ``warmup`` untimed reps run first and are DISCARDED (0 by default -- the timed callers pass
+    :func:`timing.warmup_count`; correctness-only callers keep 0 so a cheap cell is not doubled)."""
     module = _import_reference(spec)
     func = vars(module)[spec.func_name]
     call_order = spec.input_args
     samples: List[int] = []
-    for _ in range(max(1, repeat)):
+    for i in range(warmup + max(1, repeat)):
         args = [copy.deepcopy(data[name]) for name in call_order]
         t0 = time.perf_counter()
         func(*args)
-        samples.append(int((time.perf_counter() - t0) * 1.0e9))  # s -> ns
+        ns = int((time.perf_counter() - t0) * 1.0e9)  # s -> ns
+        if i >= warmup:  # discard the untimed warmup reps (cold caches / allocator warmup)
+            samples.append(ns)
     return samples
 
 
@@ -215,9 +220,15 @@ def _grade_against(spec: BenchSpec, references: Dict[str, Dict], actual: Dict, r
     return ok, max_err, detail
 
 
-def _run_c_reference(spec: BenchSpec, task: Task, binding: Binding, public_data: Dict, hidden_data: List[Tuple[str,
-                                                                                                               Dict]],
-                     repeat: int, timeout: float, memory_gb: float) -> Tuple[Dict, int, Dict[str, Dict], List[int]]:
+def _run_c_reference(spec: BenchSpec,
+                     task: Task,
+                     binding: Binding,
+                     public_data: Dict,
+                     hidden_data: List[Tuple[str, Dict]],
+                     repeat: int,
+                     timeout: float,
+                     memory_gb: float,
+                     warmup: int = 0) -> Tuple[Dict, int, Dict[str, Dict], List[int]]:
     """Build the NumpyToX C reference once and run it on the public + hidden
     inputs (host residency -- it is a plain C kernel).
 
@@ -226,7 +237,9 @@ def _run_c_reference(spec: BenchSpec, task: Task, binding: Binding, public_data:
     ``RuntimeError`` if the C reference cannot be emitted or built, or crashes --
     the caller turns that into a scored ``score_error`` (the C oracle/baseline is
     opt-in, so its unavailability never silently degrades to numpy).
-    """
+
+    ``warmup`` untimed reps run first and are DISCARDED from the returned samples (0 by default; the
+    timed callers pass :func:`timing.warmup_count` so the C baseline is warmed like the submission)."""
     ctask = replace(task, language="c", source_mode="restricted", residency="host")
     try:
         csub = _c_reference_submission(spec, task)
@@ -237,7 +250,7 @@ def _run_c_reference(spec: BenchSpec, task: Task, binding: Binding, public_data:
         if not built.ok:
             raise RuntimeError(f"C reference build failed:\n{built.log[-1500:]}")
         outputs, samples = None, []
-        for _ in range(max(1, repeat)):
+        for i in range(warmup + max(1, repeat)):
             outputs, ns, _ = _call_isolated(built.lib,
                                             binding,
                                             public_data,
@@ -245,7 +258,8 @@ def _run_c_reference(spec: BenchSpec, task: Task, binding: Binding, public_data:
                                             device=False,
                                             timeout=timeout,
                                             memory_gb=memory_gb)
-            samples.append(int(ns))
+            if i >= warmup:  # discard the untimed warmup reps (fair with the submission side)
+                samples.append(int(ns))
         best = min(samples) if samples else 0
         hidden_out: Dict[str, Dict] = {}
         for label, hdata in hidden_data:

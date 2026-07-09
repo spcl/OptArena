@@ -365,7 +365,7 @@ def score(submission: Submission,
     if _wants(oracle, "numpy"):
         expected_public["numpy"] = _numpy_reference(spec, data)
     if _wants(baseline, "numpy"):
-        baseline_samples["numpy"] = _time_numpy_samples(spec, data, repeat)
+        baseline_samples["numpy"] = _time_numpy_samples(spec, data, repeat, warmup=timing.warmup_count())
         baselines["numpy"] = min(baseline_samples["numpy"])
     for label, hdata in hidden_data:
         if _wants(oracle, "numpy"):
@@ -373,8 +373,15 @@ def score(submission: Submission,
 
     if _wants(oracle, "c") or _wants(baseline, "c"):
         try:
-            c_public, c_ns, c_hidden, c_samples = _run_c_reference(spec, task, binding, data, hidden_data, repeat,
-                                                                   timeout, memory_gb)
+            c_public, c_ns, c_hidden, c_samples = _run_c_reference(spec,
+                                                                   task,
+                                                                   binding,
+                                                                   data,
+                                                                   hidden_data,
+                                                                   repeat,
+                                                                   timeout,
+                                                                   memory_gb,
+                                                                   warmup=timing.warmup_count())
         except RuntimeError as exc:
             # The C reference could not be emitted/built for this kernel.
             if _wants(oracle, "c"):
@@ -383,7 +390,7 @@ def score(submission: Submission,
             # honestly via the ``baseline`` label) rather than erroring the score --
             # so "speedup over C" degrades gracefully on kernels that don't emit C.
             if "numpy" not in baselines:
-                baseline_samples["numpy"] = _time_numpy_samples(spec, data, repeat)
+                baseline_samples["numpy"] = _time_numpy_samples(spec, data, repeat, warmup=timing.warmup_count())
                 baselines["numpy"] = min(baseline_samples["numpy"])
         else:
             if _wants(oracle, "c"):
@@ -418,7 +425,8 @@ def score(submission: Submission,
             # runs are independent; the deterministic kernel yields same outputs).
             # The full sample list feeds the configured timing backend below.
             actual, native_samples = None, []
-            for _ in range(max(1, repeat)):
+            warmup = timing.warmup_count()
+            for i in range(warmup + max(1, repeat)):
                 actual, ns, _ = _call_isolated(built.lib,
                                                binding,
                                                data,
@@ -427,7 +435,8 @@ def score(submission: Submission,
                                                timeout=timeout,
                                                memory_gb=memory_gb,
                                                workspace_bytes=submission.workspace_bytes)
-                native_samples.append(int(ns))
+                if i >= warmup:  # discard the untimed warmup reps (cold caches / first-touch faults)
+                    native_samples.append(int(ns))
             native_ns = min(native_samples) if native_samples else 0
             public_correct, max_err, detail = _grade_against(spec, expected_public, actual, rtol, atol)
 
@@ -928,12 +937,14 @@ def score_cells(submission: Submission,
     public_seed = int(config.get("seeds.public_tests", 42))
     want_c = _wants(oracle, "c") or _wants(baseline, "c")
 
-    def _run(lib, lang, data, reps, workspace_bytes=None):
+    def _run(lib, lang, data, reps, workspace_bytes=None, warmup=0):
         # ``peak`` is the MAX kernel-attributable RSS increment over the repeats (each
         # repeat is an independent forked child, so it has its own high-water mark);
         # the worst-case increment is this cell's peak. Captured outside timing.
+        # ``warmup`` untimed reps run first and are DISCARDED (timed cells only, so a correctness
+        # cell -- reps=1, warmup=0 -- is never doubled).
         outs, samples, peak = None, [], 0
-        for _ in range(max(1, reps)):
+        for i in range(warmup + max(1, reps)):
             outs, ns, mem = _call_isolated(lib,
                                            binding,
                                            data,
@@ -942,8 +953,9 @@ def score_cells(submission: Submission,
                                            timeout=timeout,
                                            memory_gb=memory_gb,
                                            workspace_bytes=workspace_bytes)
-            samples.append(int(ns))
-            peak = max(peak, int(mem.increment_bytes))
+            if i >= warmup:
+                samples.append(int(ns))
+                peak = max(peak, int(mem.increment_bytes))
         return outs, samples, peak
 
     results: List[CellScore] = []
@@ -979,13 +991,17 @@ def score_cells(submission: Submission,
                 params = cell["params"]
                 timed = bool(cell.get("timed"))
                 reps = repeat if timed else 1
+                # Warmup (discard cold reps) only on TIMED cells -- a correctness cell (reps=1) must
+                # not be doubled. Applied to the submission AND both baselines below so the ratio is fair.
+                warmup = timing.warmup_count() if timed else 0
                 try:
                     data = _data_seeded(task.kernel, FUZZED_PRESET, datatype, public_seed, params_override=params)
                     actual, native_samples, cand_peak = _run(built.lib,
                                                              submission.language,
                                                              data,
                                                              reps,
-                                                             workspace_bytes=submission.workspace_bytes)
+                                                             workspace_bytes=submission.workspace_bytes,
+                                                             warmup=warmup)
                 except RuntimeError as exc:
                     results.append(CellScore(label, timed, False, False, False, 0.0, 0, 0, "numpy", str(exc)))
                     continue
@@ -995,12 +1011,12 @@ def score_cells(submission: Submission,
                 expected: Dict[str, Dict] = {"numpy": _numpy_reference(spec, data)} if _wants(oracle, "numpy") else {}
                 baseline_samples: Dict[str, List[int]] = {}
                 if _wants(baseline, "numpy"):
-                    baseline_samples["numpy"] = _time_numpy_samples(spec, data, reps)
+                    baseline_samples["numpy"] = _time_numpy_samples(spec, data, reps, warmup=warmup)
                 c_outputs = None
                 c_peak = 0  # C-baseline peak RSS increment (0 unless the C reference actually ran)
                 if c_lib is not None:
                     try:
-                        c_outputs, c_samples, c_peak = _run(c_lib, "c", data, reps)
+                        c_outputs, c_samples, c_peak = _run(c_lib, "c", data, reps, warmup=warmup)
                         if _wants(oracle, "c"):
                             expected["c"] = c_outputs
                         if _wants(baseline, "c"):
