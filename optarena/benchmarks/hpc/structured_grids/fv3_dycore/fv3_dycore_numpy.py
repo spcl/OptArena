@@ -2707,11 +2707,11 @@ def fix_tracer(q, dp, nhalo, ni, nj, nk):
             dm[kk] = q[i, j, kk] * dp[i, j, kk]
             dm_pos[kk] = max(dm[kk], 0.0)
             # PARALLEL interval(-2,-1): adjust 2nd-to-last for bottom borrow
-            k = nk - 2
-            if upper_fix[k + 1] != 0.0:
-                q[i, j, k] = q[i, j, k] - (upper_fix[k + 1] / dp[i, j, k])
-                dm[k] = q[i, j, k] * dp[i, j, k]
-                dm_pos[k] = max(dm[k], 0.0)
+            kb = nk - 2
+            if upper_fix[kb + 1] != 0.0:
+                q[i, j, kb] = q[i, j, kb] - (upper_fix[kb + 1] / dp[i, j, kb])
+                dm[kb] = q[i, j, kb] * dp[i, j, kb]
+                dm_pos[kb] = max(dm[kb], 0.0)
             # FORWARD interval(1,None): accumulate sums
             for k in range(1, nk):
                 sum0 += dm[k]

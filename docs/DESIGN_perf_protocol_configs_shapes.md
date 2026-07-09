@@ -135,18 +135,20 @@ numbers; see §5). Three (not two) gives a more stable geomean per config while
 staying cheap. Anti-overfit for this mode comes from breadth (every config × 3
 shapes) plus the correctness gate's edge shapes.
 
-### Mode (b) — `secret_1shape` (one secret shape × ALL configs)
+### Mode (b) — `secret_3shapes` (N secret shapes × ALL configs)
 
 ```
-L*        = pick_large_shape( secret_shape_seed )   # chosen server-side, hidden
-timed_set = Φ × {L*}                                # ALL configs, single secret shape
-S_i       = clamp( geomean over timed_set of r(φ,L*), 1.0, C_max )
+L*[0..N)  = pick_large_shapes( secret_shape_seed, N )   # N=perf.n_large_shapes, hidden
+timed_set = Φ × {L*[0..N)}                               # ALL configs, N secret shapes
+S_i       = clamp( geomean over timed_set of r(φ,L), 1.0, C_max )
 ```
 
-The "1" in the mode name refers **only to the shape** — every config in `Φ` is
-still timed, just all at the same secret shape `L*`. Config breadth is never
-reduced; the two modes differ only in the *shape* axis (mode (a) = 3 fixed public
-shapes per config; mode (b) = 1 secret shape across all configs).
+Both modes time the **same number** of large shapes per config
+(`perf.n_large_shapes`, default 3) — public vs hidden doesn't change the count,
+only where the shapes come from. Every config in `Φ` is timed at every shape;
+config breadth is never reduced. The two modes differ only on the *shape* axis:
+mode (a) = N **fixed public** shapes per config (reproducible); mode (b) = N
+**secret** shapes per config (drawn from the hidden seed).
 
 The timed shape is drawn from a **secret seed the agent never sees** (§5). The
 agent can iterate against the public correctness shapes and mode-(a) shapes, but
@@ -256,7 +258,7 @@ measurement:
     delta_step: 0.01              # pessimistic-δ sweep granularity
 
 perf:
-  mode: all_configs_3shapes       # all_configs_3shapes (default) | secret_1shape
+  mode: all_configs_3shapes       # all_configs_3shapes (default) | secret_3shapes
   n_large_shapes: 3               # mode (a): timed large shapes per config
 
 seeds:

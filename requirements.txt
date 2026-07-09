@@ -1,5 +1,9 @@
 # optarena dependency list (hand-maintained).
-numpy
+# numpy 2.x required: `np.long` was removed in numpy 1.24-1.26 and re-added in 2.0;
+# scipy.sparse (_sputils) references it, so a 1.26 resolution breaks the sparse path
+# (test_sparse_layout_is_a_subbenchmark). Pinning >=2 keeps the resolver out of that
+# window and matches jax (numpy>=2) + numba (numpy<2.5).
+numpy>=2,<3
 scipy
 pandas
 matplotlib

@@ -22,3 +22,15 @@ taxonomy:
   domain: classical compiler optimizations
 foundation:
   source: tsvc_2
+  # What vectorizing-compiler pattern this loop probes (from the original TSVC
+  # source comments + the TSVC/TSVC2 analysis papers: Callahan-Dongarra-Levine
+  # 1988/1991, Maleki et al. 2011).
+  category: reductions
+  optimization: if-to-max with index reduction
+  puzzle: >-
+    Two-dimensional max reduction that also tracks the location of the maximum:
+    over the nested i,j scan of aa the loop keeps maxv and its (xindex, yindex)
+    coordinates, then forms chksum = maxv + xindex + yindex. The compiler must
+    recognize the conditional if aa[i,j] > maxv as a max reduction and carry the
+    coupled argmax index reduction, which ordinary reduction recognition does not
+    cover.

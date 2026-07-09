@@ -236,21 +236,21 @@ def velocity_tendencies(
     cfl_clip = np.zeros((nproma, nlevp1, nblks_c), dtype=np.bool_)
     levmask = np.zeros((nblks_c, nlev), dtype=np.bool_)
     for jk1 in range(max(3, nrdmax_jg - 2), nlev - 3 + 1):   # 1-based inclusive
-        jk = jk1 - 1
+        jk0 = jk1 - 1
         for jb in range(nblks_c):
             for jc in range(nproma):
-                h = ddqz_half[jc, jk, jb]
-                zc = z_w_con_c[jc, jk, jb]
+                h = ddqz_half[jc, jk0, jb]
+                zc = z_w_con_c[jc, jk0, jb]
                 if abs(zc) > cfl_w_limit * h:               # clip <=> |vcfl| > 0.85
-                    cfl_clip[jc, jk, jb] = True
-                    levmask[jb, jk] = True
+                    cfl_clip[jc, jk0, jb] = True
+                    levmask[jb, jk0] = True
                     vcfl = zc * dtime / h
                     if abs(vcfl) > vcflmax[jb]:
                         vcflmax[jb] = abs(vcfl)
                     if vcfl < -0.85:
-                        z_w_con_c[jc, jk, jb] = -0.85 * h / dtime
+                        z_w_con_c[jc, jk0, jb] = -0.85 * h / dtime
                     elif vcfl > 0.85:
-                        z_w_con_c[jc, jk, jb] = 0.85 * h / dtime
+                        z_w_con_c[jc, jk0, jb] = 0.85 * h / dtime
 
     z_w_con_c_full = np.zeros((nproma, nlev, nblks_c), order='F')
     for jk in range(nlev):
@@ -275,16 +275,16 @@ def velocity_tendencies(
         # Background diffusion on the w-tendency at CFL-flagged, owned cells.
         if lextra_diffu:
             for jk1 in range(max(3, nrdmax_jg - 2), nlev - 3 + 1):
-                jk = jk1 - 1
-                mask = cfl_clip[:, jk, :] & owner          # (nproma, nblks_c)
+                jk0 = jk1 - 1
+                mask = cfl_clip[:, jk0, :] & owner          # (nproma, nblks_c)
                 difcoef = scalfac_exdiff * np.minimum(
                     0.85 - cfl_w_limit * dtime,
-                    np.abs(z_w_con_c[:, jk, :]) * dtime / ddqz_half[:, jk, :] - cfl_w_limit * dtime)
-                lap = (w[:, jk, :] * geofac_n2s[:, 0, :]
-                       + gat(w, nbi, nbb, 0, jk) * geofac_n2s[:, 1, :]
-                       + gat(w, nbi, nbb, 1, jk) * geofac_n2s[:, 2, :]
-                       + gat(w, nbi, nbb, 2, jk) * geofac_n2s[:, 3, :])
-                ddt_w_adv[:, jk, :, t] += np.where(mask, difcoef * area_c * lap, 0.0)
+                    np.abs(z_w_con_c[:, jk0, :]) * dtime / ddqz_half[:, jk0, :] - cfl_w_limit * dtime)
+                lap = (w[:, jk0, :] * geofac_n2s[:, 0, :]
+                       + gat(w, nbi, nbb, 0, jk0) * geofac_n2s[:, 1, :]
+                       + gat(w, nbi, nbb, 1, jk0) * geofac_n2s[:, 2, :]
+                       + gat(w, nbi, nbb, 2, jk0) * geofac_n2s[:, 3, :])
+                ddt_w_adv[:, jk0, :, t] += np.where(mask, difcoef * area_c * lap, 0.0)
 
     # levelmask(jk) = ANY over the cell blocks (full refinement range).
     levelmask = levmask.any(axis=0)   # (nlev,)
@@ -329,20 +329,20 @@ def velocity_tendencies(
     # Background diffusion on the vn-tendency at CFL-flagged levels.
     if lextra_diffu:
         for jk1 in range(max(3, nrdmax_jg - 2), nlev - 4 + 1):
-            jk = jk1 - 1
-            if not (levelmask[jk] or levelmask[jk + 1]):
+            jk0 = jk1 - 1
+            if not (levelmask[jk0] or levelmask[jk0 + 1]):
                 continue
-            w_con_e = (c_lin_e[:, 0, :] * gat(z_w_con_c_full, eci, ecb, 0, jk)
-                       + c_lin_e[:, 1, :] * gat(z_w_con_c_full, eci, ecb, 1, jk))
-            clip_e = np.abs(w_con_e) > cfl_w_limit * ddqz_e[:, jk, :]
+            w_con_e = (c_lin_e[:, 0, :] * gat(z_w_con_c_full, eci, ecb, 0, jk0)
+                       + c_lin_e[:, 1, :] * gat(z_w_con_c_full, eci, ecb, 1, jk0))
+            clip_e = np.abs(w_con_e) > cfl_w_limit * ddqz_e[:, jk0, :]
             difcoef = scalfac_exdiff * np.minimum(
                 0.85 - cfl_w_limit * dtime,
-                np.abs(w_con_e) * dtime / ddqz_e[:, jk, :] - cfl_w_limit * dtime)
-            grad = (geofac_grdiv[:, 0, :] * vn[:, jk, :]
-                    + geofac_grdiv[:, 1, :] * gat(vn, qi, qb, 0, jk)
-                    + geofac_grdiv[:, 2, :] * gat(vn, qi, qb, 1, jk)
-                    + geofac_grdiv[:, 3, :] * gat(vn, qi, qb, 2, jk)
-                    + geofac_grdiv[:, 4, :] * gat(vn, qi, qb, 3, jk)
+                np.abs(w_con_e) * dtime / ddqz_e[:, jk0, :] - cfl_w_limit * dtime)
+            grad = (geofac_grdiv[:, 0, :] * vn[:, jk0, :]
+                    + geofac_grdiv[:, 1, :] * gat(vn, qi, qb, 0, jk0)
+                    + geofac_grdiv[:, 2, :] * gat(vn, qi, qb, 1, jk0)
+                    + geofac_grdiv[:, 3, :] * gat(vn, qi, qb, 2, jk0)
+                    + geofac_grdiv[:, 4, :] * gat(vn, qi, qb, 3, jk0)
                     + tang * inv_prim
-                    * (gat(zeta, evi, evb, 1, jk) - gat(zeta, evi, evb, 0, jk)))
-            ddt_vn_apc[:, jk, :, t] += np.where(clip_e, difcoef * area_edge * grad, 0.0)
+                    * (gat(zeta, evi, evb, 1, jk0) - gat(zeta, evi, evb, 0, jk0)))
+            ddt_vn_apc[:, jk0, :, t] += np.where(clip_e, difcoef * area_edge * grad, 0.0)

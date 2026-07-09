@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import time
 
-from optarena.infrastructure import Benchmark, Framework
+from optarena.infrastructure import Framework
 from optarena.infrastructure.framework import TimingResult, Timer
 from typing import Any, Callable, Dict
 
@@ -20,12 +20,6 @@ class APPyFramework(Framework):
     def version(self) -> str:
         """ Return the framework version. """
         return 0.1
-
-    # def copy_func(self) -> Callable:
-    #     """ Returns the copy-method that should be used
-    #     for copying the benchmark arguments. """
-    #     import cupy
-    #     return cupy.asarray
 
     def copy_func(self) -> Callable:
         import torch

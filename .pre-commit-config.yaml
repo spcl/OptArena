@@ -7,7 +7,7 @@
 # The single hook delegates to scripts/check_format.py --fix -- the SAME script
 # the CI `format-check` job runs in check mode -- so local and CI share one
 # routing table (yapf for .py, clang-format for C/C++, fprettify for Fortran, all
-# at 120 cols) and one skip policy (optarena/benchmarks/, optarena/NumpyTranslators/,
+# at 120 cols) and one skip policy (optarena/benchmarks/, optarena/numpy_translators/,
 # *_generated.*). check_format owns the skip logic, so any skipped file pre-commit
 # happens to pass through is left untouched -- the hook is safe to run repo-wide.
 repos:
