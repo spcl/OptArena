@@ -100,7 +100,7 @@ def warmup_count() -> int:
 
 def sampled_reps(run_once, repeat: int, warmup: int = 0):
     """Run ``run_once(warming)`` ``warmup + max(1, repeat)`` times and return ``(last_payload,
-    [kept ns samples])``. The first ``warmup`` reps are untimed warmup reps whose samples are
+    [kept ns samples])``. The first ``warmup`` reps are run and measured like the rest, then their samples are
     DISCARDED; ``run_once(warming: bool)`` performs one rep and returns ``(payload, ns)``, receiving
     whether this rep is a (discarded) warmup rep so it can skip per-rep side effects (e.g. peak-RSS
     accumulation) on warmup reps. The single owner of the warmup-discard rule so every timed
@@ -109,7 +109,7 @@ def sampled_reps(run_once, repeat: int, warmup: int = 0):
     for i in range(warmup + max(1, repeat)):
         warming = i < warmup
         payload, ns = run_once(warming)
-        if not warming:  # warmup reps (the first `warmup` iterations) are timed but discarded
+        if not warming:  # warmup reps (the first `warmup` iterations) are run + measured, then discarded
             samples.append(int(ns))
     return payload, samples
 
@@ -172,7 +172,8 @@ def reduce_mannwhitney_delta(candidate_ns: Sequence,
             x += delta_step
         else:
             break
-    speedup = (1.0 / (1.0 - delta)) if delta < 1.0 else float("inf")
+    # delta is only ever assigned an `x < 1.0` (the loop guard), so 1 - delta > 0 always.
+    speedup = 1.0 / (1.0 - delta)
     return ReducedTiming(int(a_ns), int(b_ns), speedup, "mannwhitney_delta", significant=True, delta=delta)
 
 

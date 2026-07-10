@@ -3,9 +3,10 @@
 Two inputs combine to give the IR every field it needs:
 
 * The Python file (``<short>_numpy.py``) carries the kernel body --
-  what the AST walker lowers.
+  what the AST walker eventually lowers.
 * The ``bench_info/<short>.json`` carries the shape and argument-
-  classification data the harness uses to drive numpy initialisation:
+  classification data the harness already uses to drive numpy
+  initialisation:
 
   - ``input_args`` -- positional order, identical to the kernel's
     Python signature,
@@ -15,9 +16,10 @@ Two inputs combine to give the IR every field it needs:
     ``"(N,K)"`` (parsed back into a tuple of symbol names),
   - ``parameters[<preset>]`` -- defines which names are symbols.
 
-Shape annotations on the kernel signature are NOT parsed -- the bench_info JSON
-is the canonical source of layout truth in OptArena, so re-using it keeps the
-harness and the emitter aligned from a single edit.
+We deliberately do not parse PEP-563 / typed shape annotations from
+the kernel signature -- the bench_info JSON is the canonical source
+of layout truth in OptArena, and re-using it means a single edit
+keeps the harness and the emitter aligned.
 """
 
 import ast
@@ -1158,7 +1160,7 @@ class _FoldTupleLocals(ast.NodeTransformer):
 
 
 def _resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> Optional[List[ast.expr]]:
-    """Pair call-site arguments with the helper''s positional
+    """Pair call-site arguments with the helper's positional
     parameters, filling unsupplied trailing parameters with their
     default value when ``helper.args.defaults`` provides one.
 

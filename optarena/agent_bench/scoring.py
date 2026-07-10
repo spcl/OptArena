@@ -74,12 +74,6 @@ class Score:
     baselines: Dict[str, int] = field(default_factory=dict)
     speedups: Dict[str, float] = field(default_factory=dict)
     oracle: str = "numpy"
-    # Per-repeat raw timing samples (ns) for the submission and the PRIMARY
-    # baseline -- populated so a distributional timing backend (mannwhitney_delta)
-    # can reduce the full sample sets. Empty when timing did not run (build/run
-    # failure); the scalar native_ns/baseline_ns above stay the min for disclosure.
-    native_samples: Tuple[int, ...] = ()
-    baseline_samples: Tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -288,6 +282,12 @@ def measure_baselines(task: Task,
     return out
 
 
+def _primary_baseline(names) -> str:
+    """The primary baseline for the scalar speedup row: numpy if it was timed, else C, else none.
+    One policy shared by score() and score_cells() so a baseline-precedence change lands in one place."""
+    return "numpy" if "numpy" in names else ("c" if "c" in names else "")
+
+
 def score(submission: Submission,
           task: Task,
           *,
@@ -407,7 +407,7 @@ def score(submission: Submission,
                 baseline_samples["c"] = c_samples
 
     # Primary baseline for the scalar speedup row: numpy if timed, else C.
-    primary = "numpy" if "numpy" in baselines else ("c" if "c" in baselines else "")
+    primary = _primary_baseline(baselines)
     baseline_ns = baselines.get(primary, 0)
 
     with Sandbox(task, binding) as sb:
@@ -498,9 +498,7 @@ def score(submission: Submission,
                  public_correct=public_correct,
                  hidden_correct=hidden_correct,
                  hidden_passed=hidden_passed,
-                 hidden_total=hidden_total,
-                 native_samples=tuple(native_samples),
-                 baseline_samples=tuple(primary_samples))
+                 hidden_total=hidden_total)
 
 
 def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, binding, suspect: bool, rtol: float,
@@ -944,7 +942,7 @@ def score_cells(submission: Submission,
     def _run(lib, lang, data, reps, workspace_bytes=None, warmup=0):
         # ``peak`` is the MAX kernel-attributable RSS increment over the TIMED repeats (each repeat is
         # an independent forked child with its own high-water mark); the worst-case increment is this
-        # cell's peak, captured outside timing. ``warmup`` untimed reps run first and are discarded
+        # cell's peak, captured outside timing. ``warmup`` warmup reps run first and are discarded
         # (timed cells only, so a correctness cell -- reps=1, warmup=0 -- is never doubled).
         peak = 0
 
@@ -1079,7 +1077,7 @@ def score_cells(submission: Submission,
                     verified = bool(determinism_ok) and reverify_ok and dual_ok
 
                 # Primary baseline + credited speed-up (timed cells only).
-                primary = "numpy" if "numpy" in baseline_samples else ("c" if "c" in baseline_samples else "")
+                primary = _primary_baseline(baseline_samples)
                 base_samples = baseline_samples.get(primary, [])
                 baseline_ns = min(base_samples) if base_samples else 0
                 # The baseline peak feeds NMU's denominator: it exists only when the

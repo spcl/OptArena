@@ -106,7 +106,7 @@ def _ast_eq(a: ast.AST, b: ast.AST) -> bool:
 
 def _simplify_sub(hi: ast.AST, lo: ast.AST) -> Optional[ast.AST]:
     """Algebraic simplification for ``hi - lo``. Returns ``None``
-    when the form doesn''t match a known simplifying pattern."""
+    when the form doesn't match a known simplifying pattern."""
     if _ast_eq(hi, lo):
         return ast.Constant(value=0)
     if isinstance(hi, ast.BinOp) and isinstance(hi.op, ast.Add):
@@ -116,9 +116,7 @@ def _simplify_sub(hi: ast.AST, lo: ast.AST) -> Optional[ast.AST]:
         # ``(K + lo) - lo`` -> K
         if _ast_eq(hi.right, lo):
             return hi.left
-    if isinstance(hi, ast.BinOp) and isinstance(hi.op, ast.Sub):
-        # ``(K - lo) - lo`` doesn't simplify in general.
-        pass
+    # ``(K - lo) - lo`` and other forms don't simplify in general.
     return None
 
 
@@ -404,9 +402,9 @@ def _iter_extent_of(expr: ast.expr,
         # Shape-CHANGING ops: the result extent is NOT the operand's
         # extent. ``np.reshape(A, newshape)`` -> newshape; treating it
         # as elementwise (returning A's extent) would propagate the
-        # wrong rank to any enclosing BinOp (stockham_fft''s
+        # wrong rank to any enclosing BinOp (stockham_fft's
         # ``tmp_twid = np.reshape(tmp_perm, (N,)) * np.reshape(D, (N,))``
-        # must be rank-1, not tmp_perm''s rank-3). ``repeat`` /
+        # must be rank-1, not tmp_perm's rank-3). ``repeat`` /
         # ``transpose`` are not statically resolvable to a single
         # extent here, so bail to None rather than report the (wrong)
         # source extent.
@@ -680,8 +678,8 @@ _REDUCTION_NAMES: Set[str] = {
     "any", "all", "count_nonzero", "median",
     # ``np.dot`` / ``np.vdot`` / matmul-like calls also collapse the
     # operand to a scalar (or a lower-rank array) -- their result is
-    # NOT preserved at the operand''s iter extent. ``np.linalg.*``
-    # similarly produces shapes that don''t map to operand extent
+    # NOT preserved at the operand's iter extent. ``np.linalg.*``
+    # similarly produces shapes that don't map to operand extent
     # (``norm`` collapses to scalar; ``lstsq`` returns a tuple).
     "dot", "vdot", "inner", "norm", "det", "lstsq",
 }
@@ -1008,7 +1006,7 @@ def _read_axis_keepdims(args, kwargs):
     * ``[k1, k2, ...]`` -- multi-axis reduction
       (``np.X(arr, axis=(1, 2, 3))`` or ``axis=[1, 2, 3]``). Order in
       the source list is preserved; the reduction loop nest walks them
-      in that order, but the kept-axes ordering is the source array''s.
+      in that order, but the kept-axes ordering is the source array's.
 
     Both keyword and positional forms are supported.
     """
@@ -1309,7 +1307,7 @@ def _reject_zero_size_reduction(args, kwargs, shape_table):
 def expand_mean(target, args, shape_table, kwargs=None):
     # Special form: ``np.mean(arr[mask])`` where ``mask`` is a boolean
     # array of the same length as ``arr``. Boolean fancy indexing
-    # produces a dynamic-length compacted view that we don''t
+    # produces a dynamic-length compacted view that we don't
     # materialise; instead emit a masked-sum + count loop directly.
     if (args and isinstance(args[0], ast.Subscript)
             and isinstance(args[0].value, ast.Name)
@@ -3555,7 +3553,7 @@ def _expand_cumulative(target, args, shape_table, op, kwargs=None):
         return e if off is None else ast.BinOp(left=e, op=ast.Add(), right=copy.deepcopy(off))
 
     def _tidx(scan_expr):
-        # Target index space = operand index space shifted by the slice''s
+        # Target index space = operand index space shifted by the slice's
         # per-axis lower bound (``out[1:] = np.cumsum(a)`` writes ``out[1+i]``).
         elts = [_add_off(scan_expr if i == axis else _name(iters[i]), t_start[i]) for i in range(n)]
         return elts[0] if n == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
@@ -6303,7 +6301,7 @@ class _CallHoister(ast.NodeTransformer):
                 # When ``first`` carries slice-bearing Subscripts (the
                 # ``np.max(x[:, 2i:2i+2, :], axis=(1, 2))`` form from
                 # maxpool), the post-LibNodeRewriter lift can no longer
-                # recover x''s per-statement shape -- by then x has been
+                # recover x's per-statement shape -- by then x has been
                 # overwritten with its final shape. Emit the slice-LHS
                 # form here instead: marker + ``__cb[:, ...] = first``.
                 # Slice-fusion later lowers this into a per-element copy.
@@ -6389,7 +6387,7 @@ class _CallHoister(ast.NodeTransformer):
             # an integer, matching numpy's intp result).
             if key[1] in {"argmax", "argmin"}:
                 self.local_dtypes[temp] = "int64"
-            # Propagate complex dtype when the call''s argument tree
+            # Propagate complex dtype when the call's argument tree
             # contains complex literals / complex-Name references.
             # ``np.exp(-2.0j * np.pi * ...)`` etc. land here.
             # Every ``np.fft.*`` transform RETURNS complex even from a real
@@ -6398,7 +6396,7 @@ class _CallHoister(ast.NodeTransformer):
                     "fft.fftn", "fft.ifftn", "fft.fft", "fft.ifft"}:
                 self.local_dtypes[temp] = "complex128"
             # Shape-preserving ops (``reshape`` / ``repeat`` / ``copy``
-            # / ``transpose`` / ``flip``) inherit the source array''s
+            # / ``transpose`` / ``flip``) inherit the source array's
             # dtype: ``Xiv = np.reshape(Xi, (xn * yn,))`` where ``Xi``
             # is int64 must keep Xiv as int64, not the default double.
             SHAPE_PRESERVING = {"reshape", "repeat", "copy", "asarray",
@@ -6416,7 +6414,7 @@ class _CallHoister(ast.NodeTransformer):
                 self.local_dtypes[temp] = "complex128"
         # Emit a ``__cb<n> = __optarena_zeros__()`` marker first so
         # the emit walker can inline-declare the temp at the marker
-        # site -- required when the temp''s shape depends on an
+        # site -- required when the temp's shape depends on an
         # enclosing for-loop iter (stockham_fft ``R ** i`` etc.). The
         # subsequent ``__cb<n> = call(...)`` is then lowered into a
         # per-element copy by the existing call-expansion path.
@@ -6472,13 +6470,13 @@ class _CallHoister(ast.NodeTransformer):
         # ``bins`` (the ``[0]`` Subscript unwrap selects it).
         if op == "histogram" and len(args) >= 2:
             return (self._extent_to_shape_token(args[1]),)
-        # ``np.linalg.inv(A)`` returns the square inverse with A''s
+        # ``np.linalg.inv(A)`` returns the square inverse with A's
         # shape.
         if op == "linalg.inv" and args and isinstance(args[0], ast.Name):
             shape = self.shape_table.get(args[0].id)
             if shape:
                 return tuple(shape)
-        # ``np.linalg.solve(A, b)`` returns x with b''s shape.
+        # ``np.linalg.solve(A, b)`` returns x with b's shape.
         if op == "linalg.solve" and len(args) >= 2 \
                 and isinstance(args[1], ast.Name):
             shape = self.shape_table.get(args[1].id)
@@ -6796,7 +6794,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         shape resolver but runs INSIDE the LibNodeRewriter pass so
         the hoister sees the THEN-current shape of every reassigned
         local. Also propagates ``local_dtypes`` for complex-RHS so the
-        next statement''s hoister sees the up-to-date dtype tag."""
+        next statement's hoister sees the up-to-date dtype tag."""
         # Name = Name alias.
         if isinstance(rhs, ast.Name):
             src = self.shape_table.get(rhs.id)
@@ -6906,7 +6904,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         # ``D[:] = np.repeat(...)`` / ``D[:, :] = np.transpose(...)``:
         # canonicalise the slice-LHS-with-call form to ``D = call(...)``
         # so the registered call expander fires. Required for
-        # stockham_fft''s ``y[:] = np.reshape(...)`` and
+        # stockham_fft's ``y[:] = np.reshape(...)`` and
         # ``D[:] = np.repeat(...)``.
         if (len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Subscript)
@@ -6946,7 +6944,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         prelude = self._lower_prelude_calls(prelude)
         # Whole-array alias propagation: ``x = <Name>`` where the RHS
         # is a Name with a known shape gives ``x`` the same shape so
-        # downstream visits of this method''s body see ``x`` as an array.
+        # downstream visits of this method's body see ``x`` as an array.
         # ALSO propagate ``local_dtypes`` -- otherwise a complex temp
         # aliased to a fresh local would lose its dtype tag and the
         # next call hoister visit would synthesize a non-complex temp.

@@ -2950,7 +2950,7 @@ class _ResolveArrShape(ast.NodeTransformer):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
         node.body = self._visit_stmt_list(node.body)
-        # After walking the body, write the resolver''s updated
+        # After walking the body, write the resolver's updated
         # zeros_locals back to the tree-attribute the emitter reads.
         if hasattr(node, "zeros_locals"):
             node.zeros_locals.update(self.zeros_locals)  # type: ignore[attr-defined]
@@ -2995,7 +2995,7 @@ class _ResolveArrShape(ast.NodeTransformer):
         * ``Name = BinOp/UnaryOp/IfExp`` -- shape from broadcast via
           :func:`_iter_extent_of`.
         * ``Name = Call(...)`` -- if the call is an elementwise math
-          intrinsic, propagate the first array operand''s shape.
+          intrinsic, propagate the first array operand's shape.
         * Anything else -- leave the existing entry alone (or unset
           a non-broadcast result).
         """
@@ -3017,10 +3017,10 @@ class _ResolveArrShape(ast.NodeTransformer):
             if target in self.zeros_locals:
                 # Re-resolve any ``arr.shape[i]`` references inside the
                 # stored shape tokens against ``self.current`` so a
-                # reassigned source array (lenet''s ``x``) contributes
+                # reassigned source array (lenet's ``x``) contributes
                 # the correct THEN-current axis lengths. The
                 # ``self.zeros_locals`` entry is also updated so the
-                # emitter''s decl block uses the fresh tokens.
+                # emitter's decl block uses the fresh tokens.
                 fresh = tuple(self._reresolve_token(t)
                               for t in self.zeros_locals[target])
                 self.current[target] = fresh
@@ -3070,7 +3070,7 @@ class _ResolveArrShape(ast.NodeTransformer):
                     ast.unparse(e) for e in ext)
             return
         # Elementwise call (np.maximum, np.add, etc.) -- propagate first
-        # array operand''s broadcast extent.
+        # array operand's broadcast extent.
         if isinstance(rhs, ast.Call):
             ext = _iter_extent_of(rhs, self.current)
             if ext is not None:
@@ -3416,7 +3416,7 @@ class _PromoteMixedComplexIfExp(ast.NodeTransformer):
 
 class _TupleSubscriptFolder(ast.NodeTransformer):
     """Fold ``(t1, t2, ..., tn)[K]`` to ``tk`` at lowering time so
-    downstream passes don''t see Tuple subscripts. Comes up when
+    downstream passes don't see Tuple subscripts. Comes up when
     ``D.shape[-2]`` resolves to ``(Nqz, Nw, NA, NB, N3D, N3D)[-2]``
     after the shape harvest -- the Tuple is a constant-folded shape
     expression and the index picks one element."""
@@ -4033,7 +4033,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         #: Per-name list of shapes recorded in source order, one entry
         #: per ``Name = expr`` reassignment that the rewriter
         #: expanded to a per-element loop nest. Consumed by the
-        #: source-order shape resolver so reassigned locals (lenet''s
+        #: source-order shape resolver so reassigned locals (lenet's
         #: ``x = relu(...); x = maxpool2d(x); ...``) carry the
         #: THEN-current shape at each ``arr.shape[i]`` reference.
         self._reassign_shapes: Dict[str, List[Tuple[str, ...]]] = {}
@@ -4220,7 +4220,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
             if scattered:
                 return scattered
         # Per-statement shape table update for reassigned locals.
-        # Without this, resnet''s ``x = (padded - mean) / sqrt(std + eps)``
+        # Without this, resnet's ``x = (padded - mean) / sqrt(std + eps)``
         # (after batchnorm inlining) sees ``x`` with its harvest-time
         # final shape and skips the whole-array expansion.
         if (isinstance(target, ast.Name)
@@ -4458,7 +4458,7 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         (rank <= LHS rank with each axis either equal to LHS or
         equal to 1). Names that appear as the ``.value`` of a
         Subscript are SKIPPED -- the Subscript itself yields a
-        possibly lower-rank value, so the bare Name''s declared
+        possibly lower-rank value, so the bare Name's declared
         rank does not constrain whole-array compatibility.
         """
         target_shape = self.shape_table.get(lhs_name)
@@ -4646,7 +4646,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
           ``1:``) is substituted with the next iter -- the iter loop
           bounds already enforce the slice range, so the subscript
           just needs the iter variable. Concrete indices stay.
-          Required for vadv''s ``u_stage[:-1, :, k]`` form.
+          Required for vadv's ``u_stage[:-1, :, k]`` form.
         """
         # Subscript on a NON-Name value (a BinOp / Call result) whose slice is
         # a pure broadcast-reshape -- only ``:`` and ``np.newaxis``:
@@ -4745,7 +4745,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
                 # on a 1-D array: the iter loop bound already enforces the
                 # slice range, so replace the slice with the (right-aligned)
                 # next iter, adding any ``lower`` offset. Required for
-                # durbin''s ``__cb[:] = r[:k]`` copy. (Negative ``lower``
+                # durbin's ``__cb[:] = r[:k]`` copy. (Negative ``lower``
                 # like ``arr[-K:]`` is uncommon and not handled here.)
                 if self.iters:
                     iter_node: ast.expr = ast.Name(id=self.iters[-1],
@@ -4831,7 +4831,7 @@ class _SubscriptifyNames(ast.NodeTransformer):
                             if isinstance(e, ast.Slice):
                                 iter_name = self.iters[axis_pos]
                                 axis_pos += 1
-                                # Add the slice''s ``lower`` bound to
+                                # Add the slice's ``lower`` bound to
                                 # the iter so ``arr[1:, j]`` lowers as
                                 # ``arr(iter + 1, j)`` instead of
                                 # ``arr(iter, j)``. Negative ``lower``
@@ -4866,8 +4866,8 @@ class _SubscriptifyNames(ast.NodeTransformer):
             # the remaining axes form a slice broadcast against the loop
             # nest. numpy ``Ham[n]`` == ``Ham[n, :, :]``. Pad the
             # trailing axes with the right-aligned iter vars so the
-            # scalarised subscript spans ALL of the array''s axes
-            # (contour_integral''s ``Tz += zz * Ham[n]``). Without this
+            # scalarised subscript spans ALL of the array's axes
+            # (contour_integral's ``Tz += zz * Ham[n]``). Without this
             # the read stays rank-1 (``Ham(n)`` in Fortran -> rank
             # mismatch; ``Ham[n]`` in C -> silently wrong numerics).
             lead = (list(sl.elts) if isinstance(sl, ast.Tuple) else [sl])

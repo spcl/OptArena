@@ -406,12 +406,13 @@ def _score_task_distributed(submission: Submission,
                              rtol=rtol,
                              atol=atol,
                              repeat=repeat)
-        scaling = scaling_score(task.kernel,
-                                runs.mode,
-                                0,
-                                runs.measured_ns,
-                                work_exponent=runs.work_exponent,
-                                anchor_ns=runs.anchor_ns)
+        scaling = scaling_score(
+            task.kernel,
+            runs.mode,
+            0,  # single_node_ns header fallback: never consumed -- anchor_ns covers every measured P
+            runs.measured_ns,
+            work_exponent=runs.work_exponent,
+            anchor_ns=runs.anchor_ns)
 
     it = IterationResult(iteration=0,
                          correct=score.correct,

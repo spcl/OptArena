@@ -107,7 +107,7 @@ def _time_numpy_samples(spec: BenchSpec, data: Dict, repeat: int, warmup: int = 
     returned so a distributional timing backend (Mann-Whitney) can use it; callers
     that want the single best time take ``min`` (see :func:`_time_numpy`).
 
-    ``warmup`` untimed reps run first and are DISCARDED (0 by default -- the timed callers pass
+    ``warmup`` warmup reps run first and are DISCARDED (0 by default -- the timed callers pass
     :func:`timing.warmup_count`; correctness-only callers keep 0 so a cheap cell is not doubled)."""
     module = _import_reference(spec)
     func = vars(module)[spec.func_name]
@@ -240,7 +240,7 @@ def _run_c_reference(spec: BenchSpec,
     the caller turns that into a scored ``score_error`` (the C oracle/baseline is
     opt-in, so its unavailability never silently degrades to numpy).
 
-    ``warmup`` untimed reps run first and are DISCARDED from the returned samples (0 by default; the
+    ``warmup`` warmup reps run first and are DISCARDED from the returned samples (0 by default; the
     timed callers pass :func:`timing.warmup_count` so the C baseline is warmed like the submission)."""
     ctask = replace(task, language="c", source_mode="restricted", residency="host")
     try:
