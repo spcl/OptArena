@@ -89,11 +89,11 @@ def resolve_ranges(parameters: Dict[str, Any], size_cap: int = None) -> Dict[str
     """Per-param fuzz spec: each value is a ``[lo, hi]`` range or a fixed scalar.
 
     Prefers an explicit ``fuzzed`` preset; otherwise the default range brackets
-    the ``L`` (publication) size: ``[L, L + XL]`` per integer size param
-    (hi always >= L). Falls
-    back to ``L * fuzz.size_hi_mult`` for the high bound when there is no ``XL``
-    preset, and to the largest preset when there is no ``L``. Non-integer /
-    size-1 params are kept fixed.
+    the ``L`` (publication) size and the ``XL`` (GPU) size: ``[L, XL]`` per
+    integer size param (hi always >= L; XL is an absolute size, not an additive
+    width). Falls back to ``L * fuzz.size_hi_mult`` for the high bound when there
+    is no ``XL`` preset, and to the largest preset when there is no ``L``.
+    Non-integer / size-1 params are kept fixed.
 
     ``size_cap`` overrides the global ``fuzz.size_cap`` clamp (see
     :func:`_apply_size_cap`) -- the correctness fuzz path passes its own, smaller
@@ -102,12 +102,15 @@ def resolve_ranges(parameters: Dict[str, Any], size_cap: int = None) -> Dict[str
     if FUZZED_PRESET in parameters:
         return _apply_size_cap(dict(parameters[FUZZED_PRESET]), size_cap)
     base = (parameters.get("L") or next(iter(parameters.values())))
-    step = parameters.get("XL") or {}  # additive width: from L toward the XL (GPU) size
+    step = parameters.get("XL") or {}  # absolute XL (GPU) size == fuzz upper bound
     hi_m = float(config.get("fuzz.size_hi_mult", 4.0))
     out: Dict[str, Any] = {}
     for name, value in base.items():
         if isinstance(value, int) and value > 1:
-            hi = value + int(step[name]) if isinstance(step.get(name), int) else int(value * hi_m)
+            # XL is an ABSOLUTE size (as everywhere else), not an additive width:
+            # the fuzz interval is [L, XL] so we never time a shape larger than the
+            # largest declared/validated preset (guards OOM / unvalidated regimes).
+            hi = int(step[name]) if isinstance(step.get(name), int) else int(value * hi_m)
             out[name] = [value, max(hi, value)]
         else:
             out[name] = value
@@ -486,7 +489,9 @@ def large_shapes(parameters: Dict[str, Any],
     (reproducible leaderboard sizes); ``secret_3shapes`` draws them from the
     JUDGE-ONLY secret seed (hidden from the agent). "Large" = the upper half of each
     fuzz interval, so timing is stable. Returns ``(label, sample)`` pairs with
-    ``config`` merged in; falls back to the high bound when a draw is constraint-rejected.
+    ``config`` merged in. A seed whose draw cannot satisfy the constraints within the
+    resample budget is DROPPED (no shape for that seed); a config whose constraints
+    reject every seed yields no timed shapes at all.
     """
     mode = str(mode if mode is not None else perf_mode())
     fixed = dict(config or {})

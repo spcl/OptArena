@@ -2054,7 +2054,12 @@ def _unary_elementwise(target, args, shape_table, op_fn):
 
 def expand_clip(target: ast.expr, args: List[ast.expr],
                 shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
-    """``out = np.clip(a, lo, hi)`` -> ``out[i] = max(lo, min(hi, a[i]))``."""
+    """``out = np.clip(a, lo, hi)`` -> ``out[i] = min(hi, max(lo, a[i]))``.
+
+    numpy defines clip as ``minimum(a_max, maximum(a, a_min))`` -- so when the
+    degenerate ``lo > hi`` is passed, a_max (hi) wins. Emitting the outer ``min``
+    (not ``max``) matches that; the reversed order returned ``lo`` instead.
+    """
     if len(args) != 3 or not isinstance(args[0], ast.Name):
         raise NotImplementedError("np.clip needs Name + 2 scalar args")
     a = args[0]
@@ -2066,9 +2071,9 @@ def expand_clip(target: ast.expr, args: List[ast.expr],
            ast.Tuple(elts=[_name(i) for i in iters], ctx=ast.Load()))
     a_sub = ast.Subscript(value=_name(a.id), slice=idx, ctx=ast.Load())
     clamped = ast.Call(
-        func=_name("max"),
-        args=[args[1],
-              ast.Call(func=_name("min"), args=[args[2], a_sub], keywords=[])],
+        func=_name("min"),
+        args=[args[2],
+              ast.Call(func=_name("max"), args=[args[1], a_sub], keywords=[])],
         keywords=[])
     body = [ast.Assign(
         targets=[ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())],
@@ -2288,12 +2293,18 @@ def expand_take(target: ast.expr, args: List[ast.expr],
 def expand_linspace(target: ast.expr, args: List[ast.expr],
                     shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """``out = np.linspace(start, stop, n)`` ->
-    ``for i in range(n): out[i] = start + (stop - start) * i / (n - 1)``."""
+    ``for i in range(n): out[i] = start + (stop - start) * i / max(n - 1, 1)``.
+
+    numpy uses ``max(n - 1, 1)`` as the divisor so ``np.linspace(start, stop, 1)``
+    returns ``[start]`` (the span term is ``* 0`` at ``i == 0``) instead of a
+    ``0 / 0`` NaN / division-by-zero."""
     if len(args) != 3:
         raise NotImplementedError("np.linspace needs (start, stop, n)")
     start, stop, n = args
     span = ast.BinOp(left=stop, op=ast.Sub(), right=start)
-    denom = ast.BinOp(left=n, op=ast.Sub(), right=_const(1))
+    denom = ast.Call(func=_name("max"),
+                     args=[ast.BinOp(left=n, op=ast.Sub(), right=_const(1)), _const(1)],
+                     keywords=[])
     expr = ast.BinOp(
         left=start,
         op=ast.Add(),

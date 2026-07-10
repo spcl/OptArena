@@ -699,10 +699,23 @@ class _FortranBodyEmitter(BaseEmitter):
             # int32 KIND, so pin it to the int64 ABI kind -- otherwise the result
             # clashes with int64 operands (lenet ``MODULO(.., FLOOR(..))``).
             if isinstance(node.op, ast.FloorDiv):
-                # ``REAL(x)`` with no KIND is DEFAULT single precision, which
-                # drops mantissa bits for int64 / float64 operands; force the
-                # divide into DOUBLE (kind from the registry) so the quotient is
-                # computed at full precision before the floor.
+                if self._expr_is_integer(node.left) and self._expr_is_integer(node.right):
+                    # Integer ``//``: Fortran integer ``/`` TRUNCATES toward zero
+                    # but numpy ``//`` FLOORS toward -inf. Both operands are cast to
+                    # ONE integer kind (INT is exact for integers -- no REAL()
+                    # mantissa loss above 2**53, and homogeneous kinds avoid the
+                    # mixed-kind "GNU Extension" gfortran rejects). Correct the
+                    # truncated quotient by -1 when the remainder is nonzero and the
+                    # operand signs differ (the C ``int_floor`` rule).
+                    ik = self._int_kind_selector()
+                    a = f"INT({self.emit_expr(node.left)}, {ik})"
+                    b = f"INT({self.emit_expr(node.right)}, {ik})"
+                    return (f"({a} / {b} - MERGE(1_{ik}, 0_{ik}, MOD({a}, {b}) /= 0_{ik} "
+                            f".AND. ({a} < 0_{ik}) .NEQV. ({b} < 0_{ik})))")
+                # Non-integer (float) operands: ``REAL(x)`` with no KIND is DEFAULT
+                # single precision, which drops mantissa bits; force the divide into
+                # DOUBLE (kind from the registry) so the quotient is at full
+                # precision before the floor.
                 dk = _double_kind()
                 return (f"FLOOR(REAL({self.emit_expr(node.left)}, {dk}) / "
                         f"REAL({self.emit_expr(node.right)}, {dk}), {self._int_kind_selector()})")

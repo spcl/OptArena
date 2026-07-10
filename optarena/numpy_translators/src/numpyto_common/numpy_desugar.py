@@ -928,7 +928,8 @@ def _reduce_axis_stmts(tname: str,
                        rank: int,
                        ctr: int,
                        keepdims: bool = False,
-                       elem_is_float: bool = False) -> List[ast.stmt]:
+                       elem_is_float: bool = False,
+                       ddof: int = 0) -> List[ast.stmt]:
     """Source statements reducing ``sname`` over ``axes`` (a sorted list of one or
     more axis indices) into a freshly allocated ``tname`` via an explicit loop nest
     -- the numba/pythran-compatible form of ``np.sum/prod/mean/min/max/argmin/
@@ -992,30 +993,41 @@ def _reduce_axis_stmts(tname: str,
         reduce_loops(ind, [f"{tgt} += {elem()}"])
         lines.append(f"{ind}{tgt} = {tgt} / ({count})")
     elif op in ("var", "std"):
-        # two-pass (mean, then sum of squared deviations / N, ddof=0) -- matches
-        # numpy's np.var/np.std default and the C/Fortran sequential lowering.
+        # two-pass: mean (always / N), then sum of squared deviations / (N - ddof)
+        # -- matches numpy's np.var/np.std and the C/Fortran sequential lowering.
+        # ``ddof`` defaults to 0; np.std(x, axis=k, ddof=1) divides by N-1.
+        var_denom = f"({count}) - {ddof}" if ddof else f"({count})"
         m, dv = f"{p}_m", f"{p}_dv"
         lines.append(f"{ind}{m} = 0.0")
         reduce_loops(ind, [f"{m} += {elem()}"])
         lines.append(f"{ind}{m} = {m} / ({count})")
         lines.append(f"{ind}{tgt} = 0.0")
         reduce_loops(ind, [f"{dv} = {elem()} - {m}", f"{tgt} += {dv} * {dv}"])
-        lines.append(f"{ind}{tgt} = {tgt} / ({count})")
+        lines.append(f"{ind}{tgt} = {tgt} / ({var_denom})")
         if op == "std":
             lines.append(f"{ind}{tgt} = np.sqrt({tgt})")
     elif op in ("min", "amin", "max", "amax"):
         cmp = "<" if op in ("min", "amin") else ">"
+        # numpy np.min/np.max PROPAGATE NaN (result is NaN if any element is NaN);
+        # a plain `elem cmp tgt` drops it. `elem != elem` captures a NaN element
+        # into tgt, and once tgt is NaN no finite element can displace it (every
+        # NaN comparison is False), so NaN sticks -- matching the imperative path.
+        e = elem()
         lines.append(f"{ind}{tgt} = {elem(seed=True)}")
-        reduce_loops(ind, [f"if {elem()} {cmp} {tgt}:", f"    {tgt} = {elem()}"])
+        reduce_loops(ind, [f"if {e} != {e} or {e} {cmp} {tgt}:", f"    {tgt} = {e}"])
     else:  # argmin / argmax -- single axis (the hoister rejects tuple-axis arg*)
         ax = axes[0]
         cmp = "<" if op == "argmin" else ">"
         best = f"{p}_best"
+        e = elem()
         lines.append(f"{ind}{best} = {elem(seed=True)}")
         lines.append(f"{ind}{tgt} = 0")
         lines.append(f"{ind}for {jv[ax]} in range(1, {d[ax]}):")
-        lines.append(f"{ind}    if {elem()} {cmp} {best}:")
-        lines.append(f"{ind}        {best} = {elem()}")
+        # numpy argmin/argmax return the index of the FIRST NaN when one is
+        # present. `best == best` is False once best is NaN, locking in that first
+        # index; `elem != elem` lets a NaN element win over a finite running best.
+        lines.append(f"{ind}    if {best} == {best} and ({e} != {e} or {e} {cmp} {best}):")
+        lines.append(f"{ind}        {best} = {e}")
         lines.append(f"{ind}        {tgt} = {jv[ax]}")
     return ast.parse("\n".join(lines)).body
 
@@ -1064,9 +1076,16 @@ class _ReduceAxisHoister(ast.NodeTransformer):
         else:
             sname = f"__rsrc{self.ctr}"
             self.pre.extend(ast.parse(f"{sname} = {ast.unparse(arg)}").body)
+        ddof = 0
+        if op in ("var", "std"):
+            dkw = kw.get("ddof")
+            if isinstance(dkw, ast.Constant) and isinstance(dkw.value, int) and not isinstance(dkw.value, bool):
+                ddof = dkw.value
+            elif dkw is not None:
+                return node  # non-constant ddof: cannot fold the divisor, leave verbatim
         temp = f"__rdo{self.ctr}"
         elem_is_float = _dtype_kind(arg, self.dtypes) == "float"
-        self.pre.extend(_reduce_axis_stmts(temp, sname, op, axes, rank, self.ctr, keepdims, elem_is_float))
+        self.pre.extend(_reduce_axis_stmts(temp, sname, op, axes, rank, self.ctr, keepdims, elem_is_float, ddof))
         self.ctr += 1
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 

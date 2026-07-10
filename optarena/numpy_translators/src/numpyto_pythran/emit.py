@@ -116,6 +116,10 @@ class _NanAwareMinMaxSign(ast.NodeTransformer):
     * ``np.maximum(a, b)`` -> ``np.where((a != a) | (b != b), a + b, np.maximum(a, b))``
     * ``np.minimum(a, b)`` -> ``np.where((a != a) | (b != b), a + b, np.minimum(a, b))``
     * ``np.sign(a)``       -> ``np.where(a != a, a, np.sign(a))``
+    * ``np.clip(a, lo, hi)`` -> ``np.minimum(hi, np.maximum(a, lo))`` (numpy's own
+      definition -- fixes pythran's reversed ``max(lo, min(hi, a))`` order that
+      returns ``lo`` when ``lo > hi``; the emitted min/max are then re-visited so
+      the NaN propagation above applies to clip too)
 
     ``x != x`` is the dtype-agnostic NaN test (always ``False`` for int/bool, so
     the rewrite is a pure no-op on non-float operands -- no type change, no
@@ -153,6 +157,14 @@ class _NanAwareMinMaxSign(ast.NodeTransformer):
         if f.attr == "sign" and len(node.args) == 1:
             a = node.args[0]
             return ast.copy_location(self._where(self._is_nan(a), copy.deepcopy(a), node), node)
+        if f.attr == "clip" and len(node.args) == 3:
+            # numpy clip == minimum(a_max, maximum(a, a_min)); pythran's native
+            # clip uses the reversed order (returns lo when lo > hi). Re-visit the
+            # rebuilt min/max so their NaN-propagation rewrite applies here too.
+            a, lo, hi = node.args
+            inner = ast.Call(func=self._np_attr("maximum"), args=[a, lo], keywords=[])
+            outer = ast.Call(func=self._np_attr("minimum"), args=[hi, inner], keywords=[])
+            return ast.copy_location(self.visit(outer), node)
         return node
 
 
