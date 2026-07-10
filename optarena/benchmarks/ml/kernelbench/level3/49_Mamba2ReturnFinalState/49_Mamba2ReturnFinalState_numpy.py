@@ -1,0 +1,3 @@
+import numpy as np
+
+TRANSLATION_ERROR = "unsupported expression: ListComp(elt=Call(func=Name(id='rearrange', ctx=Load()), args=[Name(id='x', ctx=Load()), Constant(value='b (c l) ... -> b c l ...')], keywords=[keyword(arg='l', value=Attribute(value=Name(id='self', ctx=Load()), attr='block_len', ctx=Load()))]), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Tuple(elts=[Name(id='X', ctx=Load()), Attribute(value=Name(id='self', ctx=Load()), attr='A', ctx=Load()), Attribute(value=Name(id='self', ctx=Load()), attr='B', ctx=Load()), Attribute(value=Name(id='self', ctx=Load()), attr='C', ctx=Load())], ctx=Load()), is_async=0)])"

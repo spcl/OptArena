@@ -81,6 +81,10 @@ def index_filenames(level_dir: Path) -> dict[str, str]:
 
 
 def level_sources(level_dir: Path) -> list[Path]:
+    def source_key(path: Path) -> tuple[int, str]:
+        match = re.match(r"(\d+)_", path.name)
+        return (int(match.group(1)) if match else 10**9, path.name)
+
     index_path = level_dir / "index.json"
     if index_path.exists():
         mapping = json.loads(index_path.read_text())
@@ -94,17 +98,31 @@ def level_sources(level_dir: Path) -> list[Path]:
             elif numeric.exists():
                 paths.append(numeric)
         seen = set(paths)
-        paths.extend(p for p in sorted(level_dir.glob("*.py")) if p not in seen)
+        paths.extend(p for p in sorted(level_dir.glob("*.py"), key=source_key) if p not in seen)
         return paths
-    return sorted(level_dir.glob("*.py"))
+    return sorted(level_dir.glob("*.py"), key=source_key)
 
 
 def numpy_filename(source: Path) -> str:
-    return f"{source.stem}_numpy.py"
+    return f"{result_stem(source)}_numpy.py"
 
 
 def yaml_filename(source: Path) -> str:
-    return f"{source.stem}.yaml"
+    return f"{result_stem(source)}.yaml"
+
+
+def case_output_dir(out_root: Path, level: str, source: Path) -> Path:
+    return out_root / level / result_stem(source)
+
+
+def result_stem(source: Path | str) -> str:
+    stem = source.stem if isinstance(source, Path) else source
+    match = re.match(r"(\d+)_(.*)", stem)
+    if not match:
+        return re.sub(r"_+", "_", stem).strip("_")
+    number, name = match.groups()
+    clean = re.sub(r"_+", "_", name).strip("_")
+    return f"{number}_{clean}"
 
 
 def display_name(stem: str) -> str:
@@ -232,7 +250,7 @@ class Expr:
             value = self.expr(call.func.value)
             attr = call.func.attr
             namespace_call = value in {"torch", "F", "torch.nn.functional", "np"}
-            if attr in {"clone", "detach", "contiguous", "cpu", "cuda", "float"}:
+            if attr in {"clone", "detach", "contiguous", "cpu", "cuda", "float", "to"}:
                 return value
             if attr == "numpy":
                 return value
@@ -252,6 +270,13 @@ class Expr:
                 axis = args[0]
                 index = args[1]
                 return f"np.take({value}, {index}, axis={axis})"
+            if not namespace_call and attr == "split":
+                self.helpers.add("split")
+                split_size = args[0]
+                axis = kwargs.get("dim", kwargs.get("axis", args[1] if len(args) > 1 else "0"))
+                return f"_split_size({value}, {split_size}, axis={axis})"
+            if not namespace_call and attr == "masked_fill":
+                return f"np.where({args[0]}, {args[1]}, {value})"
             if not namespace_call and attr == "narrow":
                 dim = kwargs.get("dim", args[0] if args else "0")
                 start = kwargs.get("start", args[1] if len(args) > 1 else "0")
@@ -274,7 +299,7 @@ class Expr:
                     return self.module_call(module_name, args)
         if fn in {"int", "float", "max", "min", "range", "len"}:
             return f"{fn}({', '.join(args)})"
-        if fn in {"torch.matmul", "torch.mm", "torch.bmm"}:
+        if fn in {"torch.matmul", "torch.mm", "torch.bmm", "th.matmul"}:
             return f"np.matmul({args[0]}, {args[1]})"
         if fn == "torch.einsum":
             return f"np.einsum({', '.join(args)})"
@@ -309,12 +334,16 @@ class Expr:
             lo = kwargs.get("min", args[1] if len(args) > 1 else "None")
             hi = kwargs.get("max", args[2] if len(args) > 2 else "None")
             return f"np.clip({args[0]}, {lo}, {hi})"
-        if fn in {"torch.sum", "torch.mean", "torch.max", "torch.min", "torch.argmax", "torch.argmin"}:
+        if fn in {"torch.sum", "torch.mean", "torch.max", "torch.min", "torch.argmax", "torch.argmin", "th.sum", "th.mean", "th.max", "th.min"}:
             if fn in {"torch.max", "torch.min"} and len(args) >= 2 and "dim" not in kwargs and "axis" not in kwargs:
                 return ("np.maximum" if fn == "torch.max" else "np.minimum") + f"({args[0]}, {args[1]})"
             axis, keep = self.axis_args(call)
             op = fn.split(".")[-1]
             return f"np.{op}({args[0]}, axis={axis}, keepdims={keep})"
+        if fn in {"F.normalize", "torch.nn.functional.normalize"}:
+            axis = kwargs.get("dim", args[1] if len(args) > 1 else "1")
+            eps = kwargs.get("eps", "1e-12")
+            return f"(({args[0]}) / np.maximum(np.linalg.norm({args[0]}, axis={axis}, keepdims=True), {eps}))"
         if fn in {"torch.softmax", "F.softmax", "torch.nn.functional.softmax"}:
             self.helpers.add("softmax")
             axis = kwargs.get("dim", kwargs.get("axis", args[1] if len(args) > 1 else "-1"))
@@ -388,15 +417,21 @@ class Expr:
             return f"np.cumprod({args[0]}, axis={axis})"
         if fn in {"torch.zeros_like"}:
             return f"np.zeros_like({args[0]})"
-        if fn in {"torch.ones", "torch.zeros", "torch.tensor"}:
+        if fn in {"torch.ones", "torch.zeros", "torch.randn", "torch.rand", "torch.tensor", "th.randn", "th.rand"}:
+            shape = args[0] if len(args) == 1 else f"({', '.join(args)})"
             if fn == "torch.ones":
-                return f"np.ones({args[0]}, dtype=np.float32)"
+                return f"np.ones({shape}, dtype=np.float32)"
             if fn == "torch.zeros":
-                return f"np.zeros({args[0]}, dtype=np.float32)"
+                return f"np.zeros({shape}, dtype=np.float32)"
+            if fn in {"torch.randn", "torch.rand", "th.randn", "th.rand"}:
+                return f"np.zeros({shape}, dtype=np.float32)"
             return f"np.array({args[0]})"
         if fn == "torch.cat":
             dim = kwargs.get("dim", args[1] if len(args) > 1 else "0")
             return f"np.concatenate({args[0]}, axis={dim})"
+        if fn == "torch.stack":
+            dim = kwargs.get("dim", args[1] if len(args) > 1 else "0")
+            return f"np.stack({args[0]}, axis={dim})"
         raise TranslationError(f"unsupported call {fn}")
 
     def module_call(self, name: str, args: list[str]) -> str:
@@ -544,6 +579,11 @@ def _flatten(x, start_dim=0, end_dim=-1):
     after = x.shape[end_dim + 1:]
     middle = int(np.prod(x.shape[start_dim:end_dim + 1]))
     return np.reshape(x, before + (middle,) + after)
+""",
+"split": """
+def _split_size(x, split_size, axis=0):
+    indices = list(range(split_size, x.shape[axis], split_size))
+    return tuple(np.split(x, indices, axis=axis))
 """,
 "batchnorm": """
 def _batch_norm(x, weight, bias, running_mean, running_var, eps):
@@ -853,6 +893,14 @@ class Translator:
         self.attr_aliases: dict[str, str] = {}
         self.init_arg_names: set[str] = set()
         self.expr = Expr(self.modules, self.helpers, classless=classless, attr_aliases=self.attr_aliases)
+        model = next((n for n in self.tree.body if isinstance(n, ast.ClassDef) and n.name == "Model"), None)
+        if model is not None:
+            for st in model.body:
+                if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+                    try:
+                        self.attr_aliases[st.targets[0].id] = self.expr.expr(st.value)
+                    except TranslationError:
+                        self.attr_aliases[st.targets[0].id] = ast.unparse(st.value)
 
     def translate(self) -> str:
         model = next((n for n in self.tree.body if isinstance(n, ast.ClassDef) and n.name == "Model"), None)
@@ -961,12 +1009,17 @@ class Translator:
         for st in fn.body:
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
                 continue
+            if isinstance(st, ast.Assert):
+                continue
             if isinstance(st, ast.FunctionDef):
                 self.local_functions[st.name] = st
                 continue
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and _name(st.value.func) == "super":
                 continue
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and _name(st.value.func) == "super.__init__":
+                continue
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and self.is_register_buffer_call(st.value):
+                out.extend(self.register_buffer_lines(st.value))
                 continue
             if self.append_to_sequence_list(st, values, lists):
                 continue
@@ -1083,6 +1136,17 @@ class Translator:
         for st in init.body:
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and self.is_super_init_call(st.value):
                 continue
+            if isinstance(st, ast.Assert):
+                continue
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and self.is_register_buffer_call(st.value):
+                if len(st.value.args) >= 2 and isinstance(st.value.args[0], ast.Constant):
+                    attr = str(st.value.args[0].value)
+                    value = self.substitute_names(st.value.args[1], values)
+                    attr_name = f"{name}_{attr}"
+                    attrs[attr] = attr_name
+                    lines.extend(self.init_assignment(attr_name, value))
+                    continue
+                raise TranslationError("unsupported register_buffer")
             if isinstance(st, ast.Assign) and len(st.targets) == 1:
                 target = st.targets[0]
                 value = self.substitute_names(st.value, values)
@@ -1118,6 +1182,16 @@ class Translator:
         self.modules[name] = {"kind": "custom", "function": function_name}
         self.custom_functions[function_name] = self.custom_forward_function(function_name, forward, attrs)
         return lines
+
+    def is_register_buffer_call(self, call: ast.Call) -> bool:
+        return isinstance(call.func, ast.Attribute) and call.func.attr == "register_buffer"
+
+    def register_buffer_lines(self, call: ast.Call) -> list[str]:
+        if len(call.args) < 2 or not isinstance(call.args[0], ast.Constant):
+            raise TranslationError("unsupported register_buffer")
+        name = str(call.args[0].value)
+        prefix = "" if self.classless else "self."
+        return [f"{prefix}{name} = {self.expr.expr(call.args[1])}"]
 
     def model_method(self, name: str) -> ast.FunctionDef | None:
         model = next((n for n in self.tree.body if isinstance(n, ast.ClassDef) and n.name == "Model"), None)
@@ -1256,7 +1330,7 @@ class Translator:
     def parameter_expr(self, node: ast.AST) -> str:
         if isinstance(node, ast.Call):
             fn = _name(node.func)
-            if fn == "torch.randn":
+            if fn in {"torch.randn", "torch.rand", "th.randn", "th.rand"}:
                 return f"np.zeros({_arg(node, 0, '()')}, dtype=np.float32)"
             if fn == "torch.ones":
                 return f"np.ones({_arg(node, 0, '()')}, dtype=np.float32)"
@@ -1270,13 +1344,21 @@ class Translator:
         kind = fn.split(".")[-1]
         lines: list[str] = []
         prefix = "" if self.classless else "self."
+
+        def clean(text: str) -> str:
+            return re.sub(
+                r"\bself\.([A-Za-z_][A-Za-z0-9_]*)",
+                lambda match: self.attr_aliases.get(match.group(1), match.group(1)),
+                text,
+            )
+
         def set_kind(k: str):
             self.modules[name] = {"kind": k}
         if kind == "Linear":
             set_kind("linear")
-            in_f = _arg(call, 0, _kw(call, "in_features", "1"))
-            out_f = _arg(call, 1, _kw(call, "out_features", "1"))
-            bias = _kw(call, "bias", "True")
+            in_f = clean(_arg(call, 0, _kw(call, "in_features", "1")))
+            out_f = clean(_arg(call, 1, _kw(call, "out_features", "1")))
+            bias = clean(_kw(call, "bias", "True"))
             lines += [f"{prefix}{name}_weight = np.zeros(({out_f}, {in_f}), dtype=np.float32)",
                       f"{prefix}{name}_bias = np.zeros(({out_f},), dtype=np.float32) if {bias} else np.zeros(({out_f},), dtype=np.float32)"]
         elif kind == "Sequential":
@@ -1293,20 +1375,20 @@ class Translator:
             dims = {"Conv1d": 1, "Conv2d": 2, "Conv3d": 3, "ConvTranspose1d": 1, "ConvTranspose2d": 2, "ConvTranspose3d": 3}[kind]
             trans = "Transpose" in kind
             set_kind(("conv_transpose" if trans else "conv") + str(dims) + "d")
-            in_c = _arg(call, 0, _kw(call, "in_channels", "1"))
-            out_c = _arg(call, 1, _kw(call, "out_channels", "1"))
-            k = _arg(call, 2, _kw(call, "kernel_size", "1"))
+            in_c = clean(_arg(call, 0, _kw(call, "in_channels", "1")))
+            out_c = clean(_arg(call, 1, _kw(call, "out_channels", "1")))
+            k = clean(_arg(call, 2, _kw(call, "kernel_size", "1")))
             if trans:
-                stride = _kw(call, "stride", _arg(call, 3, "1"))
-                padding = _kw(call, "padding", _arg(call, 4, "0"))
-                output_padding = _kw(call, "output_padding", _arg(call, 5, "0"))
-                groups = _kw(call, "groups", _arg(call, 6, "1"))
-                dilation = _kw(call, "dilation", _arg(call, 8, "1"))
+                stride = clean(_kw(call, "stride", _arg(call, 3, "1")))
+                padding = clean(_kw(call, "padding", _arg(call, 4, "0")))
+                output_padding = clean(_kw(call, "output_padding", _arg(call, 5, "0")))
+                groups = clean(_kw(call, "groups", _arg(call, 6, "1")))
+                dilation = clean(_kw(call, "dilation", _arg(call, 8, "1")))
             else:
-                stride = _kw(call, "stride", _arg(call, 3, "1"))
-                padding = _kw(call, "padding", _arg(call, 4, "0"))
-                dilation = _kw(call, "dilation", _arg(call, 5, "1"))
-                groups = _kw(call, "groups", _arg(call, 6, "1"))
+                stride = clean(_kw(call, "stride", _arg(call, 3, "1")))
+                padding = clean(_kw(call, "padding", _arg(call, 4, "0")))
+                dilation = clean(_kw(call, "dilation", _arg(call, 5, "1")))
+                groups = clean(_kw(call, "groups", _arg(call, 6, "1")))
             if trans:
                 shape = f"({in_c}, {out_c} // {groups}) + _as_tuple({k}, {dims})"
             else:
@@ -1326,18 +1408,18 @@ class Translator:
             dims = kind[-2]
             set_kind(("maxpool" if kind.startswith("Max") else "avgpool") + dims + "d")
             lines += [
-                f"{prefix}{name}_kernel_size = {_arg(call, 0, _kw(call, 'kernel_size', '1'))}",
-                f"{prefix}{name}_stride = {_kw(call, 'stride', 'None')}",
-                f"{prefix}{name}_padding = {_kw(call, 'padding', '0')}",
+                f"{prefix}{name}_kernel_size = {clean(_arg(call, 0, _kw(call, 'kernel_size', '1')))}",
+                f"{prefix}{name}_stride = {clean(_kw(call, 'stride', 'None'))}",
+                f"{prefix}{name}_padding = {clean(_kw(call, 'padding', '0'))}",
             ]
         elif kind in {"AdaptiveAvgPool2d", "AdaptiveAvgPool3d"}:
             dims = kind[-2]
             set_kind("adaptive_avg_pool" + dims + "d")
-            lines.append(f"{prefix}{name}_output_size = {_arg(call, 0, _kw(call, 'output_size', '1'))}")
+            lines.append(f"{prefix}{name}_output_size = {clean(_arg(call, 0, _kw(call, 'output_size', '1')))}")
         elif kind in {"BatchNorm1d", "BatchNorm2d", "BatchNorm3d"}:
             set_kind("batchnorm")
-            features = _arg(call, 0, _kw(call, "num_features", "1"))
-            eps = _kw(call, "eps", "1e-5")
+            features = clean(_arg(call, 0, _kw(call, "num_features", "1")))
+            eps = clean(_kw(call, "eps", "1e-5"))
             lines += [
                 f"{prefix}{name}_weight = np.ones(({features},), dtype=np.float32)",
                 f"{prefix}{name}_bias = np.zeros(({features},), dtype=np.float32)",
@@ -1347,25 +1429,25 @@ class Translator:
             ]
         elif kind == "GroupNorm":
             set_kind("groupnorm")
-            groups = _arg(call, 0, _kw(call, "num_groups", "1"))
-            channels = _arg(call, 1, _kw(call, "num_channels", "1"))
-            eps = _kw(call, "eps", "1e-5")
+            groups = clean(_arg(call, 0, _kw(call, "num_groups", "1")))
+            channels = clean(_arg(call, 1, _kw(call, "num_channels", "1")))
+            eps = clean(_kw(call, "eps", "1e-5"))
             lines += [f"{prefix}{name}_num_groups = {groups}",
                       f"{prefix}{name}_weight = np.ones(({channels},), dtype=np.float32)",
                       f"{prefix}{name}_bias = np.zeros(({channels},), dtype=np.float32)",
                       f"{prefix}{name}_eps = {eps}"]
         elif kind in {"InstanceNorm2d", "InstanceNorm3d"}:
             set_kind("instancenorm")
-            features = _arg(call, 0, _kw(call, "num_features", "1"))
-            eps = _kw(call, "eps", "1e-5")
-            affine = _kw(call, "affine", "False")
+            features = clean(_arg(call, 0, _kw(call, "num_features", "1")))
+            eps = clean(_kw(call, "eps", "1e-5"))
+            affine = clean(_kw(call, "affine", "False"))
             lines += [f"{prefix}{name}_weight = np.ones(({features},), dtype=np.float32) if {affine} else None",
                       f"{prefix}{name}_bias = np.zeros(({features},), dtype=np.float32) if {affine} else None",
                       f"{prefix}{name}_eps = {eps}"]
         elif kind == "LayerNorm":
             set_kind("layernorm")
-            shape = _arg(call, 0, _kw(call, "normalized_shape", "1"))
-            eps = _kw(call, "eps", "1e-5")
+            shape = clean(_arg(call, 0, _kw(call, "normalized_shape", "1")))
+            eps = clean(_kw(call, "eps", "1e-5"))
             lines += [f"{prefix}{name}_weight = np.ones(_as_tuple({shape}, 1), dtype=np.float32)",
                       f"{prefix}{name}_bias = np.zeros(_as_tuple({shape}, 1), dtype=np.float32)",
                       f"{prefix}{name}_eps = {eps}"]
@@ -1374,17 +1456,17 @@ class Translator:
             set_kind(kind.lower())
         elif kind == "LeakyReLU":
             set_kind("leakyrelu")
-            lines.append(f"{prefix}{name}_negative_slope = {_arg(call, 0, _kw(call, 'negative_slope', '0.01'))}")
+            lines.append(f"{prefix}{name}_negative_slope = {clean(_arg(call, 0, _kw(call, 'negative_slope', '0.01')))}")
         elif kind == "Hardtanh":
             set_kind("hardtanh")
-            lines += [f"{prefix}{name}_min_val = {_arg(call, 0, _kw(call, 'min_val', '-1.0'))}",
-                      f"{prefix}{name}_max_val = {_arg(call, 1, _kw(call, 'max_val', '1.0'))}"]
+            lines += [f"{prefix}{name}_min_val = {clean(_arg(call, 0, _kw(call, 'min_val', '-1.0')))}",
+                      f"{prefix}{name}_max_val = {clean(_arg(call, 1, _kw(call, 'max_val', '1.0')))}"]
         elif kind == "Softmax":
             set_kind("softmax")
-            lines.append(f"{prefix}{name}_dim = {_kw(call, 'dim', _arg(call, 0, '-1'))}")
+            lines.append(f"{prefix}{name}_dim = {clean(_kw(call, 'dim', _arg(call, 0, '-1')))}")
         elif kind == "TripletMarginLoss":
             set_kind("tripletmarginloss")
-            lines.append(f"{prefix}{name}_margin = {_kw(call, 'margin', _arg(call, 0, '1.0'))}")
+            lines.append(f"{prefix}{name}_margin = {clean(_kw(call, 'margin', _arg(call, 0, '1.0')))}")
         else:
             raise TranslationError(f"unsupported module init {fn}")
         return lines or [f"{prefix}{name} = None"]
@@ -1392,18 +1474,45 @@ class Translator:
     def forward_lines(self, fn: ast.FunctionDef) -> list[str]:
         return self.forward_lines_with_expr(fn, self.expr)
 
+    def target_text(self, target: ast.AST, expr: Expr) -> str:
+        if (
+            self.classless
+            and isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "self"
+        ):
+            return expr.attr_aliases.get(target.attr, target.attr)
+        return ast.unparse(target)
+
     def forward_lines_with_expr(self, fn: ast.FunctionDef, expr: Expr) -> list[str]:
         out: list[str] = []
         for st in fn.body:
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
                 continue
+            if isinstance(st, ast.Assert):
+                continue
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call):
+                call = st.value
+                if isinstance(call.func, ast.Attribute) and call.func.attr == "copy_" and len(call.args) == 1:
+                    out.append(f"{expr.expr(call.func.value)} = {expr.expr(call.args[0])}")
+                    continue
+                if isinstance(call.func, ast.Attribute) and call.func.attr == "append" and len(call.args) == 1:
+                    out.append(f"{expr.expr(call.func.value)}.append({expr.expr(call.args[0])})")
+                    continue
             if isinstance(st, ast.Assign):
-                target = ast.unparse(st.targets[0])
-                out.append(f"{target} = {expr.expr(st.value)}")
+                target = self.target_text(st.targets[0], expr)
+                if isinstance(st.value, ast.List):
+                    out.append(f"{target} = [{', '.join(expr.expr(e) for e in st.value.elts)}]")
+                else:
+                    out.append(f"{target} = {expr.expr(st.value)}")
             elif isinstance(st, ast.Return):
                 out.append(f"return {expr.expr(st.value)}")
             elif isinstance(st, ast.AugAssign):
-                out.append(f"{ast.unparse(st.target)} {ast.unparse(st.op)}= {expr.expr(st.value)}")
+                op = {
+                    ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
+                    ast.FloorDiv: "//", ast.Mod: "%", ast.Pow: "**", ast.MatMult: "@",
+                }[type(st.op)]
+                out.append(f"{self.target_text(st.target, expr)} {op}= {expr.expr(st.value)}")
             elif isinstance(st, ast.If):
                 static_value = self.static_forward_if(st.test, expr)
                 if static_value is not None:
@@ -1433,6 +1542,17 @@ class Translator:
                             decorator_list=[],
                         )
                         out.extend("    " + line for line in self.forward_lines_with_expr(pseudo_else, expr))
+            elif isinstance(st, ast.For):
+                if not isinstance(st.target, ast.Name):
+                    raise TranslationError(f"unsupported forward loop target {ast.dump(st.target)}")
+                out.append(f"for {st.target.id} in {expr.expr(st.iter)}:")
+                pseudo_body = ast.FunctionDef(
+                    name="_for_body",
+                    args=ast.arguments(posonlyargs=[], args=[], vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[]),
+                    body=st.body,
+                    decorator_list=[],
+                )
+                out.extend("    " + line for line in self.forward_lines_with_expr(pseudo_body, expr))
             else:
                 raise TranslationError(f"unsupported forward statement {ast.dump(st)}")
         return out
@@ -1445,6 +1565,11 @@ class Translator:
         if isinstance(test, ast.Compare) and len(test.ops) == 1 and len(test.comparators) == 1:
             left = test.left
             right = test.comparators[0]
+            if self.is_device_expr(left) or self.is_device_expr(right):
+                if isinstance(test.ops[0], ast.NotEq):
+                    return False
+                if isinstance(test.ops[0], ast.Eq):
+                    return True
             if (
                 isinstance(left, ast.Attribute)
                 and isinstance(left.value, ast.Name)
@@ -1458,6 +1583,9 @@ class Translator:
                 if isinstance(test.ops[0], ast.Is):
                     return module_name not in self.modules
         return None
+
+    def is_device_expr(self, node: ast.AST) -> bool:
+        return isinstance(node, ast.Attribute) and node.attr == "device"
 
 
 class ManifestBuilder:
@@ -1478,9 +1606,8 @@ class ManifestBuilder:
         arrays = self.input_arrays([a.arg for a in forward.args.args if a.arg != "self"])
         params = self.parameters(values, init_values, arrays)
         lines = [
-            "# OptArena benchmark manifest -- generated by optarena/pytorch_translator/src/pytorch_to_numpy.py.",
-            "# Schema: optarena/schemas/bench_spec.schema.yaml",
-            f"name: {display_name(self.source.stem)}",
+            "# OptArena benchmark manifest (KernelBench port).",
+            f"name: {result_stem(self.source)}",
             "func_name: forward",
             "kind: microkernel",
             f"level: {level_number(self.level)}",
@@ -1628,26 +1755,30 @@ def translate_tree(
     results: list[tuple[str, str, str]] = []
     for level in levels:
         for source in level_sources(root / level):
-            dest = out_root / level / numpy_filename(source)
-            yaml_dest = out_root / level / yaml_filename(source)
+            case_dir = case_output_dir(out_root, level, source)
+            dest = case_dir / numpy_filename(source)
+            yaml_dest = case_dir / yaml_filename(source)
             try:
                 translate_file(source, dest, yaml_dest, level, overwrite_yaml=overwrite_yaml)
-                results.append((level, numpy_filename(source), "ok"))
+                results.append((level, f"{result_stem(source)}/{numpy_filename(source)}", "ok"))
             except Exception as exc:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(f"import numpy as np\n\nTRANSLATION_ERROR = {exc!r}\n")
-                results.append((level, numpy_filename(source), f"error: {exc}"))
+                dest.write_text(f"import numpy as np\n\nTRANSLATION_ERROR = {str(exc)!r}\n")
+                results.append((level, f"{result_stem(source)}/{numpy_filename(source)}", f"error: {exc}"))
     return results
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--levels", nargs="+", default=["level1", "level2"])
+    parser.add_argument("--source-root", type=Path)
     parser.add_argument("--out-root", type=Path)
     parser.add_argument("--overwrite-yaml", action="store_true")
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[1]
-    out_root = args.out_root or root.parent / "benchmarks" / "ml" / "KernelBench"
+    translator_root = Path(__file__).resolve().parents[1]
+    submodule_root = translator_root / "KernelBench" / "KernelBench"
+    root = args.source_root or (submodule_root if submodule_root.exists() else translator_root)
+    out_root = args.out_root or translator_root.parent / "benchmarks" / "ml" / "KernelBench"
     for level, name, status in translate_tree(root, out_root, tuple(args.levels), overwrite_yaml=args.overwrite_yaml):
         print(f"{level}/{name}: {status}")

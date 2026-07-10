@@ -1,0 +1,22 @@
+# OptArena benchmark manifest (KernelBench port).
+name: 27_RegNet
+func_name: forward
+kind: microkernel
+level: 3
+parameters:
+  S:
+    batch_size: 8
+    block_widths: [64, 128, 256]
+    image_height: 224
+    image_width: 224
+    input_channels: 3
+    output_classes: 10
+    stages: 3
+init:
+  arrays:
+    x: (batch_size, input_channels, image_height, image_width)
+output_args: []
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

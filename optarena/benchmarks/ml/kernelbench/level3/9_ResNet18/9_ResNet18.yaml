@@ -1,0 +1,17 @@
+# OptArena benchmark manifest (KernelBench port).
+name: 9_ResNet18
+func_name: forward
+kind: microkernel
+level: 3
+parameters:
+  S:
+    input_shape: (batch_size, 3, 224, 224)
+    num_classes: 1000
+init:
+  arrays:
+    x: (input_shape,)
+output_args: []
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

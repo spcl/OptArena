@@ -1,0 +1,85 @@
+import numpy as np
+
+def _as_tuple(value, dims):
+    if isinstance(value, tuple):
+        return value
+    return tuple(value for _ in range(dims))
+
+def _avgpool2d(x, kernel_size, stride, padding):
+    if isinstance(kernel_size, int): kernel_size = (kernel_size, kernel_size,)
+    if stride is None: stride = kernel_size
+    if isinstance(stride, int): stride = (stride, stride,)
+    if isinstance(padding, int): padding = (padding, padding,)
+    padded_shape = (x.shape[0], x.shape[1]) + tuple(x.shape[i + 2] + 2 * padding[i] for i in range(2))
+    fill = -np.inf if "mean" == "max" else 0.0
+    padded = np.full(padded_shape, fill, dtype=x.dtype)
+    src = tuple(slice(padding[i], padding[i] + x.shape[i + 2]) for i in range(2))
+    padded[(slice(None), slice(None)) + src] = x
+    out_shape = tuple((padded_shape[i + 2] - kernel_size[i]) // stride[i] + 1 for i in range(2))
+    out = np.zeros((x.shape[0], x.shape[1]) + out_shape, dtype=x.dtype)
+    for b in range(x.shape[0]):
+        for c in range(x.shape[1]):
+            for oy in range(out_shape[0]):
+                for ox in range(out_shape[1]):
+                    sy = oy * stride[0]
+                    sx = ox * stride[1]
+                    window = padded[(b, c, slice(sy, sy + kernel_size[0]), slice(sx, sx + kernel_size[1]))]
+                    out[b, c, oy, ox] = np.mean(window)
+    return out
+
+
+def _batch_norm(x, weight, bias, running_mean, running_var, eps):
+    shape = (1, x.shape[1]) + (1,) * (x.ndim - 2)
+    return (x - running_mean.reshape(shape)) / np.sqrt(running_var.reshape(shape) + eps) * weight.reshape(shape) + bias.reshape(shape)
+
+
+def _conv2d(x, weight, bias, stride, padding, dilation, groups):
+    if isinstance(stride, int): stride = (stride, stride)
+    if isinstance(padding, int): padding = (padding, padding)
+    if isinstance(dilation, int): dilation = (dilation, dilation)
+    n, c_in, h, w = x.shape
+    c_out, c_per_group, kh, kw = weight.shape
+    oh = (h + 2 * padding[0] - dilation[0] * (kh - 1) - 1) // stride[0] + 1
+    ow = (w + 2 * padding[1] - dilation[1] * (kw - 1) - 1) // stride[1] + 1
+    padded = np.zeros((n, c_in, h + 2 * padding[0], w + 2 * padding[1]), dtype=x.dtype)
+    padded[:, :, padding[0]:padding[0] + h, padding[1]:padding[1] + w] = x
+    out = np.zeros((n, c_out, oh, ow), dtype=x.dtype)
+    out_per_group = c_out // groups
+    in_per_group = c_in // groups
+    for b in range(n):
+        for oc in range(c_out):
+            g = oc // out_per_group
+            for oy in range(oh):
+                for ox in range(ow):
+                    total = 0.0
+                    for icg in range(c_per_group):
+                        ic = g * in_per_group + icg
+                        for ky in range(kh):
+                            iy = oy * stride[0] + ky * dilation[0]
+                            for kx in range(kw):
+                                ix = ox * stride[1] + kx * dilation[1]
+                                total += padded[b, ic, iy, ix] * weight[oc, icg, ky, kx]
+                    out[b, oc, oy, ox] = total + bias[oc]
+    return out
+
+def init(num_input_features, num_output_features):
+    global transition_0_weight, transition_0_bias, transition_0_running_mean, transition_0_running_var, transition_0_eps, transition_1, transition_2_weight, transition_2_bias, transition_2_stride, transition_2_padding, transition_2_dilation, transition_2_groups, transition_3_kernel_size, transition_3_stride, transition_3_padding
+    transition_0_weight = np.ones((num_input_features,), dtype=np.float32)
+    transition_0_bias = np.zeros((num_input_features,), dtype=np.float32)
+    transition_0_running_mean = np.zeros((num_input_features,), dtype=np.float32)
+    transition_0_running_var = np.ones((num_input_features,), dtype=np.float32)
+    transition_0_eps = 1e-5
+    transition_1 = None
+    transition_2_weight = np.zeros((num_output_features, num_input_features // 1) + _as_tuple(1, 2), dtype=np.float32)
+    transition_2_bias = np.zeros((num_output_features,), dtype=np.float32)
+    transition_2_stride = 1
+    transition_2_padding = 0
+    transition_2_dilation = 1
+    transition_2_groups = 1
+    transition_3_kernel_size = 2
+    transition_3_stride = 2
+    transition_3_padding = 0
+
+def forward(x, num_input_features, num_output_features):
+    return _avgpool2d(_conv2d(np.maximum(_batch_norm(x, transition_0_weight, transition_0_bias, transition_0_running_mean, transition_0_running_var, transition_0_eps), 0), transition_2_weight, transition_2_bias, transition_2_stride, transition_2_padding, transition_2_dilation, transition_2_groups), transition_3_kernel_size, transition_3_stride, transition_3_padding)
+

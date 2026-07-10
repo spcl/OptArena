@@ -1,0 +1,21 @@
+# OptArena benchmark manifest (KernelBench port).
+name: 34_VanillaRNNHidden
+func_name: forward
+kind: microkernel
+level: 3
+parameters:
+  S:
+    batch_size: 8
+    hidden_size: 256
+    input_size: 1024
+    output_size: 128
+    sequence_length: 256
+init:
+  arrays:
+    x: (sequence_length, batch_size, input_size)
+    h0: (batch_size, hidden_size)
+output_args: []
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

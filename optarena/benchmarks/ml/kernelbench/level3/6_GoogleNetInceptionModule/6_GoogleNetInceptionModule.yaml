@@ -1,0 +1,25 @@
+# OptArena benchmark manifest (KernelBench port).
+name: 6_GoogleNetInceptionModule
+func_name: forward
+kind: microkernel
+level: 3
+parameters:
+  S:
+    batch_size: 10
+    height: 224
+    in_channels: 480
+    out_1x1: 192
+    out_3x3: 208
+    out_5x5: 48
+    pool_proj: 64
+    reduce_3x3: 96
+    reduce_5x5: 16
+    width: 224
+init:
+  arrays:
+    x: (batch_size, in_channels, height, width)
+output_args: []
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

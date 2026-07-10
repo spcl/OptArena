@@ -1,0 +1,17 @@
+# OptArena benchmark manifest (KernelBench port).
+name: 12_VGG19
+func_name: forward
+kind: microkernel
+level: 3
+parameters:
+  S:
+    batch_size: 10
+    num_classes: 1000
+init:
+  arrays:
+    x: (batch_size, 3, 224, 224)
+output_args: []
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning
