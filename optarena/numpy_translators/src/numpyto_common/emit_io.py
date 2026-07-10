@@ -28,9 +28,6 @@ AUTO_MARKER = "optarena-autogen"
 #: hand override. (DaCe's ``dace_emit`` stamps its own docstring marker.)
 _LEGACY_MARKERS = ("auto-generated from the numpy reference",)
 
-#: All markers (current + legacy) that identify an auto-generated file.
-GENERATED_MARKERS = (AUTO_MARKER,) + _LEGACY_MARKERS
-
 
 def _first_line(path: pathlib.Path) -> str:
     """The file's first line, or ``""`` if it is empty/unreadable. Reading a

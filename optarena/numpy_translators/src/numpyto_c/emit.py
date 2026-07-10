@@ -400,12 +400,19 @@ class _CBodyEmitter(BaseEmitter):
             if isinstance(v, int):
                 return str(v)
             if isinstance(v, float):
+                if not math.isfinite(v):
+                    # inf / nan have no numeric literal form; emit the <math.h>
+                    # macros (also valid in C++ via <cmath>). Reached by a folded
+                    # or computed non-finite Constant -- the ``np.inf`` / ``np.nan``
+                    # attributes are lowered to the INFINITY / NAN names upstream.
+                    if math.isnan(v):
+                        return "NAN"
+                    return "INFINITY" if v > 0 else "-INFINITY"
                 # In a float32 kernel a bare double literal would force the
                 # surrounding arithmetic into double (numpy keeps it float32);
-                # the ``f`` suffix keeps it single-precision. Non-finite values
-                # (inf/nan) have no ``f``-suffixed spelling, so leave them.
+                # the ``f`` suffix keeps it single-precision.
                 lit = repr(v)
-                if self._is_float32_kernel() and math.isfinite(v):
+                if self._is_float32_kernel():
                     lit += "f"
                 return lit
             if isinstance(v, complex):

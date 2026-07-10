@@ -120,3 +120,22 @@ def ctype_for_scalar_kind(kind: str) -> type:
     if dt is None or dt.ctype is None:
         raise KeyError(f"no ctypes equivalent for scalar kind {kind!r}")
     return dt.ctype
+
+
+#: reverse lookup from a pointer ``kind`` (``ptr_*``) back to info, for consumers
+#: (the numerical oracle) that allocate a buffer from an emitted array kind.
+_BY_PTR_KIND: Dict[str, DTypeInfo] = {v.ptr_kind: v for v in REGISTRY.values()}
+
+
+def info_for_kind(kind: str) -> DTypeInfo:
+    """:class:`DTypeInfo` for a binding ``kind`` -- accepts either a ``ptr_*``
+    pointer kind or a by-value scalar kind. Raises ``KeyError`` if unknown."""
+    dt = _BY_PTR_KIND.get(kind) or _BY_SCALAR_KIND.get(kind)
+    if dt is None:
+        raise KeyError(f"unknown binding kind {kind!r}")
+    return dt
+
+
+def numpy_for_kind(kind: str) -> str:
+    """Canonical numpy dtype name for a binding ``kind`` (scalar or ``ptr_*``)."""
+    return info_for_kind(kind).numpy

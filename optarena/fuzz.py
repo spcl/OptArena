@@ -491,7 +491,8 @@ def large_shapes(parameters: Dict[str, Any],
     fuzz interval, so timing is stable. Returns ``(label, sample)`` pairs with
     ``config`` merged in. A seed whose draw cannot satisfy the constraints within the
     resample budget is DROPPED (no shape for that seed); a config whose constraints
-    reject every seed yields no timed shapes at all.
+    reject every seed yields no timed shapes at all -- that case is logged (WARNING
+    for a fully-dropped config, DEBUG for a partial drop) so it is never silent.
     """
     mode = str(mode if mode is not None else perf_mode())
     fixed = dict(config or {})
@@ -526,6 +527,17 @@ def large_shapes(parameters: Dict[str, Any],
         except ValueError:
             continue
         out.append((label, sample))
+    # Surface dropped seeds rather than silently thinning (or zeroing) a config's
+    # timed cells: _resolve_against already resamples _MAX_RESAMPLE times per seed,
+    # so a drop means the constraints are unsatisfiable in the large-shape range --
+    # a zero-timed config is almost always an over-tight or contradictory
+    # constraint, not intent. Total drop -> WARNING (the config vanishes from
+    # timing); partial drop -> DEBUG (fewer samples -> a noisier leaderboard cell).
+    if len(out) < len(seeds):
+        logging.getLogger(__name__).log(
+            logging.WARNING if not out else logging.DEBUG,
+            "large_shapes: config %s timed %d/%d shapes -- constraints %s dropped %d seed(s)",
+            fixed, len(out), len(seeds), constraints, len(seeds) - len(out))
     return out
 
 

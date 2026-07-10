@@ -1302,8 +1302,6 @@ def _ssa_rename_reassigned(tree: ast.AST,
                 ext = _iter_extent_of(stmt.value, shapes)
                 if ext is not None:
                     shape_toks = tuple(ast.unparse(e) for e in ext)
-                    versions_by_shape = version.setdefault(
-                        orig, {}) if isinstance(version.get(orig), dict) else None
                     # ``version[orig]`` is a dict ``{shape_tuple ->
                     # active_name}``. Each distinct shape gets its own
                     # active name; once minted, every later assignment
@@ -2117,14 +2115,14 @@ class SliceFusion(ast.NodeTransformer):
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
-        return self._rewrite(node, node.targets[0], node.value, aug_op=None) or node
+        return self._rewrite(node.targets[0], node.value, aug_op=None) or node
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
         self.generic_visit(node)
-        return self._rewrite(node, node.target, node.value, aug_op=node.op) or node
+        return self._rewrite(node.target, node.value, aug_op=node.op) or node
 
-    def _rewrite(self, original_node: ast.stmt, target: ast.AST,
-                 value: ast.expr, aug_op: Optional[ast.AST]) -> Optional[ast.AST]:
+    def _rewrite(self, target: ast.AST, value: ast.expr,
+                 aug_op: Optional[ast.AST]) -> Optional[ast.AST]:
         """Common slice-fusion path for both Assign and AugAssign.
 
         ``aug_op`` is ``None`` for plain Assign or the augmented operator
@@ -2756,14 +2754,14 @@ class _BooleanMaskRewriter(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
-        return self._rewrite(node, node.targets[0] if len(node.targets) == 1 else None,
+        return self._rewrite(node.targets[0] if len(node.targets) == 1 else None,
                               node.value, aug_op=None) or node
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
         self.generic_visit(node)
-        return self._rewrite(node, node.target, node.value, aug_op=node.op) or node
+        return self._rewrite(node.target, node.value, aug_op=node.op) or node
 
-    def _rewrite(self, original, target, value, aug_op):
+    def _rewrite(self, target, value, aug_op):
         if (not isinstance(target, ast.Subscript)
                 or not isinstance(target.value, ast.Name)):
             return None
@@ -4928,6 +4926,14 @@ class _ChainedAssignRewriter(ast.NodeTransformer):
         return ast.parse(text).body
 
 
+def _target_base_name(node: ast.AST) -> Optional[str]:
+    """Root name of an assignment target (``out[i][j]`` -> ``out``, a bare ``x``
+    -> ``x``), or ``None`` when the target is not name-rooted."""
+    while isinstance(node, ast.Subscript):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
 class _TupleAssignRewriter(ast.NodeTransformer):
     """Expand tuple-LHS assignments into per-element statements.
 
@@ -4940,6 +4946,14 @@ class _TupleAssignRewriter(ast.NodeTransformer):
     Integer local names produced by either path are collected in
     :attr:`int_locals` so the emitter can emit ``int n;`` declarations
     before first use.
+
+    A tuple assign binds every target from the OLD values simultaneously
+    (``a, b = b, a + b``). A plain sequential split reads an already-updated
+    target, so when any RHS element reads a target name this pass evaluates
+    each RHS into a fresh temp first and binds the targets from the temps --
+    restoring numpy/python simultaneity. Temps are dtyped by the later harvest
+    phase from their RHS (this rewriter runs in ``normalize-calls``, before
+    ``seed-dtypes-and-harvest``), so no explicit declaration hook is needed.
     """
 
     def __init__(self, arrays_shapes):
@@ -4947,6 +4961,8 @@ class _TupleAssignRewriter(ast.NodeTransformer):
         #: Names introduced as integer scalar locals (collected for the
         #: emitter to declare at the top of the function body).
         self.int_locals: List[str] = []
+        #: Monotonic counter for unique swap-temp names across the body.
+        self._ctr: List[int] = [0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         if not (len(node.targets) == 1
@@ -4964,12 +4980,28 @@ class _TupleAssignRewriter(ast.NodeTransformer):
             tgt_elts = node.targets[0].elts
             if (isinstance(node.value, ast.Tuple)
                     and len(node.value.elts) == len(tgt_elts)):
+                val_elts = node.value.elts
+                # Simultaneous bind (numpy): every target reads the OLD values.
+                # A subscript target written here must not be observed already
+                # updated by another element's RHS -- ``out[i], out[j] = out[j],
+                # out[i]`` split sequentially double-reads the overwritten slot.
+                # Stage each RHS into a fresh temp when a written base array is
+                # read by any element; else a plain split preserves the order.
+                written_bases = {b for b in (_target_base_name(t) for t in tgt_elts) if b}
+                read_names = {nd.id for v in val_elts for nd in ast.walk(v) if isinstance(nd, ast.Name)}
                 stmts: List[ast.stmt] = []
-                for tgt, val in zip(tgt_elts, node.value.elts):
-                    # Preserve the per-element store context (Subscript
-                    # store / Name store) by parsing the unparsed form.
-                    line = f"{ast.unparse(tgt)} = {ast.unparse(val)}"
-                    stmts.extend(ast.parse(line).body)
+                if written_bases & read_names:
+                    self._ctr[0] += 1
+                    pfx = f"__swap{self._ctr[0]}_"
+                    for i, val in enumerate(val_elts):
+                        stmts.extend(ast.parse(f"{pfx}{i} = {ast.unparse(val)}").body)
+                    for i, tgt in enumerate(tgt_elts):
+                        stmts.extend(ast.parse(f"{ast.unparse(tgt)} = {pfx}{i}").body)
+                    return stmts
+                for tgt, val in zip(tgt_elts, val_elts):
+                    # Preserve the per-element store context (Subscript store /
+                    # Name store) by parsing the unparsed form.
+                    stmts.extend(ast.parse(f"{ast.unparse(tgt)} = {ast.unparse(val)}").body)
                 return stmts
             return node
 
@@ -4985,14 +5017,39 @@ class _TupleAssignRewriter(ast.NodeTransformer):
             text = "\n".join(f"{n} = {sym}" for n, sym in zip(names, shape))
             return ast.parse(text).body
 
-        # Tuple RHS -> per-element assignment. Treat ints as int locals.
+        # Tuple RHS -> per-element assignment.
         if isinstance(node.value, ast.Tuple) and len(node.value.elts) == len(names):
+            elts = node.value.elts
             if all(isinstance(v, ast.Constant) and isinstance(v.value, int)
-                   for v in node.value.elts):
+                   for v in elts):
+                # Pure int-constant tuple (grid dims): no read-after-write
+                # hazard is possible, so emit direct int locals.
                 self.int_locals.extend(names)
-            text = "\n".join(
-                f"{n} = {ast.unparse(v)}"
-                for n, v in zip(names, node.value.elts))
+                text = "\n".join(f"{n} = {ast.unparse(v)}" for n, v in zip(names, elts))
+                return ast.parse(text).body
+            # Positional self-copies (``x = x``) never race, and drop out of the
+            # hazard test. They are common after shape-symbol resolution rewrites
+            # ``n, m = arr.shape`` into ``n, m = n, m``: those must stay plain
+            # ``n = n`` splits so the promote-params pass keeps seeing n / m as
+            # scalar parameters (temping them would demote them to locals).
+            changed = [i for i, v in enumerate(elts)
+                       if not (isinstance(v, ast.Name) and v.id == names[i])]
+            written = {names[i] for i in changed}
+            read = {nd.id for i in changed for nd in ast.walk(elts[i]) if isinstance(nd, ast.Name)}
+            if written & read:
+                # Read-after-write hazard: a reassigned target is read by another
+                # element (``a, b = b, a + b``). Stage each changed RHS into a
+                # fresh temp, bind the targets from the temps, and keep any
+                # self-copies as plain no-op splits.
+                self._ctr[0] += 1
+                pfx = f"__swap{self._ctr[0]}_"
+                lines = [f"{pfx}{i} = {ast.unparse(elts[i])}" for i in changed]
+                lines += [f"{names[i]} = {pfx}{i}" for i in changed]
+                lines += [f"{names[i]} = {ast.unparse(elts[i])}"
+                          for i in range(len(names)) if i not in set(changed)]
+                return ast.parse("\n".join(lines)).body
+            # No hazard: plain per-element split.
+            text = "\n".join(f"{n} = {ast.unparse(v)}" for n, v in zip(names, elts))
             return ast.parse(text).body
 
         return node

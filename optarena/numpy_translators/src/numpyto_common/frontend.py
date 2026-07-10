@@ -68,6 +68,42 @@ def native_desugar(fn: ast.FunctionDef) -> None:
     ast.fix_missing_locations(fn)
 
 
+class _NonFiniteNormalizer(ast.NodeTransformer):
+    """Canonicalise the alternate spellings of IEEE infinity / NaN to ``np.inf`` /
+    ``np.nan`` -- the single form every backend already lowers (native emitters map
+    it to ``INFINITY`` / ``NAN`` / ``ieee_value``; python backends keep it verbatim).
+
+    Covers ``math.inf`` / ``math.nan`` and ``float('inf')`` / ``float('-inf')`` /
+    ``float('nan')`` (any casing / ``'infinity'`` spelling). Without this, a bare
+    ``inf`` reaches the C / Fortran constant emitters (an invalid literal) or a
+    string cast trips the ``literal 'inf'`` guard on every backend.
+    """
+
+    @staticmethod
+    def _np_const(attr: str) -> ast.Attribute:
+        return ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=attr, ctx=ast.Load())
+
+    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        self.generic_visit(node)
+        if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan"):
+            return ast.copy_location(self._np_const(node.attr), node)
+        return node
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        if not (isinstance(node.func, ast.Name) and node.func.id == "float" and len(node.args) == 1
+                and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+            return node
+        s = node.args[0].value.strip().lower()
+        if s in ("inf", "+inf", "infinity", "+infinity"):
+            return ast.copy_location(self._np_const("inf"), node)
+        if s in ("-inf", "-infinity"):
+            return ast.copy_location(ast.UnaryOp(op=ast.USub(), operand=self._np_const("inf")), node)
+        if s == "nan":
+            return ast.copy_location(self._np_const("nan"), node)
+        return node
+
+
 def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optional[str] = None) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
@@ -107,6 +143,10 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     # and the eigh in a helper (cegterg's ``_diaghg``) is lowered before it inlines.
     from numpyto_common.numpy_desugar import _EighLoopRewriter, _eigh_alias_names
     _EighLoopRewriter(_eigh_alias_names(tree)).visit(tree)
+    # Canonicalise IEEE inf / nan spellings (``math.inf``, ``float('inf')`` ...) to
+    # ``np.inf`` / ``np.nan`` -- the one form every backend lowers -- across the
+    # whole module so kernel + helpers are covered for native AND python backends.
+    _NonFiniteNormalizer().visit(tree)
     ast.fix_missing_locations(tree)
     fn = _find_function(tree, func_name)
     if fn is None:

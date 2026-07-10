@@ -19,6 +19,7 @@ the Fortran-specific tweaks:
 import ast
 import copy
 import dataclasses
+import math
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -642,6 +643,15 @@ class _FortranBodyEmitter(BaseEmitter):
             if isinstance(v, int):
                 return f"({v})" if v < 0 else str(v)
             if isinstance(v, float):
+                if not math.isfinite(v):
+                    # inf / nan have no Fortran literal form -- express via
+                    # ieee_value and flag the intrinsic use (same path the
+                    # INFINITY / NAN names lowered from np.inf / np.nan take).
+                    self._used_ieee = True
+                    if math.isnan(v):
+                        return f"ieee_value(0.0_{self._rk}, ieee_quiet_nan)"
+                    sign = "ieee_positive_inf" if v > 0 else "ieee_negative_inf"
+                    return f"ieee_value(0.0_{self._rk}, {sign})"
                 lit = f"{v}_{self._rk}"
                 return f"({lit})" if v < 0 else lit
             if isinstance(v, complex):
@@ -1518,9 +1528,6 @@ class _FortranBodyEmitter(BaseEmitter):
 
         return emit_one(left, r_kind), emit_one(right, l_kind)
 
-    def _promote_minmax_args(self, args) -> str:
-        return ", ".join(self._minmax_arg_list(args)[1])
-
     def _nan_minmax(self, is_max: bool, arg_strs: List[str]) -> str:
         """Fold ``arg_strs`` into a NaN-PROPAGATING min/max. Fortran's MAX / MIN
         have processor-dependent NaN behaviour; numpy maximum / minimum propagate
@@ -1780,7 +1787,7 @@ class _FortranRenameTemps(ast.NodeTransformer):
         return node
 
 
-def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, dtype_override: Optional[str] = None) -> str:
+def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     """Emit a self-contained Fortran subroutine with timing wrapper."""
     name = fn_name or f"{kir.kernel_name}_d_auto"
     # ABI parameter order (the order the binding JSON -- and thus every
@@ -2686,8 +2693,15 @@ def _emit_fortran_helper(hkir: KernelIR) -> str:
     be.return_mode = ret_name
     body = be.emit_block(hkir.tree.body, indent="            ")
     decl_lines = "\n".join(f"        {d}" for d in decls + iter_decls + local_decls)
+    # A contained helper has its own specification part: when its body emits a
+    # non-finite constant (``ieee_value``) it must import ieee_arithmetic itself.
+    # Host association is not relied on -- the host imports it only when ITS OWN
+    # body uses a non-finite value, so a helper-only inf/nan would otherwise
+    # reference ieee_value with no import anywhere.
+    ieee_use = "        use, intrinsic :: ieee_arithmetic\n" if be._used_ieee else ""
     return (f"    subroutine {name}({', '.join(param_names)})\n"
             f"        use, intrinsic :: iso_c_binding\n"
+            f"{ieee_use}"
             f"{decl_lines}\n{body}\n"
             f"    end subroutine {name}\n")
 

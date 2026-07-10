@@ -3159,7 +3159,6 @@ def expand_tensordot(target: ast.expr, args: List[ast.expr],
         if b_spec[i] is None:
             b_spec[i] = letters[nxt]
             nxt += 1
-    contracted = {a_spec[ca] for ca in a_ax}
     out_spec = [c for i, c in enumerate(a_spec) if i not in a_ax] + \
                [c for i, c in enumerate(b_spec) if i not in b_ax]
     spec = f"{''.join(a_spec)},{''.join(b_spec)}->{''.join(out_spec)}"
@@ -3808,7 +3807,6 @@ def expand_reshape(target: ast.expr, args: List[ast.expr],
         stride = _stride(tgt_shape, i)
         flat_parts.append(it if stride == "1" else f"({it}) * {stride}")
     flat_expr = " + ".join(flat_parts) if flat_parts else "0"
-    flat_name_node = ast.parse(flat_expr, mode="eval").body
 
     # Decode the source multi-index from the flat index via div/mod on the source
     # strides (same ``order``). The MOST-major axis (largest stride: ``i == 0`` in
@@ -4239,7 +4237,6 @@ def expand_lstsq(target: ast.expr, args: List[ast.expr],
     a_pp = _lstsq_index2d(a_name, p_name, p_name, a_base)
     a_rp = _lstsq_index2d(a_name, r_name, p_name, a_base)
     a_pc = _lstsq_index2d(a_name, p_name, c_name, a_base)
-    a_rc = _lstsq_index2d(a_name, r_name, c_name, a_base)
     a_rcol = _lstsq_index2d(a_name, r_name, c_name, a_base)
     a_rr = _lstsq_index2d(a_name, r_name, r_name, a_base)
     b_p = _lstsq_index1d(b_name, p_name, b_base)
@@ -4728,7 +4725,6 @@ def expand_linalg_solve(target: ast.expr, args: List[ast.expr],
         targets=[_store("__sol_aw")],
         value=ast.Call(func=_name("__optarena_zeros__"), args=[], keywords=[])))
     # Init: copy A into __sol_aw and b into target.
-    init_body: List[ast.stmt] = []
     if is_2d:
         m_ast = _const_or_name(b_shape[1])
         copy_inner = ast.For(
@@ -5031,14 +5027,6 @@ def expand_linalg_inv(target: ast.expr, args: List[ast.expr],
         iter=ast.Call(func=_name("range"), args=[n_ast], keywords=[]),
         body=swap_body, orelse=[])
     # Divide pivot row by aw[k, k].
-    pivot_div_body = [
-        ast.Assign(targets=[tgt_store(K, C)],
-                   value=ast.BinOp(left=tgt(K, C), op=ast.Div(),
-                                     right=aw(K, K))),
-        ast.Assign(targets=[aw_store(K, C)],
-                   value=ast.BinOp(left=aw(K, C), op=ast.Div(),
-                                     right=aw(K, K))),
-    ]
     # NOTE: divides by aw[k, k] -- evaluate this BEFORE aw[k, k] itself
     # is overwritten. The unparser order processes C left-to-right; we
     # use a stash:
