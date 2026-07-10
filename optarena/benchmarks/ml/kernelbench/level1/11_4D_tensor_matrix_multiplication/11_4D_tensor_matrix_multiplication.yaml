@@ -1,0 +1,41 @@
+# OptArena benchmark manifest (KernelBench port).
+name: 11_4D_tensor_matrix_multiplication
+func_name: four_d_tensor_matrix_multiplication
+kind: microkernel
+level: 1
+parameters:
+  S:
+    b: 2
+    i: 3
+    j: 4
+    k: 6
+    l: 5
+  M:
+    b: 4
+    i: 6
+    j: 8
+    k: 12
+    l: 10
+  L:
+    b: 8
+    i: 12
+    j: 16
+    k: 24
+    l: 20
+  XL:
+    b: 16
+    i: 24
+    j: 32
+    k: 48
+    l: 40
+init:
+  arrays:
+    A: (b, i, j, l)
+    B: (l, k)
+    out: (b, i, j, k)
+output_args:
+- out
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

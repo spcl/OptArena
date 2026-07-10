@@ -6,6 +6,7 @@ import json
 import re
 import signal
 import string
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -13,11 +14,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-
 ROOT = Path(__file__).resolve().parents[1]
-# PyTorch level sources live in the KernelBench submodule; translator outputs
-# (result/) stay under ROOT.
-KB_ROOT = ROOT / "KernelBench" / "KernelBench"
+RESULT_ROOT = ROOT.parent / "benchmarks" / "ml" / "KernelBench"
 
 
 DEFAULT_OVERRIDES = {
@@ -69,38 +67,38 @@ DEFAULT_OVERRIDES = {
 
 
 PER_CASE_OVERRIDES = {
-    ("level1", "1.py"): {"N": 8},
-    ("level1", "3.py"): {"batch_size": 2, "m": 4, "k": 5, "n": 6},
-    ("level1", "10.py"): {"N": 2, "M": 3, "K": 4, "L": 5},
-    ("level1", "11.py"): {"b": 2, "i": 3, "j": 4, "l": 5, "k": 6},
-    ("level1", "12.py"): {"N": 6, "M": 5},
-    ("level1", "16.py"): {"M": 4, "K": 5, "N": 4},
-    ("level1", "17.py"): {"M": 4, "K": 5, "N": 4},
-    ("level1", "18.py"): {"M": 4, "K": 5, "N": 4},
-    ("level1", "33.py"): {"features": 4, "dim1": 5, "dim2": 6},
-    ("level1", "35.py"): {"features": 4, "num_groups": 2, "dim1": 5, "dim2": 6},
-    ("level1", "40.py"): {"normalized_shape": (4, 5, 6), "features": 4, "dim1": 5, "dim2": 6},
-    ("level1", "72.py"): {"in_channels": 4, "out_channels": 4, "groups": 4, "depth": 4, "height": 5, "width": 6},
-    ("level1", "75.py"): {"in_channels": 4, "out_channels": 8, "groups": 4, "height": 6, "width": 7},
-    ("level1", "82.py"): {"in_channels": 4, "out_channels": 4, "groups": 4},
-    ("level1", "83.py"): {"in_channels": 4, "out_channels": 4, "groups": 4},
-    ("level1", "84.py"): {"in_channels": 4, "out_channels": 4, "groups": 4},
-    ("level1", "85.py"): {"in_channels": 4, "out_channels": 4, "groups": 4},
-    ("level1", "97.py"): {"batch_size": 2, "num_heads": 2, "sequence_length": 8, "embedding_dimension": 8},
-    ("level1", "100.py"): {"batch_size": 2, "input_shape": (2,)},
-    ("level2", "21.py"): {"in_channels": 2, "out_channels": 8, "num_groups": 4},
-    ("level2", "3.py"): {"in_channels": 2, "out_channels": 12, "norm_shape": (8,)},
-    ("level2", "27.py"): {"in_channels": 2, "out_channels": 4},
-    ("level2", "23.py"): {"in_channels": 2, "out_channels": 8, "num_groups": 4},
-    ("level2", "34.py"): {"in_channels": 2, "out_channels": 6},
-    ("level2", "60.py"): {"in_channels": 2, "out_channels": 4, "groups": 4},
-    ("level2", "92.py"): {"in_channels": 2, "out_channels": 16, "groups": 8},
-    ("level2", "98.py"): {"pool_kernel_size": 2},
+    ("level1", "Square_matrix_multiplication.py"): {"N": 8},
+    ("level1", "Batched_matrix_multiplication.py"): {"batch_size": 2, "m": 4, "k": 5, "n": 6},
+    ("level1", "ThreeD_tensor_matrix_multiplication.py"): {"N": 2, "M": 3, "K": 4, "L": 5},
+    ("level1", "FourD_tensor_matrix_multiplication.py"): {"b": 2, "i": 3, "j": 4, "l": 5, "k": 6},
+    ("level1", "Matmul_with_diagonal_matrices.py"): {"N": 6, "M": 5},
+    ("level1", "Matmul_with_transposed_A.py"): {"M": 4, "K": 5, "N": 4},
+    ("level1", "Matmul_with_transposed_B.py"): {"M": 4, "K": 5, "N": 4},
+    ("level1", "Matmul_with_transposed_both.py"): {"M": 4, "K": 5, "N": 4},
+    ("level1", "BatchNorm.py"): {"features": 4, "dim1": 5, "dim2": 6},
+    ("level1", "GroupNorm.py"): {"features": 4, "num_groups": 2, "dim1": 5, "dim2": 6},
+    ("level1", "LayerNorm.py"): {"normalized_shape": (4, 5, 6), "features": 4, "dim1": 5, "dim2": 6},
+    ("level1", "conv_transposed_3D_asymmetric_input_asymmetric_kernel_strided_padded_grouped.py"): {"in_channels": 4, "out_channels": 4, "groups": 4, "depth": 4, "height": 5, "width": 6},
+    ("level1", "conv_transposed_2D_asymmetric_input_asymmetric_kernel_strided_grouped_padded_dilated.py"): {"in_channels": 4, "out_channels": 8, "groups": 4, "height": 6, "width": 7},
+    ("level1", "conv_depthwise_2D_square_input_square_kernel.py"): {"in_channels": 4, "out_channels": 4, "groups": 4},
+    ("level1", "conv_depthwise_2D_square_input_asymmetric_kernel.py"): {"in_channels": 4, "out_channels": 4, "groups": 4},
+    ("level1", "conv_depthwise_2D_asymmetric_input_square_kernel.py"): {"in_channels": 4, "out_channels": 4, "groups": 4},
+    ("level1", "conv_depthwise_2D_asymmetric_input_asymmetric_kernel.py"): {"in_channels": 4, "out_channels": 4, "groups": 4},
+    ("level1", "ScaledDotProductAttention.py"): {"batch_size": 2, "num_heads": 2, "sequence_length": 8, "embedding_dimension": 8},
+    ("level1", "HingeLoss.py"): {"batch_size": 2, "input_shape": (2,)},
+    ("level2", "Conv2d_Add_Scale_Sigmoid_GroupNorm.py"): {"in_channels": 2, "out_channels": 8, "num_groups": 4},
+    ("level2", "ConvTranspose3d_Sum_LayerNorm_AvgPool_GELU.py"): {"in_channels": 2, "out_channels": 12, "norm_shape": (8,)},
+    ("level2", "Conv3d_HardSwish_GroupNorm_Mean.py"): {"in_channels": 2, "out_channels": 4},
+    ("level2", "Conv3d_GroupNorm_Mean.py"): {"in_channels": 2, "out_channels": 8, "num_groups": 4},
+    ("level2", "ConvTranspose3d_LayerNorm_GELU_Scaling.py"): {"in_channels": 2, "out_channels": 6},
+    ("level2", "ConvTranspose3d_Swish_GroupNorm_HardSwish.py"): {"in_channels": 2, "out_channels": 4, "groups": 4},
+    ("level2", "Conv2d_GroupNorm_Tanh_HardSwish_ResidualAdd_LogSumExp.py"): {"in_channels": 2, "out_channels": 16, "groups": 8},
+    ("level2", "Matmul_AvgPool_GELU_Scale_Max.py"): {"pool_kernel_size": 2},
 }
 
 
 PER_CASE_INPUTS = {
-    ("level1", "50.py"): lambda: [torch.rand(1, 3, 16, 16)],
+    ("level1", "conv_standard_2D_square_input_square_kernel.py"): lambda: [torch.rand(1, 3, 16, 16)],
 }
 
 
@@ -125,12 +123,29 @@ def duplicate_suffix(index: int) -> str:
             return out
 
 
-def index_map(level: str) -> dict[str, str]:
-    path = KB_ROOT / level / "index.json"
-    if not path.exists():
+def read_index_data(level: str) -> dict[str, str]:
+    path = ROOT / level / "index.json"
+    if path.exists():
+        with path.open() as f:
+            return json.load(f)
+    rel = path.relative_to(ROOT.parent.parent)
+    try:
+        proc = subprocess.run(
+            ["git", "show", f"HEAD:{rel.as_posix()}"],
+            cwd=ROOT.parent.parent,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return {}
-    with path.open() as f:
-        data = json.load(f)
+    return json.loads(proc.stdout)
+
+
+def index_map(level: str) -> dict[str, str]:
+    data = read_index_data(level)
+    if not data:
+        return {}
     counts: dict[str, int] = {}
     filenames: dict[str, str] = {}
     for key in sorted(data, key=int):
@@ -156,6 +171,10 @@ def case_lookup_keys(level: str, filename: str):
     if cid is not None:
         keys.append((level, f"{cid}.py"))
     return keys
+
+
+def numpy_filename(filename: str) -> str:
+    return f"{Path(filename).stem}_numpy.py"
 
 
 class Timeout(Exception):
@@ -279,8 +298,8 @@ def compare_outputs(a, b, rtol: float, atol: float):
 
 
 def run_case(level: str, filename: str, timeout: int, rtol: float, atol: float):
-    source_path = KB_ROOT / level / filename
-    result_path = ROOT / "result" / level / filename
+    source_path = ROOT / level / filename
+    result_path = RESULT_ROOT / level / numpy_filename(filename)
     module_stem = sanitize_name(filename[:-3])
     source = import_module(source_path, f"torch_{level}_{module_stem}")
     result = import_module(result_path, f"numpy_{level}_{module_stem}")
@@ -353,14 +372,17 @@ def iter_cases(levels: list[str], ids: list[str] | None):
 
 
 def main() -> int:
+    global RESULT_ROOT
     parser = argparse.ArgumentParser()
     parser.add_argument("--levels", nargs="+", default=["level1", "level2"])
+    parser.add_argument("--result-root", type=Path, default=RESULT_ROOT)
     parser.add_argument("--ids", nargs="*")
     parser.add_argument("--timeout", type=int, default=150)
     parser.add_argument("--rtol", type=float, default=1e-4)
     parser.add_argument("--atol", type=float, default=5e-5)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+    RESULT_ROOT = args.result_root
 
     results = []
     for level, filename in iter_cases(args.levels, args.ids):

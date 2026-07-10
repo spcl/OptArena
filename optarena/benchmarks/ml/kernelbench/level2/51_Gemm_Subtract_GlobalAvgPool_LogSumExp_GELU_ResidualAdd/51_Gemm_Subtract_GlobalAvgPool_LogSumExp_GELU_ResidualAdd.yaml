@@ -1,0 +1,39 @@
+# OptArena benchmark manifest (KernelBench port).
+name: 51_Gemm_Subtract_GlobalAvgPool_LogSumExp_GELU_ResidualAdd
+func_name: gemm_subtract_global_avg_pool_logsumexp_gelu_residual_add
+kind: microkernel
+level: 2
+parameters:
+  S:
+    batch_size: 4
+    bias: true
+    in_features: 6
+    out_features: 8
+  M:
+    batch_size: 8
+    bias: true
+    in_features: 12
+    out_features: 16
+  L:
+    batch_size: 16
+    bias: true
+    in_features: 24
+    out_features: 32
+  XL:
+    batch_size: 32
+    bias: true
+    in_features: 48
+    out_features: 64
+init:
+  arrays:
+    x: (batch_size, in_features)
+    gemm_weight: (out_features, in_features)
+    gemm_bias: (out_features,)
+    subtract: (out_features,)
+    out: (batch_size, in_features)
+output_args:
+- out
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

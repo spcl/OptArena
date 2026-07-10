@@ -1,0 +1,34 @@
+# OptArena benchmark manifest (KernelBench port).
+name: 99_TripletMarginLoss
+func_name: triplet_margin_loss
+kind: microkernel
+level: 1
+parameters:
+  S:
+    batch_size: 4
+    dim1: 8
+    margin: 1.0
+  M:
+    batch_size: 8
+    dim1: 16
+    margin: 1.0
+  L:
+    batch_size: 16
+    dim1: 32
+    margin: 1.0
+  XL:
+    batch_size: 32
+    dim1: 64
+    margin: 1.0
+init:
+  arrays:
+    anchor: (batch_size, dim1)
+    positive: (batch_size, dim1)
+    negative: (batch_size, dim1)
+    out: (1,)
+output_args:
+- out
+taxonomy:
+  track: ml
+  subtrack: kernelbench
+  domain: Learning

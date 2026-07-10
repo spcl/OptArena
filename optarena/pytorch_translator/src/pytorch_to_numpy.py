@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import ast
 import json
 import re
@@ -96,6 +97,38 @@ def level_sources(level_dir: Path) -> list[Path]:
         paths.extend(p for p in sorted(level_dir.glob("*.py")) if p not in seen)
         return paths
     return sorted(level_dir.glob("*.py"))
+
+
+def numpy_filename(source: Path) -> str:
+    return f"{source.stem}_numpy.py"
+
+
+def yaml_filename(source: Path) -> str:
+    return f"{source.stem}.yaml"
+
+
+def display_name(stem: str) -> str:
+    return stem.replace("_", " ")
+
+
+def expr_text(node: ast.AST) -> str:
+    text = ast.unparse(node)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        text = text.replace("[", "(").replace("]", ")")
+    return text
+
+
+def literal_text(node: ast.AST) -> str:
+    try:
+        value = ast.literal_eval(node)
+    except Exception:
+        return ast.unparse(node)
+    return repr(value)
+
+
+def level_number(level: str) -> int | str:
+    match = re.fullmatch(r"level(\d+)", level)
+    return int(match.group(1)) if match else level
 
 
 class Expr:
@@ -235,12 +268,25 @@ class Expr:
                 return f"np.swapaxes({value}, {args[0]}, {args[1]})"
             if value == "self" and attr in self.modules:
                 return self.module_call(attr, args)
+            if value == "self":
+                module_name = self.attr_aliases.get(attr, attr)
+                if module_name in self.modules:
+                    return self.module_call(module_name, args)
         if fn in {"int", "float", "max", "min", "range", "len"}:
             return f"{fn}({', '.join(args)})"
         if fn in {"torch.matmul", "torch.mm", "torch.bmm"}:
             return f"np.matmul({args[0]}, {args[1]})"
         if fn == "torch.einsum":
             return f"np.einsum({', '.join(args)})"
+        if fn == "torch.flatten":
+            start_dim = kwargs.get("start_dim", args[1] if len(args) > 1 else "0")
+            end_dim = kwargs.get("end_dim", args[2] if len(args) > 2 else "-1")
+            if start_dim == "0" and end_dim == "-1":
+                return f"np.reshape({args[0]}, (-1,))"
+            if start_dim == "1" and end_dim == "-1":
+                return f"np.reshape({args[0]}, ({args[0]}.shape[0], -1))"
+            self.helpers.add("flatten")
+            return f"_flatten({args[0]}, {start_dim}, {end_dim})"
         if fn == "torch.multiply":
             return f"({args[0]} * {args[1]})"
         if fn in {"torch.relu", "F.relu"}:
@@ -295,9 +341,15 @@ class Expr:
             self.helpers.add("attention")
             self.helpers.add("softmax")
             return f"_scaled_dot_product_attention({args[0]}, {args[1]}, {args[2]})"
-        if fn == "torch.nn.functional.adaptive_avg_pool2d":
+        if fn in {"torch.nn.functional.adaptive_avg_pool2d", "F.adaptive_avg_pool2d"}:
             self.helpers.add("adaptive_avg_pool2d")
             return f"_adaptive_avg_pool2d({args[0]}, {args[1] if len(args) > 1 else kwargs.get('output_size', '1')})"
+        if fn in {"torch.nn.functional.max_pool2d", "F.max_pool2d"}:
+            self.helpers.add("maxpool2d")
+            kernel_size = kwargs.get("kernel_size", args[1] if len(args) > 1 else "1")
+            stride = kwargs.get("stride", args[2] if len(args) > 2 else "None")
+            padding = kwargs.get("padding", args[3] if len(args) > 3 else "0")
+            return f"_maxpool2d({args[0]}, {kernel_size}, {stride}, {padding})"
         if fn in {"torch.nn.functional.gelu", "F.gelu"}:
             self.helpers.add("gelu")
             return f"_gelu({args[0]})"
@@ -418,6 +470,13 @@ class Expr:
         if kind == "tripletmarginloss":
             self.helpers.add("triplet")
             return f"_triplet_margin_loss({args[0]}, {args[1]}, {args[2]}, {prefix}{name}_margin)"
+        if kind == "sequential":
+            value = x
+            for layer in m["layers"]:
+                value = self.module_call(layer, [value])
+            return value
+        if kind == "custom":
+            return f"{m['function']}({', '.join(args)})"
         raise TranslationError(f"unsupported module call {kind}")
 
 
@@ -475,6 +534,16 @@ def _triplet_margin_loss(anchor, positive, negative, margin):
     pos = np.linalg.norm(anchor - positive, axis=1)
     neg = np.linalg.norm(anchor - negative, axis=1)
     return np.mean(np.maximum(pos - neg + margin, 0.0))
+""",
+"flatten": """
+def _flatten(x, start_dim=0, end_dim=-1):
+    ndim = x.ndim
+    if end_dim < 0:
+        end_dim += ndim
+    before = x.shape[:start_dim]
+    after = x.shape[end_dim + 1:]
+    middle = int(np.prod(x.shape[start_dim:end_dim + 1]))
+    return np.reshape(x, before + (middle,) + after)
 """,
 "batchnorm": """
 def _batch_norm(x, weight, bias, running_mean, running_var, eps):
@@ -772,6 +841,13 @@ class Translator:
         self.source = source
         self.classless = classless
         self.tree = ast.parse(source.read_text())
+        self.custom_classes = {
+            n.name: n for n in self.tree.body
+            if isinstance(n, ast.ClassDef) and n.name != "Model"
+        }
+        self.custom_functions: dict[str, str] = {}
+        self.local_functions: dict[str, ast.FunctionDef] = {}
+        self.top_level_ast_values = self.top_level_values()
         self.modules: dict[str, dict[str, str]] = {}
         self.helpers: set[str] = set()
         self.attr_aliases: dict[str, str] = {}
@@ -799,6 +875,9 @@ class Translator:
             code.append("")
         if helper_text:
             code.append(helper_text.strip())
+            code.append("")
+        if self.custom_functions:
+            code.append("\n\n".join(self.custom_functions.values()).strip())
             code.append("")
         if self.classless:
             init_signature = _clean_signature(init).replace("self, ", "").replace("self", "")
@@ -837,15 +916,7 @@ class Translator:
     def init_arg_defaults(self, init: ast.FunctionDef) -> dict[str, str | None]:
         args = [arg.arg for arg in init.args.args if arg.arg != "self"]
         defaults = [None] * (len(args) - len(init.args.defaults)) + [ast.unparse(d) for d in init.args.defaults]
-        result = dict(zip(args, defaults))
-        get_init = next((n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == "get_init_inputs"), None)
-        if get_init is not None:
-            for st in ast.walk(get_init):
-                if isinstance(st, ast.Return) and isinstance(st.value, ast.List):
-                    for name, value in zip(args, st.value.elts):
-                        result[name] = ast.unparse(value)
-                    break
-        return result
+        return dict(zip(args, defaults))
 
     def assigned_names(self, lines: list[str]) -> list[str]:
         names = []
@@ -866,37 +937,74 @@ class Translator:
         right = right.strip()
         return left in self.init_arg_names and right == left
 
+    def top_level_values(self) -> dict[str, ast.AST]:
+        values: dict[str, ast.AST] = {}
+        for node in self.tree.body:
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                values[target.id] = node.value
+            elif isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple):
+                for left, right in zip(target.elts, node.value.elts):
+                    if isinstance(left, ast.Name):
+                        values[left.id] = right
+        return values
+
     def constants(self) -> list[str]:
-        out = []
-        for n in self.tree.body:
-            if isinstance(n, ast.Assign):
-                try:
-                    text = ast.unparse(n)
-                except Exception:
-                    continue
-                if "torch." not in text and "nn." not in text:
-                    out.append(text)
-        return out
+        return []
 
     def init_lines(self, fn: ast.FunctionDef) -> list[str]:
         out: list[str] = []
+        values: dict[str, ast.AST] = {}
+        lists: dict[str, list[ast.AST]] = {}
         for st in fn.body:
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
+                continue
+            if isinstance(st, ast.FunctionDef):
+                self.local_functions[st.name] = st
                 continue
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and _name(st.value.func) == "super":
                 continue
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and _name(st.value.func) == "super.__init__":
                 continue
+            if self.append_to_sequence_list(st, values, lists):
+                continue
+            if isinstance(st, ast.For):
+                elements = self.static_iter_elements(st.iter, values)
+                if elements is None or not isinstance(st.target, ast.Name):
+                    raise TranslationError("unsupported init loop")
+                for element in elements:
+                    values[st.target.id] = element
+                    for inner in st.body:
+                        if self.append_to_sequence_list(inner, values, lists):
+                            continue
+                        if isinstance(inner, ast.Assign) and len(inner.targets) == 1 and isinstance(inner.targets[0], ast.Name):
+                            values[inner.targets[0].id] = self.substitute_names(inner.value, values)
+                            continue
+                        raise TranslationError("unsupported init loop body")
+                continue
             if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Attribute):
                 target = st.targets[0]
                 if isinstance(target.value, ast.Name) and target.value.id == "self":
                     name = target.attr
-                    if self.classless and self.is_plain_init_arg_assignment(st.value, fn):
+                    value = self.substitute_names(st.value, values)
+                    if isinstance(value, ast.Call):
+                        value = self.expand_star_args(value, lists)
+                    if self.classless and self.is_plain_init_arg_assignment(value, fn):
                         continue
-                    lines = self.init_assignment(name, st.value)
+                    lines = self.init_assignment(name, value)
                     out.extend(lines)
                     continue
             if isinstance(st, ast.Assign):
+                if len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+                    target = st.targets[0].id
+                    value = self.substitute_names(st.value, values)
+                    if isinstance(value, ast.List):
+                        lists[target] = list(value.elts)
+                    else:
+                        values[target] = value
+                    continue
                 out.append(ast.unparse(st))
         return out
 
@@ -911,6 +1019,15 @@ class Translator:
                 return self.module_init(name, "nn.TripletMarginLoss", value)
             if fn and fn.startswith("nn."):
                 return self.module_init(name, fn, value)
+            if fn in self.custom_classes:
+                return self.custom_module_init(name, self.custom_classes[fn], value)
+            if fn in self.local_functions:
+                return self.method_return_init(name, self.local_functions[fn], value)
+            if fn and fn.startswith("self."):
+                method_name = fn.split(".", 1)[1]
+                method = self.model_method(method_name)
+                if method is not None:
+                    return self.method_return_init(name, method, value)
         try:
             prefix = "" if self.classless else "self."
             return [f"{prefix}{target_name} = {self.expr.expr(value)}"]
@@ -930,6 +1047,211 @@ class Translator:
         alias = f"{name}_value"
         self.attr_aliases[name] = alias
         return alias
+
+    def substitute_names(self, node: ast.AST, values: dict[str, ast.AST]) -> ast.AST:
+        class Substituter(ast.NodeTransformer):
+            def visit_Name(self, item: ast.Name) -> ast.AST:
+                if isinstance(item.ctx, ast.Load) and item.id in values:
+                    return ast.copy_location(values[item.id], item)
+                return item
+
+        return ast.fix_missing_locations(Substituter().visit(ast.fix_missing_locations(node)))
+
+    def call_bindings(self, fn: ast.FunctionDef, call: ast.Call) -> dict[str, ast.AST]:
+        args = [arg.arg for arg in fn.args.args if arg.arg != "self"]
+        defaults = [None] * (len(args) - len(fn.args.defaults)) + list(fn.args.defaults)
+        values: dict[str, ast.AST] = {}
+        for name, default in zip(args, defaults):
+            if default is not None:
+                values[name] = default
+        for name, arg in zip(args, call.args):
+            values[name] = arg
+        for kw in call.keywords:
+            if kw.arg:
+                values[kw.arg] = kw.value
+        return values
+
+    def custom_module_init(self, name: str, cls: ast.ClassDef, call: ast.Call) -> list[str]:
+        init = next((n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "__init__"), None)
+        forward = next((n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "forward"), None)
+        if init is None or forward is None:
+            raise TranslationError(f"missing __init__ or forward in {cls.name}")
+
+        values = self.call_bindings(init, call)
+        attrs: dict[str, str] = {}
+        lines: list[str] = []
+        for st in init.body:
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and self.is_super_init_call(st.value):
+                continue
+            if isinstance(st, ast.Assign) and len(st.targets) == 1:
+                target = st.targets[0]
+                value = self.substitute_names(st.value, values)
+                if isinstance(target, ast.Name):
+                    values[target.id] = value
+                    continue
+                if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
+                    attr_name = f"{name}_{target.attr}"
+                    attrs[target.attr] = attr_name
+                    lines.extend(self.init_assignment(attr_name, value))
+                    continue
+            if isinstance(st, ast.If):
+                test = self.substitute_names(st.test, values)
+                take_body = self.static_bool(test)
+                if take_body is None:
+                    raise TranslationError(f"unsupported dynamic init if in {cls.name}")
+                for inner in st.body if take_body else st.orelse:
+                    if isinstance(inner, ast.Assign) and len(inner.targets) == 1 and isinstance(inner.targets[0], ast.Attribute):
+                        target = inner.targets[0]
+                        if isinstance(target.value, ast.Name) and target.value.id == "self":
+                            value = self.substitute_names(inner.value, values)
+                            attr_name = f"{name}_{target.attr}"
+                            attrs[target.attr] = attr_name
+                            lines.extend(self.init_assignment(attr_name, value))
+                            continue
+                    raise TranslationError(f"unsupported init if body in {cls.name}")
+                continue
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
+                continue
+            raise TranslationError(f"unsupported custom init statement {ast.dump(st)}")
+
+        function_name = f"_{name}_forward"
+        self.modules[name] = {"kind": "custom", "function": function_name}
+        self.custom_functions[function_name] = self.custom_forward_function(function_name, forward, attrs)
+        return lines
+
+    def model_method(self, name: str) -> ast.FunctionDef | None:
+        model = next((n for n in self.tree.body if isinstance(n, ast.ClassDef) and n.name == "Model"), None)
+        if model is None:
+            return None
+        return next((n for n in model.body if isinstance(n, ast.FunctionDef) and n.name == name), None)
+
+    def method_return_init(self, name: str, method: ast.FunctionDef, call: ast.Call) -> list[str]:
+        values = self.call_bindings(method, call)
+        lists: dict[str, list[ast.AST]] = {}
+        for st in method.body:
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
+                continue
+            if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+                target = st.targets[0].id
+                value = self.substitute_names(st.value, values)
+                if isinstance(value, ast.List):
+                    lists[target] = list(value.elts)
+                else:
+                    values[target] = value
+                continue
+            if self.append_to_sequence_list(st, values, lists):
+                continue
+            if isinstance(st, ast.For):
+                loop_values = self.static_range_values(st.iter, values)
+                if loop_values is None:
+                    raise TranslationError(f"unsupported dynamic loop in {method.name}")
+                for loop_value in loop_values:
+                    values[st.target.id] = ast.Constant(loop_value) if isinstance(st.target, ast.Name) else ast.Constant(loop_value)
+                    for inner in st.body:
+                        if self.append_to_sequence_list(inner, values, lists):
+                            continue
+                        if isinstance(inner, ast.Assign) and len(inner.targets) == 1 and isinstance(inner.targets[0], ast.Name):
+                            values[inner.targets[0].id] = self.substitute_names(inner.value, values)
+                            continue
+                        raise TranslationError(f"unsupported loop body in {method.name}")
+                continue
+            if isinstance(st, ast.Return):
+                returned = self.substitute_names(st.value, values)
+                if isinstance(returned, ast.Call):
+                    returned = self.expand_star_args(returned, lists)
+                    fn = _name(returned.func)
+                    if fn and fn.startswith("nn."):
+                        return self.module_init(name, fn, returned)
+                    if fn in self.custom_classes:
+                        return self.custom_module_init(name, self.custom_classes[fn], returned)
+                raise TranslationError(f"unsupported method return in {method.name}")
+        raise TranslationError(f"missing return in {method.name}")
+
+    def append_to_sequence_list(
+        self,
+        st: ast.stmt,
+        values: dict[str, ast.AST],
+        lists: dict[str, list[ast.AST]],
+    ) -> bool:
+        if not isinstance(st, ast.Expr) or not isinstance(st.value, ast.Call):
+            return False
+        call = st.value
+        if not isinstance(call.func, ast.Attribute) or call.func.attr != "append":
+            return False
+        if not isinstance(call.func.value, ast.Name) or call.func.value.id not in lists:
+            return False
+        if len(call.args) != 1:
+            raise TranslationError("unsupported append arity")
+        lists[call.func.value.id].append(self.substitute_names(call.args[0], values))
+        return True
+
+    def static_range_values(self, node: ast.AST, values: dict[str, ast.AST]) -> list[int] | None:
+        node = self.substitute_names(node, values)
+        if not isinstance(node, ast.Call) or _name(node.func) != "range":
+            return None
+        args = []
+        for arg in node.args:
+            if isinstance(arg, ast.Name) and arg.id in self.top_level_ast_values:
+                arg = self.top_level_ast_values[arg.id]
+            try:
+                args.append(int(eval(compile(ast.Expression(arg), "<range>", "eval"), {"__builtins__": {}}, {})))
+            except Exception:
+                return None
+        return list(range(*args))
+
+    def static_iter_elements(self, node: ast.AST, values: dict[str, ast.AST]) -> list[ast.AST] | None:
+        node = self.substitute_names(node, values)
+        if isinstance(node, ast.Name) and node.id in self.top_level_ast_values:
+            node = self.top_level_ast_values[node.id]
+        if isinstance(node, ast.Call) and _name(node.func) == "range":
+            range_values = self.static_range_values(node, values)
+            if range_values is None:
+                return None
+            return [ast.Constant(value) for value in range_values]
+        if isinstance(node, ast.List):
+            return list(node.elts)
+        if (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, ast.Mult)
+            and isinstance(node.left, ast.List)
+            and isinstance(node.right, ast.Constant)
+            and isinstance(node.right.value, int)
+        ):
+            return list(node.left.elts) * node.right.value
+        return None
+
+    def expand_star_args(self, call: ast.Call, lists: dict[str, list[ast.AST]]) -> ast.Call:
+        args: list[ast.AST] = []
+        for arg in call.args:
+            if isinstance(arg, ast.Starred) and isinstance(arg.value, ast.Name) and arg.value.id in lists:
+                args.extend(lists[arg.value.id])
+            else:
+                args.append(arg)
+        return ast.Call(func=call.func, args=args, keywords=call.keywords)
+
+    def is_super_init_call(self, call: ast.Call) -> bool:
+        if _name(call.func) == "super":
+            return True
+        if isinstance(call.func, ast.Attribute) and call.func.attr == "__init__":
+            value = call.func.value
+            return isinstance(value, ast.Call) and _name(value.func) == "super"
+        return False
+
+    def static_bool(self, node: ast.AST) -> bool | None:
+        try:
+            expr = ast.Expression(node)
+            ast.fix_missing_locations(expr)
+            return bool(eval(compile(expr, "<static-bool>", "eval"), {"__builtins__": {}}, {}))
+        except Exception:
+            return None
+
+    def custom_forward_function(self, function_name: str, forward: ast.FunctionDef, attrs: dict[str, str]) -> str:
+        args = [arg.arg for arg in forward.args.args if arg.arg != "self"]
+        expr = Expr(self.modules, self.helpers, classless=True, attr_aliases=attrs)
+        lines = [f"def {function_name}({', '.join(args)}):"]
+        body = self.forward_lines_with_expr(forward, expr)
+        lines.extend("    " + line for line in (body or ["pass"]))
+        return "\n".join(lines)
 
     def parameter_expr(self, node: ast.AST) -> str:
         if isinstance(node, ast.Call):
@@ -957,6 +1279,16 @@ class Translator:
             bias = _kw(call, "bias", "True")
             lines += [f"{prefix}{name}_weight = np.zeros(({out_f}, {in_f}), dtype=np.float32)",
                       f"{prefix}{name}_bias = np.zeros(({out_f},), dtype=np.float32) if {bias} else np.zeros(({out_f},), dtype=np.float32)"]
+        elif kind == "Sequential":
+            layer_names: list[str] = []
+            for index, arg in enumerate(call.args):
+                if isinstance(arg, ast.Starred):
+                    raise TranslationError("unsupported nn.Sequential star args")
+                layer_name = f"{name}_{index}"
+                layer_lines = self.init_assignment(layer_name, arg)
+                layer_names.append(layer_name)
+                lines.extend(layer_lines)
+            self.modules[name] = {"kind": "sequential", "layers": layer_names}
         elif kind in {"Conv1d", "Conv2d", "Conv3d", "ConvTranspose1d", "ConvTranspose2d", "ConvTranspose3d"}:
             dims = {"Conv1d": 1, "Conv2d": 2, "Conv3d": 3, "ConvTranspose1d": 1, "ConvTranspose2d": 2, "ConvTranspose3d": 3}[kind]
             trans = "Transpose" in kind
@@ -1058,20 +1390,210 @@ class Translator:
         return lines or [f"{prefix}{name} = None"]
 
     def forward_lines(self, fn: ast.FunctionDef) -> list[str]:
+        return self.forward_lines_with_expr(fn, self.expr)
+
+    def forward_lines_with_expr(self, fn: ast.FunctionDef, expr: Expr) -> list[str]:
         out: list[str] = []
         for st in fn.body:
             if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
                 continue
             if isinstance(st, ast.Assign):
                 target = ast.unparse(st.targets[0])
-                out.append(f"{target} = {self.expr.expr(st.value)}")
+                out.append(f"{target} = {expr.expr(st.value)}")
             elif isinstance(st, ast.Return):
-                out.append(f"return {self.expr.expr(st.value)}")
+                out.append(f"return {expr.expr(st.value)}")
             elif isinstance(st, ast.AugAssign):
-                out.append(f"{ast.unparse(st.target)} {ast.unparse(st.op)}= {self.expr.expr(st.value)}")
+                out.append(f"{ast.unparse(st.target)} {ast.unparse(st.op)}= {expr.expr(st.value)}")
+            elif isinstance(st, ast.If):
+                static_value = self.static_forward_if(st.test, expr)
+                if static_value is not None:
+                    chosen = st.body if static_value else st.orelse
+                    pseudo = ast.FunctionDef(
+                        name="_if_body",
+                        args=ast.arguments(posonlyargs=[], args=[], vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[]),
+                        body=chosen,
+                        decorator_list=[],
+                    )
+                    out.extend(self.forward_lines_with_expr(pseudo, expr))
+                else:
+                    out.append(f"if {expr.expr(st.test)}:")
+                    pseudo_body = ast.FunctionDef(
+                        name="_if_body",
+                        args=ast.arguments(posonlyargs=[], args=[], vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[]),
+                        body=st.body,
+                        decorator_list=[],
+                    )
+                    out.extend("    " + line for line in self.forward_lines_with_expr(pseudo_body, expr))
+                    if st.orelse:
+                        out.append("else:")
+                        pseudo_else = ast.FunctionDef(
+                            name="_if_else",
+                            args=ast.arguments(posonlyargs=[], args=[], vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[]),
+                            body=st.orelse,
+                            decorator_list=[],
+                        )
+                        out.extend("    " + line for line in self.forward_lines_with_expr(pseudo_else, expr))
             else:
                 raise TranslationError(f"unsupported forward statement {ast.dump(st)}")
         return out
+
+    def static_forward_if(self, test: ast.AST, expr: Expr) -> bool | None:
+        if isinstance(test, ast.Call) and _name(test.func) == "hasattr" and len(test.args) == 2:
+            obj, attr = test.args
+            if isinstance(obj, ast.Name) and obj.id == "self" and isinstance(attr, ast.Constant):
+                return str(attr.value) in expr.attr_aliases
+        if isinstance(test, ast.Compare) and len(test.ops) == 1 and len(test.comparators) == 1:
+            left = test.left
+            right = test.comparators[0]
+            if (
+                isinstance(left, ast.Attribute)
+                and isinstance(left.value, ast.Name)
+                and left.value.id == "self"
+                and isinstance(right, ast.Constant)
+                and right.value is None
+            ):
+                module_name = expr.attr_aliases.get(left.attr, left.attr)
+                if isinstance(test.ops[0], ast.IsNot):
+                    return module_name in self.modules
+                if isinstance(test.ops[0], ast.Is):
+                    return module_name not in self.modules
+        return None
+
+
+class ManifestBuilder:
+    def __init__(self, source: Path, level: str):
+        self.source = source
+        self.level = level
+        self.tree = ast.parse(source.read_text())
+
+    def build(self) -> str:
+        model = next((n for n in self.tree.body if isinstance(n, ast.ClassDef) and n.name == "Model"), None)
+        if model is None:
+            raise TranslationError("missing Model class")
+        forward = next((n for n in model.body if isinstance(n, ast.FunctionDef) and n.name == "forward"), None)
+        if forward is None:
+            raise TranslationError("missing forward")
+        values = self.top_level_values()
+        init_values = self.get_init_values()
+        arrays = self.input_arrays([a.arg for a in forward.args.args if a.arg != "self"])
+        params = self.parameters(values, init_values, arrays)
+        lines = [
+            "# OptArena benchmark manifest -- generated by optarena/pytorch_translator/src/pytorch_to_numpy.py.",
+            "# Schema: optarena/schemas/bench_spec.schema.yaml",
+            f"name: {display_name(self.source.stem)}",
+            "func_name: forward",
+            "kind: microkernel",
+            f"level: {level_number(self.level)}",
+            "parameters:",
+            "  S:",
+        ]
+        if params:
+            for key in sorted(params):
+                lines.append(f"    {key}: {params[key]}")
+        else:
+            lines.append("    dummy: 1")
+        lines.extend(["init:", "  arrays:"])
+        if arrays:
+            for name, shape in arrays:
+                lines.append(f"    {name}: {shape}")
+        else:
+            lines.append("    x: ()")
+        lines.extend([
+            "output_args: []",
+            "taxonomy:",
+            "  track: ml",
+            "  subtrack: kernelbench",
+            "  domain: Learning",
+        ])
+        return "\n".join(lines) + "\n"
+
+    def top_level_values(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for node in self.tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                values[target.id] = literal_text(node.value)
+            elif isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple):
+                for left, right in zip(target.elts, node.value.elts):
+                    if isinstance(left, ast.Name):
+                        values[left.id] = literal_text(right)
+        return values
+
+    def get_init_values(self) -> dict[str, str]:
+        model = next(n for n in self.tree.body if isinstance(n, ast.ClassDef) and n.name == "Model")
+        init = next((n for n in model.body if isinstance(n, ast.FunctionDef) and n.name == "__init__"), None)
+        if init is None:
+            return {}
+        args = [arg.arg for arg in init.args.args if arg.arg != "self"]
+        values: dict[str, str] = {}
+        for name, default in zip(args[len(args) - len(init.args.defaults):], init.args.defaults):
+            values[name] = literal_text(default)
+        get_init = next((n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == "get_init_inputs"), None)
+        if get_init is None:
+            return values
+        for node in ast.walk(get_init):
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.List):
+                for name, value in zip(args, node.value.elts):
+                    values[name] = literal_text(value)
+                break
+        return values
+
+    def input_arrays(self, forward_args: list[str]) -> list[tuple[str, str]]:
+        get_inputs = next((n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == "get_inputs"), None)
+        if get_inputs is None:
+            return []
+        assigned: dict[str, str] = {}
+        returned: list[ast.AST] = []
+        for st in get_inputs.body:
+            if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+                shape = self.array_shape(st.value)
+                if shape is not None:
+                    assigned[st.targets[0].id] = shape
+            if isinstance(st, ast.Return) and isinstance(st.value, ast.List):
+                returned = list(st.value.elts)
+        arrays: list[tuple[str, str]] = []
+        for index, item in enumerate(returned):
+            if isinstance(item, ast.Name) and item.id in assigned:
+                arrays.append((item.id, assigned[item.id]))
+                continue
+            shape = self.array_shape(item)
+            if shape is not None:
+                name = forward_args[index] if index < len(forward_args) else f"x{index}"
+                arrays.append((name, shape))
+        return arrays
+
+    def array_shape(self, node: ast.AST) -> str | None:
+        if not isinstance(node, ast.Call):
+            return None
+        fn = _name(node.func)
+        if fn not in {"torch.rand", "torch.randn", "torch.zeros", "torch.ones"}:
+            return None
+        if len(node.args) == 1 and isinstance(node.args[0], (ast.Tuple, ast.List)):
+            parts = [expr_text(elt) for elt in node.args[0].elts]
+        else:
+            parts = [expr_text(arg) for arg in node.args]
+        return "(" + ", ".join(parts) + ("," if len(parts) == 1 else "") + ")"
+
+    def parameters(
+        self,
+        values: dict[str, str],
+        init_values: dict[str, str],
+        arrays: list[tuple[str, str]],
+    ) -> dict[str, str]:
+        names: set[str] = set(init_values)
+        for _array_name, shape in arrays:
+            names.update(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", shape))
+        params: dict[str, str] = {}
+        for name in names:
+            if name in init_values:
+                params[name] = values.get(init_values[name], init_values[name])
+            elif name in values:
+                params[name] = values[name]
+        return params
 
 
 HELPERS["as_tuple"] = """
@@ -1082,30 +1604,50 @@ def _as_tuple(value, dims):
 """
 
 
-def translate_file(source: Path, dest: Path) -> None:
+def translate_file(
+    source: Path,
+    dest: Path,
+    yaml_dest: Path | None = None,
+    level: str | None = None,
+    overwrite_yaml: bool = False,
+) -> None:
     code = Translator(source).translate()
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(code)
+    if yaml_dest is not None and (overwrite_yaml or not yaml_dest.exists()):
+        yaml_dest.parent.mkdir(parents=True, exist_ok=True)
+        yaml_dest.write_text(ManifestBuilder(source, level or source.parent.name).build())
 
 
-def translate_tree(root: Path, out_root: Path, levels: tuple[str, ...] = ("level1", "level2")) -> list[tuple[str, str, str]]:
+def translate_tree(
+    root: Path,
+    out_root: Path,
+    levels: tuple[str, ...] = ("level1", "level2"),
+    overwrite_yaml: bool = False,
+) -> list[tuple[str, str, str]]:
     results: list[tuple[str, str, str]] = []
     for level in levels:
         for source in level_sources(root / level):
-            dest = out_root / level / source.name
+            dest = out_root / level / numpy_filename(source)
+            yaml_dest = out_root / level / yaml_filename(source)
             try:
-                translate_file(source, dest)
-                results.append((level, source.name, "ok"))
+                translate_file(source, dest, yaml_dest, level, overwrite_yaml=overwrite_yaml)
+                results.append((level, numpy_filename(source), "ok"))
             except Exception as exc:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(f"import numpy as np\n\nTRANSLATION_ERROR = {exc!r}\n")
-                results.append((level, source.name, f"error: {exc}"))
+                results.append((level, numpy_filename(source), f"error: {exc}"))
     return results
 
 
 if __name__ == "__main__":
-    base = Path(__file__).resolve().parents[1]
-    # PyTorch sources come from the KernelBench submodule; outputs go to result/.
-    root = base / "KernelBench" / "KernelBench"
-    for level, name, status in translate_tree(root, base / "result"):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--levels", nargs="+", default=["level1", "level2"])
+    parser.add_argument("--out-root", type=Path)
+    parser.add_argument("--overwrite-yaml", action="store_true")
+    args = parser.parse_args()
+
+    root = Path(__file__).resolve().parents[1]
+    out_root = args.out_root or root.parent / "benchmarks" / "ml" / "KernelBench"
+    for level, name, status in translate_tree(root, out_root, tuple(args.levels), overwrite_yaml=args.overwrite_yaml):
         print(f"{level}/{name}: {status}")
