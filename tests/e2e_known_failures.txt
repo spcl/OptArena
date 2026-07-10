@@ -45,3 +45,26 @@ symm::pluto
 stencil_3d::pluto
 stencil_4d::pluto
 vector_stencil_4d::pluto
+
+# LS3DF kernel family (hard lvl2/lvl3): native c/cpp/fortran-emit gaps
+# (np.roll / einsum / np.ix_ / cholesky / eigh / fft / tuple-target) + pluto reductions
+chebyshev_filter_subspace::c
+chebyshev_filter_subspace::cpp
+chebyshev_filter_subspace::fortran
+fragment_patch_density::c
+fragment_patch_density::cpp
+fragment_patch_density::fortran
+kleinman_bylander_nonlocal::pluto
+laplacian_stencil_3d::c
+laplacian_stencil_3d::cpp
+laplacian_stencil_3d::fortran
+lda_xc_potential::pluto
+ls3df_scf::c
+ls3df_scf::cpp
+ls3df_scf::fortran
+poisson_cg_3d::c
+poisson_cg_3d::cpp
+poisson_cg_3d::fortran
+rayleigh_ritz_rotation::c
+rayleigh_ritz_rotation::cpp
+rayleigh_ritz_rotation::fortran
