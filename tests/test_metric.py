@@ -62,8 +62,9 @@ def test_failure_is_neutral_not_catastrophic():
 
 
 def test_helpers():
-    assert M._geomean([]) == 1.0  # identity on empty
-    assert M._geomean([2.0, 8.0]) == pytest.approx(4.0)
+    assert M.geomean([]) == 1.0  # identity on empty
+    assert M.geomean([2.0, 8.0]) == pytest.approx(4.0)
+    assert M.geomean([0.0, 4.0]) == pytest.approx(4.0)  # non-positive skipped (combine's 0-reward guard)
     assert M._hmean([]) == 0.0
     assert M._clamp(500.0, 1.0, 100.0) == 100.0 and M._clamp(0.5, 1.0, 100.0) == 1.0
 

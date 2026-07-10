@@ -24,14 +24,13 @@ import argparse
 import contextlib
 import dataclasses
 import json
-import math
 import pathlib
 import sys
 from typing import List, Optional, Sequence
 
 from optarena import config
 from optarena.agent_bench.envelope import Submission
-from optarena.agent_bench.metric import score_task_fuzzed
+from optarena.agent_bench.metric import geomean, score_task_fuzzed
 from optarena.agent_bench.scoring import BASELINE_CHOICES
 from optarena.agent_bench.task import Task
 from optarena.agent_bench.timing import pin_threads
@@ -170,14 +169,16 @@ def _gate_repo_pr(reward: dict, repo_dir: str, speedup_min: Optional[float], see
 
 def combine(rewards: Sequence[dict]) -> dict:
     """Reduce per-kernel rewards into one task reward: the geometric mean of the
-    per-kernel ``S_i``, computed in log space (overflow-safe for large bundles) and
-    gated to ``1.0`` unless every kernel is solved."""
-    s = [float(r.get("reward", 1.0)) for r in rewards]
-    geomean = math.exp(sum(math.log(x) for x in s) / len(s)) if s else 1.0
+    per-kernel ``S_i`` via :func:`metric.geomean` -- the SAME log-space, overflow-
+    and non-positive-safe reduction the native ``aggregate`` uses, so the two paths
+    can never drift in HOW they reduce. The returned ``reward`` is then gated to
+    ``1.0`` unless every kernel is solved (a part-failed bundle reports ``1.0``, not
+    the geomean, which is still disclosed in the ``geomean`` field)."""
+    gm = geomean([float(r.get("reward", 1.0)) for r in rewards])
     solved = all(bool(r.get("solved")) for r in rewards)
     return {
-        "reward": geomean if solved else 1.0,
-        "geomean": geomean,  # ungated geomean, for transparency
+        "reward": gm if solved else 1.0,
+        "geomean": gm,  # ungated geomean, for transparency
         "solved": solved,
         "kernels": [r.get("kernel") for r in rewards],
         "n_kernels": len(rewards),

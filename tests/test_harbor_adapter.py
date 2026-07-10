@@ -232,6 +232,17 @@ def test_combine_geomean_gated_unless_all_solved():
         "kernel": "b"
     }])
     assert all_solved["reward"] == pytest.approx(6.0)  # geomean(4, 9), ungated
+    # combine reuses metric.geomean (shared reduction, no hand-rolled math.log): a degenerate
+    # 0 reward is skipped, not a math.log(0) crash -- so the bundle geomean can never diverge
+    # from the suite path and never blows up on an out-of-band reward.
+    assert harbor_grade.combine([{
+        "reward": 0.0,
+        "solved": True
+    }, {
+        "reward": 4.0,
+        "solved": True
+    }])["reward"] == pytest.approx(4.0)
+    assert harbor_grade.combine([])["reward"] == 1.0  # empty bundle -> identity
 
 
 def test_harbor_grade_scores_the_reference_as_solved(tmp_path):

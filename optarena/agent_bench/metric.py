@@ -48,7 +48,7 @@ _UNCLASSIFIED = "unclassified"
 _DEFAULT_BASELINE = "c"
 
 
-def _geomean(xs: Sequence[float]) -> float:
+def geomean(xs: Sequence[float]) -> float:
     """Geometric mean; ``1.0`` on empty (the multiplicative identity).
 
     Computed in log space so a large suite cannot overflow the intermediate
@@ -299,7 +299,7 @@ def scaling_score(kernel: str,
                         work_exponent=max(1, int(work_exponent)),
                         single_node_ns=points[0].single_node_ns,
                         points=points,
-                        mean_efficiency=_geomean([p.efficiency for p in points]))
+                        mean_efficiency=geomean([p.efficiency for p in points]))
 
 
 def _correctness_cells(params, configs, constraints, k):
@@ -557,7 +557,7 @@ def score_task_fuzzed(submission: Submission,
     peak_bytes = max((it.peak_bytes for it in iters), default=0)
     baseline_peak_bytes = max((it.baseline_peak_bytes for it in iters), default=0)
     valid_speedups = [c.speedup for c in timed if c.correct and c.speedup > 0]
-    raw_speedup = _geomean(valid_speedups)  # 1.0 on empty (unsolved / no timed cell); the fast_p threshold input
+    raw_speedup = geomean(valid_speedups)  # 1.0 on empty (unsolved / no timed cell); the fast_p threshold input
     s_i = _clamp(raw_speedup, 1.0, c_max) if (solved and valid_speedups) else 1.0
     # Dispersion gate: a win indistinguishable from timing noise is floored to 1.0. Computed here (not
     # only in the Harbor reward) so the native ranked score and the Harbor reward apply the SAME gate
@@ -609,7 +609,7 @@ def aggregate(task_scores: Sequence[TaskScore]) -> SuiteScore:
     by_dwarf: Dict[str, list] = {}
     for t in ts:
         by_dwarf.setdefault(t.dwarf, []).append(t.score)
-    per_dwarf = {d: _geomean(v) for d, v in by_dwarf.items()}
+    per_dwarf = {d: geomean(v) for d, v in by_dwarf.items()}
 
     fast_p_view = fast_p([(t.solved, t.raw_speedup) for t in ts])
     # EffiBench-style memory disclosure (MU/NMU), additive like fast_p: MU is the mean
@@ -617,7 +617,7 @@ def aggregate(task_scores: Sequence[TaskScore]) -> SuiteScore:
     # (tasks with no baseline peak excluded). Never enters the ranked score.
     mu = max_memory([t.peak_bytes for t in ts])
     nmu = norm_memory([(t.peak_bytes, t.baseline_peak_bytes) for t in ts])
-    optarena_score = _geomean([t.score for t in ts])
+    optarena_score = geomean([t.score for t in ts])
     total_tokens = sum(t.tokens for t in ts)
     return SuiteScore(optarena_score=optarena_score,
                       solve_rate=(len(solved) / n if n else 0.0),
