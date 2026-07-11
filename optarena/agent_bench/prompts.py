@@ -420,7 +420,7 @@ def build_context(task: Task,
         "strategy_emphasis": strategy["emphasis"],
         "strategy_lead": strategy["lead"],
         # How this benchmark (and groups of them) are listed / selected to run.
-        "select_command": f"python run_benchmark.py -b {spec.short_name}",
+        "select_command": f"python scripts/run_benchmark.py -b {spec.short_name}",
         # restricted delivery: expected file name + the real compile/link commands.
         "source_filename": source_filename,
         "lib_name": lib_name,

@@ -169,7 +169,7 @@ shape inference. Minimum:
       "S": { "N": 1000 },
       "M": { "N": 5000 },
       "L": { "N": 10000 },
-      "paper": { "N": 8000 }
+      "XL": { "N": 8000 }
     },
     "init": {
       "func_name": "initialize",

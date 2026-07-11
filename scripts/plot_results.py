@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 from scipy.stats.mstats import gmean
 from optarena.infrastructure import utilities as util
-from optarena.spec import PRESET_CHOICES
+from optarena.spec import PRESET_CHOICES, select_short_names
 
 
 def my_round(x, width):
@@ -84,6 +84,12 @@ def bootstrap_ci(data, statfunction=np.median, alpha=0.05, n_samples=300):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("-b",
+                        "--benchmark",
+                        default="all",
+                        help="selector: a single kernel, a track (hpc/ml/foundation), a dwarf "
+                        "(hpc/structured_grids), or a level (hpc@lvl1, hpc/structured_grids@lvl2, "
+                        "lvl2). Default: all.")
     parser.add_argument("-p", "--preset", choices=list(PRESET_CHOICES), nargs="?", default='S')
     parser.add_argument("-d",
                         "--datatype",
@@ -108,6 +114,12 @@ data = pd.read_sql_query("SELECT * FROM results", conn)
 
 # get rid of kind and dwarf, we don't use them
 data = data.drop(['timestamp', 'kind', 'dwarf', 'version'], axis=1).reset_index(drop=True)
+
+# Selector: restrict to a kernel / track / dwarf / @level selection (reuses the
+# KERNELS.select grammar, keyed on the short_name in the benchmark column).
+if args['benchmark'] != 'all':
+    keep = set(select_short_names(args['benchmark']))
+    data = data[data['benchmark'].isin(keep)].reset_index(drop=True)
 
 # Remove everything that does not have a domain
 data = data[data["domain"] != ""]

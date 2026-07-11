@@ -17,13 +17,13 @@ use of a ``distribution: suitesparse`` variant. They land under
 
 Example::
 
-    python run_sparse_benchmark.py -f numpy -p S -r 3
+    python scripts/run_sparse_benchmark.py -f numpy -p S -r 3
     # sweeps every (sparse_bench, variant) at S preset
 
-    python run_sparse_benchmark.py -f numpy -V csr_uniform csr_banded
+    python scripts/run_sparse_benchmark.py -f numpy -V csr_uniform csr_banded
     # only the named variants (if they exist on each bench)
 
-    python run_sparse_benchmark.py -f numpy -b sp_cg sp_minres
+    python scripts/run_sparse_benchmark.py -f numpy -b sp_cg sp_minres
     # restrict to a subset of sparse benchmarks
 """
 

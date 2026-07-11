@@ -127,7 +127,7 @@ Linux & macOS and in the WSL2 shell on Windows). Native PowerShell/cmd are not
 targeted -- use WSL2.
 
 ```sh
-python quickstart.py && python plot_results.py     # smoke-run a few benchmarks + plot
+python scripts/quickstart.py && python scripts/plot_results.py     # smoke-run a few benchmarks + plot
 ```
 
 ---
@@ -201,8 +201,8 @@ directly -- no compile, graded on the same held-out inputs. **C / C++ / Fortran 
 ## Running benchmarks
 
 ```sh
-python run_benchmark.py -b <kernel> -f <framework>        # one kernel
-python run_framework.py -f <framework>                    # all kernels, one framework
+python scripts/run_benchmark.py -b <kernel> -f <framework>        # one kernel
+python scripts/run_framework.py -f <framework>                    # all kernels, one framework
 ```
 
 Use a kernel's **short name** (the co-located manifest's `short_name`). Frameworks
@@ -216,7 +216,7 @@ publication size), and **`XL`**. `S`/`M`/`L` target ≈10/100/1000 ms under NumP
 cache, DRAM/HBM-bound). Default is `S`; choose with `-p`:
 
 ```sh
-python run_benchmark.py -b gemm -f numpy -p XL
+python scripts/run_benchmark.py -b gemm -f numpy -p XL
 ```
 
 A fifth preset, **`fuzzed`**, samples sizes in `[L, XL]` and cycles input
@@ -574,10 +574,10 @@ name if one is undeclared.
 
 ```sh
 # loads + runs against your NumPy reference (the ground truth):
-python run_benchmark.py -b scaled_add -f numpy -p S
+python scripts/run_benchmark.py -b scaled_add -f numpy -p S
 
 # run any framework sibling -- it is emitted from your NumPy on first use:
-python run_benchmark.py -b scaled_add -f numba -p S    # compiles + validates vs NumPy
+python scripts/run_benchmark.py -b scaled_add -f numba -p S    # compiles + validates vs NumPy
 ```
 
 `validation: SUCCESS` means the generated sibling reproduced your reference. Every

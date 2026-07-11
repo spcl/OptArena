@@ -28,7 +28,7 @@ reads `hidden_tests`. `task.j2` is a thin skeleton; each section is its own
 | `kernel` | `spec.short_name` — `BenchSpec.load(task.kernel)` |
 | `language`, `precision`, `residency`, `source_mode` | the `Task` fields |
 | `category` | `_category(spec)` (spec `track` / `dwarf` / `scale_class`) |
-| `select_command` | `f"python run_benchmark.py -b {spec.short_name}"` |
+| `select_command` | `f"python scripts/run_benchmark.py -b {spec.short_name}"` |
 | `reference` | `strip_comments(<module>_numpy.py)` — `optarena.sanitize` |
 | `inline_kernel` | `config.get("prompt.inline_kernel")` (config.yaml `prompt:`) |
 | `stub` | `gen_call_stub(binding, language, residency)` — `optarena.bindings` |
@@ -64,7 +64,7 @@ in the `task.j2` skeleton.)*
 ## Benchmark
 This task is the kernel `gemm` -- category: **HPC / dense_linear_algebra / micro**.
 List/select it (or a whole group) with:
-    python run_benchmark.py -b gemm            # this kernel
+    python scripts/run_benchmark.py -b gemm            # this kernel
 ```
 `category` ← `_category(spec)`; the `## proxy-app` note appears only when `scale == "proxy"`;
 `select_command` ← the f-string above.

@@ -29,7 +29,7 @@ parameters:
   L:
     nlev: 90
     klon: 8192
-  paper:
+  XL:
     nlev: 137
     klon: 100
   # Shape fuzzing: both sizes are free roots; every field shape derives from them

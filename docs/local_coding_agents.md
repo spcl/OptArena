@@ -109,5 +109,5 @@ committed definition and run it:
 
 ```bash
 apptainer build optarena-cpu.sif containers/cpu.def
-apptainer exec optarena-cpu.sif python3 run_benchmark.py -b gemm -f numpy -p S -v True
+apptainer exec optarena-cpu.sif python3 scripts/run_benchmark.py -b gemm -f numpy -p S -v True
 ```

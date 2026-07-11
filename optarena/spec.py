@@ -22,6 +22,7 @@ introspection).
 import ast
 import functools
 import pathlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -31,7 +32,7 @@ from optarena import paths
 
 #: Size presets a benchmark can be run at (the CLI ``-p`` / ``--preset`` choices).
 #: The ``fuzzed`` preset is a separate opt-in (see ``optarena run --preset``).
-PRESET_CHOICES = ("S", "M", "L", "XL", "paper")
+PRESET_CHOICES = ("S", "M", "L", "XL", "fuzzed")
 
 
 def _parse_sparse_layouts(raw: Dict[str, Any], source: str) -> Dict[str, "SparseLayout"]:
@@ -1113,3 +1114,20 @@ class KernelRegistry:
 
 #: Global kernel registry. ``KERNELS[name]`` / ``in`` / ``iter`` / ``len``.
 KERNELS = KernelRegistry()
+
+_BARE_LEVEL = re.compile(r"l(?:vl|evel)?_?(\d)$", re.I)
+
+
+def select_short_names(selector: str) -> List[str]:
+    """Short-names matched by ``selector``, for filtering result tables keyed by
+    short_name (the plotters). Accepts the full :meth:`KernelRegistry.select` grammar
+    (kernel / track / dwarf / ``@lvl<n>``) plus two conveniences a plot user expects:
+    a bare level (``lvl2`` -> ``all@lvl2``) and an underscore in the level suffix
+    (``hpc/structured_grids@lvl_1`` -> ``...@lvl1``)."""
+    sel = selector.strip()
+    bare = _BARE_LEVEL.fullmatch(sel)
+    if bare:
+        sel = f"all@lvl{bare.group(1)}"
+    else:
+        sel = re.sub(r"@l(?:vl|evel)?_?(\d)", r"@lvl\1", sel, flags=re.I)
+    return KERNELS.select(sel)

@@ -1,9 +1,19 @@
+import argparse
 import math
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
 from optarena.infrastructure import utilities as util
+from optarena.spec import select_short_names
+
+parser = argparse.ArgumentParser(description="Plot the line-count heatmap.")
+parser.add_argument("-b",
+                    "--benchmark",
+                    default="all",
+                    help="selector: a single kernel, a track (hpc/ml/foundation), a dwarf "
+                    "(hpc/structured_grids), or a level (hpc@lvl1, lvl2). Default: all.")
+args = parser.parse_args()
 
 # create a database connection
 database = r"optarena.db"
@@ -12,6 +22,10 @@ data = pd.read_sql_query("SELECT * FROM lcounts", conn)
 
 # get rid of kind and dwarf, we don't use them
 data = data.drop(['timestamp', 'kind', 'dwarf', 'version'], axis=1).reset_index(drop=True)
+
+# Selector: restrict to a kernel / track / dwarf / @level selection.
+if args.benchmark != 'all':
+    data = data[data['benchmark'].isin(set(select_short_names(args.benchmark)))].reset_index(drop=True)
 
 # Remove everything that does not have a domain
 data = data[data["domain"] != ""]
