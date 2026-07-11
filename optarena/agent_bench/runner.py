@@ -123,7 +123,8 @@ def _row(task: Task, agent: Agent, result: Score, rounds: int, oracle: str, base
 
 
 def _feedback(submission: Submission, result: Score, next_round: int) -> Dict:
-    """The repair message for the next round: the failure + the source to fix."""
+    """The repair message for the next round of a FAILED attempt: the failure + the
+    source to fix (``correct=False`` marks it the failure-framed branch of task.j2)."""
     if not result.build_ok:
         error = f"Compile/build failed:\n{result.detail}"
     elif not result.public_correct:
@@ -133,7 +134,20 @@ def _feedback(submission: Submission, result: Score, next_round: int) -> Dict:
                  f"{result.detail or 'numeric mismatch on hidden sizes'}. Make it general.")
     else:
         error = result.detail or "did not pass"
-    return {"round": next_round, "error": error, "source": submission.source or "(prebuilt library)"}
+    return {"round": next_round, "correct": False, "error": error, "source": submission.source or "(prebuilt library)"}
+
+
+def _improve_feedback(submission: Submission, best_speedup: float, next_round: int) -> Dict:
+    """The next-round message once an attempt is ALREADY correct: not the failure-framed
+    repair prompt but a "you are correct, current best speedup = X, now go faster" one
+    (``correct=True`` selects that branch of task.j2). Carries the running best speedup so
+    the agent knows the bar it is trying to beat."""
+    return {
+        "round": next_round,
+        "correct": True,
+        "speedup": best_speedup,
+        "source": submission.source or "(prebuilt library)",
+    }
 
 
 def _solve_rounds(agent: Agent,
@@ -231,14 +245,14 @@ def _solve_rounds(agent: Agent,
         last = (row, submission)
         if result.build_ok and result.correct:
             # Correct: keep the FASTEST correct attempt seen and stream it, then keep
-            # iterating (do NOT stop) so the agent can push the speedup higher. A fresh
-            # base prompt next round -- the failure-framed repair feedback does not fit
-            # an already-correct attempt (see prompts/task.j2; a targeted "you are
-            # correct, go faster" message would need a template branch, out of scope).
+            # iterating (do NOT stop) so the agent can push the speedup higher. Next round
+            # gets the "you are correct, current best = X, go faster" feedback (the
+            # correct-branch of prompts/task.j2), carrying the running best speedup -- NOT
+            # the failure-framed repair prompt, which no longer fits an already-correct kernel.
             if best is None or row.speedup > best[0].speedup:
                 best = (row, submission)
                 publish(best)
-            feedback = None
+            feedback = _improve_feedback(submission, best[0].speedup, rnd + 1)
         else:
             feedback = _feedback(submission, result, rnd + 1)
     return finish(best if best is not None else last)

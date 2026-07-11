@@ -18,6 +18,7 @@ from typing import Optional
 import jinja2
 
 from optarena import config, languages, paths
+from optarena.agent_bench.native import display_run_dir
 from optarena.agent_bench.resources import available_resources
 from optarena.agent_bench.sandbox import shared_dir
 from optarena.agent_bench.task import Task
@@ -49,6 +50,7 @@ class PromptConfig:
     strategy: str = "default"  # named optimization strategy (see STRATEGIES)
     optimization_guidance: bool = True  # include the how-to-optimize section
     language_track: bool = False  # emphasize optimizing idiomatically in the forced language
+    native: bool = False  # native (no-container) framing: the agent runs on the host, no /app container
     rtol: float = 1.0e-6  # correctness tolerance shown to the agent (fp64 reference target)
     atol: float = 1.0e-9
 
@@ -107,6 +109,9 @@ PROMPT_VARIANTS: dict = {
     "minimal": {
         "optimization_guidance": False,
         "inline_kernel": False
+    },
+    "native": {
+        "native": True
     },
 }
 
@@ -418,6 +423,13 @@ def build_context(task: Task,
         # which step optimizations.j2 leads with; strategy_emphasis is its one-line framing.
         "optimization_guidance": prompt_config.optimization_guidance,
         "language_track": prompt_config.language_track,
+        # Native (no-container) framing: when set, the prompt tells the agent it runs on the
+        # host in its native_runs folder (no /app container, no shared-mount judge). native_run_dir
+        # is the repo-relative per-run kernel folder shown to the agent; ext names the delivered
+        # source file (submission.<ext>). Off by default: the built-in prompt is container-framed.
+        "native": prompt_config.native,
+        "native_run_dir": display_run_dir(spec.short_name),
+        "ext": ext,
         "strategy": prompt_config.strategy,
         "strategy_emphasis": strategy["emphasis"],
         "strategy_lead": strategy["lead"],

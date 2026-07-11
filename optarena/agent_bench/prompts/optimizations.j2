@@ -41,7 +41,7 @@ move on.
 3. **Use the hardware.** Consider the memory hierarchy (cache blocking, working-set
    size), SIMD width, and thread-level parallelism where allowed.
 4. **Profile before and after -- measure, do not guess.** Performance tools are installed
-   in the container: `perf stat`/`perf record`, `valgrind --tool=cachegrind`/`callgrind`,
+   {% if native %}on this host{% else %}in the container{% endif %}: `perf stat`/`perf record`, `valgrind --tool=cachegrind`/`callgrind`,
    `likwid-perfctr`, PAPI, `heaptrack`, `pprof` (gperftools), and `objdump -d` to inspect
    the emitted assembly. Compare a run before and after each change.
 {% endif %}

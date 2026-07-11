@@ -16,7 +16,7 @@ import argparse
 import json
 import pathlib
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from optarena.flags import Mode
 from optarena.framework import FRAMEWORKS
@@ -213,6 +213,21 @@ def _residencies(value: str):
     return tokens
 
 
+def _agent_summary(rows) -> Tuple[int, float]:
+    """Correct-count + geomean speedup for a finished agent run.
+
+    Correctness is counted by ``row.correct`` -- the judge's numeric verdict -- NOT by
+    ``status == "ok"``: a kernel whose run was cut short by the per-kernel timeout but
+    whose best-so-far attempt was correct (``status == "timeout"``, ``correct=True``,
+    with a real ``speedup``) is a genuine success and MUST count toward the geomean.
+    ``geomean`` already skips the ``speedup <= 0`` (unscored) rows.
+    """
+    from optarena.agent_bench.metric import geomean
+    correct = [r for r in rows if r.correct]
+    speedups = [r.speedup for r in correct if r.speedup > 0]
+    return len(correct), (geomean(speedups) if speedups else 0.0)
+
+
 def cmd_agent(args) -> int:
     """Run one agent over the task cross-product, grading each (JSONL out).
 
@@ -222,10 +237,20 @@ def cmd_agent(args) -> int:
     ``--repair-rounds > 1`` the build/numeric failure is fed back so the agent can
     fix it (propose->compile->validate->repair). With ``--save-submissions`` the
     winning source for each task is written out (the returned optimization).
+
+    ``--native`` selects the no-container run mode: the agent runs in-process (no
+    agent container) and the in-process harness grades it (no serve container),
+    with the SAME per-kernel process isolation (``solve_task`` forks the whole
+    propose->build->score loop; each build+call still forks under ``_call_isolated``),
+    so a crashing/hanging/OOM kernel is a scored failure, not a sweep death. Every
+    submission is stashed under ``optarena/native_runs/<run_id>/<kernel>/``, the prompt
+    is host-framed (no ``/app`` container paths), and the recorded ``execution`` is
+    pinned to ``native``.
     """
     from dataclasses import asdict
 
-    from optarena.agent_bench import timing
+    from optarena import config
+    from optarena.agent_bench import native, timing
     from optarena.agent_bench.runner import solve_task
     from optarena.agent_bench.task import expand_tasks
     from optarena.languages import LANG_EXT
@@ -244,48 +269,66 @@ def cmd_agent(args) -> int:
     if save_dir:
         save_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = []
-    with out.open("a") as f:
-        for t in tasks:
-            row, submission = solve_task(agent,
-                                         t,
-                                         preset=args.preset,
-                                         datatype=args.datatype,
-                                         repeat=args.repeat,
-                                         oracle=args.oracle,
-                                         baseline=args.baseline,
-                                         max_rounds=args.repair_rounds)
-            rows.append(row)
-            dumped = asdict(row)
-            dumped.pop("prompt", None)  # the prompt lives in the content-addressed store, not the JSONL row
-            f.write(json.dumps(dumped) + "\n")
-            # Persist the per-call (tokens, score) trajectory to the results DB so the
-            # performance-vs-tokens history is queryable across runs (opt-in). The prompt
-            # shown to the agent is stored (content-addressed) and linked from every call row.
-            if args.record:
-                from optarena.agent_bench.recording import record_trajectory
-                record_trajectory(t,
-                                  row.trajectory,
-                                  run_id=args.run_id,
-                                  optimizer=agent.name,
-                                  preset=args.preset,
-                                  datatype=args.datatype,
-                                  language=t.language,
-                                  source_mode=t.source_mode,
-                                  baseline=row.baseline,
-                                  prompt=(row.prompt or None))
-            # Persist the returned optimization (winning, else last attempt).
-            if save_dir and submission is not None and submission.source is not None:
-                ext = LANG_EXT.get(submission.language, submission.language)
-                fname = f"{t.kernel}__{t.language}__{row.status}.{ext}"
-                (save_dir / fname).write_text(submission.source)
+    if args.native:
+        # No-container run: GUARANTEE the execution provenance is `native` (this override
+        # wins over any ambient OPTARENA_RECORD_EXECUTION=container) and frame every prompt
+        # for the host (no /app container). Both are process-scoped overrides the forked
+        # per-kernel children inherit; cleared in the finally so a later in-process run is
+        # unaffected.
+        config.set_override("record.execution", "native")
+        config.set_override("prompt.native", True)
+    variant = "native" if args.native else None
 
-    ok = [r for r in rows if r.status == "ok"]
-    speedups = [r.speedup for r in ok if r.speedup > 0]
-    from optarena.agent_bench.metric import geomean
-    gm = geomean(speedups) if speedups else 0.0  # 0.00x when nothing succeeded (vs geomean's 1.0 identity)
+    rows = []
+    try:
+        with out.open("a") as f:
+            for t in tasks:
+                row, submission = solve_task(agent,
+                                             t,
+                                             preset=args.preset,
+                                             datatype=args.datatype,
+                                             repeat=args.repeat,
+                                             oracle=args.oracle,
+                                             baseline=args.baseline,
+                                             max_rounds=args.repair_rounds)
+                rows.append(row)
+                dumped = asdict(row)
+                dumped.pop("prompt", None)  # the prompt lives in the content-addressed store, not the JSONL row
+                f.write(json.dumps(dumped) + "\n")
+                # Native mode: stash the returned submission under its native_runs folder
+                # (optarena/native_runs/<run_id>/<kernel>/submission.<ext>) -- the on-host
+                # home of a no-container run's artifacts.
+                if args.native and submission is not None and submission.source is not None:
+                    native.save_submission(args.run_id, t, submission)
+                # Persist the per-call (tokens, score) trajectory to the results DB so the
+                # performance-vs-tokens history is queryable across runs (opt-in). The prompt
+                # shown to the agent is stored (content-addressed) and linked from every call row.
+                if args.record:
+                    from optarena.agent_bench.recording import record_trajectory
+                    record_trajectory(t,
+                                      row.trajectory,
+                                      run_id=args.run_id,
+                                      optimizer=agent.name,
+                                      preset=args.preset,
+                                      datatype=args.datatype,
+                                      language=t.language,
+                                      source_mode=t.source_mode,
+                                      baseline=row.baseline,
+                                      variant=variant,
+                                      prompt=(row.prompt or None))
+                # Persist the returned optimization (winning, else last attempt).
+                if save_dir and submission is not None and submission.source is not None:
+                    ext = LANG_EXT.get(submission.language, submission.language)
+                    fname = f"{t.kernel}__{t.language}__{row.status}.{ext}"
+                    (save_dir / fname).write_text(submission.source)
+    finally:
+        if args.native:
+            config.clear_override("record.execution")
+            config.clear_override("prompt.native")
+
+    n_correct, gm = _agent_summary(rows)  # geomean over CORRECT rows (incl. timed-out-but-correct)
     rounds = max((r.rounds for r in rows), default=1)
-    print(f"agentbench {args.agent}: {len(ok)}/{len(rows)} correct, "
+    print(f"agentbench {args.agent}{' [native]' if args.native else ''}: {n_correct}/{len(rows)} correct, "
           f"geomean speedup vs {args.baseline} {gm:.2f}x "
           f"(oracle={args.oracle}, <= {rounds} rounds) -> {out}")
     return 0
@@ -500,6 +543,11 @@ def build_parser() -> argparse.ArgumentParser:
                    default=1,
                    help="max propose->compile->validate->repair rounds per task "
                    "(default 1 = single shot; >1 feeds the failure back to the agent)")
+    a.add_argument("--native",
+                   action="store_true",
+                   help="no-container run mode: run the agent + judge in-process (ZERO containers), "
+                   "stash each submission under optarena/native_runs/<run_id>/<kernel>/, host-frame the "
+                   "prompt, and record execution=native. Per-kernel process isolation is unchanged.")
     a.add_argument("--save-submissions",
                    default=None,
                    help="directory to write each task's winning source into (the returned optimization)")
