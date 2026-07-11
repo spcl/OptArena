@@ -20,11 +20,14 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
+from optarena import config
 from optarena.agent_bench.agent import Agent
 from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.prompts import build_prompt
-from optarena.agent_bench.scoring import Score, score
+from optarena.agent_bench.scoring import Score, resolve_kernel_timeout, score
 from optarena.agent_bench.task import Task
+from optarena.infrastructure.forked import run_forked
+from optarena.spec import BenchSpec
 
 
 @dataclass(frozen=True)
@@ -133,29 +136,29 @@ def _feedback(submission: Submission, result: Score, next_round: int) -> Dict:
     return {"round": next_round, "error": error, "source": submission.source or "(prebuilt library)"}
 
 
-def solve_task(agent: Agent,
-               task: Task,
-               *,
-               preset: str = "S",
-               datatype: str = "float64",
-               repeat: int = 5,
-               with_prompt: bool = True,
-               oracle: str = "numpy",
-               baseline: str = "c",
-               max_rounds: int = 1,
-               budget: Optional[int] = None) -> Tuple[RunRow, Optional[Submission]]:
-    """Single-shot end-to-end optimization: propose -> compile -> validate ->
-    repair, looping up to ``max_rounds`` until the submission passes.
+def _solve_rounds(agent: Agent,
+                  task: Task,
+                  *,
+                  preset: str = "S",
+                  datatype: str = "float64",
+                  repeat: int = 5,
+                  with_prompt: bool = True,
+                  oracle: str = "numpy",
+                  baseline: str = "c",
+                  max_rounds: int = 1,
+                  budget: Optional[int] = None) -> Tuple[RunRow, Optional[Submission]]:
+    """The propose -> compile -> validate -> repair loop (the body of one kernel
+    run), tracking the BEST CORRECT attempt seen so far.
 
     On each round the agent gets the prompt (with the previous round's build /
     numeric failure fed back in via ``feedback``), returns a :class:`Submission`,
-    and it is scored against the chosen ``oracle`` / ``baseline``. The loop stops
-    early on the first passing submission; otherwise it returns the LAST attempt.
-    Never raises -- an agent crash or harness error is a scored row.
-
-    Returns ``(row, submission)`` so the CLI can persist the winning optimization;
-    ``submission`` is the best (passing, else last) attempt, or ``None`` if the
-    agent never produced one.
+    and it is graded against the chosen ``oracle`` / ``baseline`` on the same
+    ``/oracle`` build path. Every graded round updates the running best correct
+    speedup; the loop finalizes (stops) on the first correct submission -- the
+    agent's implicit ``submit`` -- and otherwise repairs, returning the best
+    correct attempt if any, else the LAST attempt. Never raises -- an agent crash
+    or harness error is a scored row. This runs inside :func:`solve_task`'s forked
+    child so the per-kernel timeout can bound it.
     """
 
     def err(status: str, detail: str, rnd: int) -> RunRow:
@@ -186,6 +189,7 @@ def solve_task(agent: Agent,
 
     feedback = None
     last: Tuple[RunRow, Optional[Submission]] = (err("agent_error", "no attempt", 0), None)
+    best: Optional[Tuple[RunRow, Optional[Submission]]] = None  # best CORRECT attempt so far
     for rnd in range(1, max(1, max_rounds) + 1):
         try:
             prompt = build_prompt(task, oracle=oracle, baseline=baseline, feedback=feedback) if with_prompt else ""
@@ -193,7 +197,7 @@ def solve_task(agent: Agent,
             submission = agent.solve(task, prompt=prompt, budget=budget)
         except Exception as exc:  # noqa: BLE001 -- an agent failure is a scored datum
             trajectory.append(CallPoint(rnd, agent.usage.total, 0.0, False, "agent_error"))
-            return finish((err("agent_error", repr(exc), rnd), None))
+            return finish(best if best is not None else (err("agent_error", repr(exc), rnd), None))
         submission.tokens = agent.usage.total  # snapshot tokens-so-far at the score call
         try:
             result = score(submission,
@@ -211,9 +215,83 @@ def solve_task(agent: Agent,
         trajectory.append(CallPoint(rnd, agent.usage.total, result.speedup, result.correct, _status(result)))
         last = (row, submission)
         if result.build_ok and result.correct:
-            return finish((row, submission))  # passed -> stop the loop
+            # A correct attempt: keep the fastest correct one seen (the tracked best),
+            # then finalize -- the first correct submission ends the run.
+            if best is None or row.speedup > best[0].speedup:
+                best = (row, submission)
+            return finish(best)
         feedback = _feedback(submission, result, rnd + 1)
-    return finish(last)
+    return finish(best if best is not None else last)
+
+
+def solve_task(agent: Agent,
+               task: Task,
+               *,
+               preset: str = "S",
+               datatype: str = "float64",
+               repeat: int = 5,
+               with_prompt: bool = True,
+               oracle: str = "numpy",
+               baseline: str = "c",
+               max_rounds: int = 1,
+               budget: Optional[int] = None,
+               timeout: Optional[float] = None) -> Tuple[RunRow, Optional[Submission]]:
+    """Solve one kernel end-to-end under a per-kernel wall-clock budget.
+
+    Runs the repair loop (:func:`_solve_rounds`) in a forked child so a single
+    per-kernel ``timeout`` bounds the WHOLE run (all repair rounds + the LLM and
+    build/score time). The child tracks the best correct speedup and returns it;
+    the run finalizes when the agent lands a correct submission or when the budget
+    fires. ``timeout`` defaults to :func:`resolve_kernel_timeout` for the kernel
+    (global override > kernel-yaml > per-level default > fallback). On a timeout
+    the tracked best-so-far in the killed child cannot be recovered, so the kernel
+    is recorded as not-solved (``status="timeout"``); a normal finish returns the
+    best correct attempt (else the last). Never raises.
+
+    Returns ``(row, submission)`` so the CLI can persist the winning optimization;
+    ``submission`` is the best (passing, else last) attempt, or ``None`` if none
+    was produced / the run timed out.
+    """
+    if timeout is None:
+        try:
+            timeout = resolve_kernel_timeout(BenchSpec.load(task.kernel))
+        except Exception:  # noqa: BLE001 -- unknown kernel etc.: fall back to the flat budget
+            timeout = float(config.get("timeouts.kernel_s", 300))
+    run = run_forked(_solve_rounds,
+                     agent,
+                     task,
+                     preset=preset,
+                     datatype=datatype,
+                     repeat=repeat,
+                     with_prompt=with_prompt,
+                     oracle=oracle,
+                     baseline=baseline,
+                     max_rounds=max_rounds,
+                     budget=budget,
+                     label=task.id,
+                     timeout=timeout)
+    if run.ok and run.result is not None:
+        return run.result
+    # The child was killed (timeout) or died before returning a result. The tracked
+    # best-so-far did not survive the kill, so record the kernel as not-solved.
+    status = "timeout" if run.signal == "TIMEOUT" else "score_error"
+    detail = run.error or f"per-kernel run ended without a result ({run.signal or 'no result'})"
+    row = RunRow(task.id,
+                 task.kernel,
+                 task.language,
+                 task.source_mode,
+                 agent.name,
+                 status,
+                 False,
+                 float("inf"),
+                 0,
+                 detail,
+                 residency=task.residency,
+                 rounds=0,
+                 oracle=oracle,
+                 baseline=baseline,
+                 tokens=agent.usage.total)
+    return (row, None)
 
 
 def run_task(agent: Agent,

@@ -11,13 +11,15 @@ routes over stdlib HTTP (``/oracle`` backs three method views):
 * :meth:`JudgeClient.baseline` -> ``GET  /baseline/<kernel>`` (reference times)
 * :meth:`JudgeClient.verify`   -> ``POST /oracle``            (correctness slice)
 * :meth:`JudgeClient.score`    -> ``POST /oracle``            (speedup slice)
-* :meth:`JudgeClient.evaluate` -> ``POST /oracle``            (full result, one build)
+* :meth:`JudgeClient.submit`   -> ``POST /oracle``            (full result, one build; FINALIZE)
 
-``verify`` and ``score`` are the two endpoints the optimizer cares about: does my
-implementation compute the right answer, and how fast is it against the baseline
-(always run inside the judge, so the comparison is apples-to-apples). Both call
-the same ``/oracle`` endpoint -- :meth:`evaluate` returns the full result if you
-want correctness and speedup from a single build.
+``verify`` and ``score`` are the two endpoints the optimizer cares about while it
+iterates: does my implementation compute the right answer, and how fast is it
+against the baseline (always run inside the judge, so the comparison is
+apples-to-apples). Both are slices of the same ``/oracle`` build. :meth:`submit`
+runs that build ONCE, returns the full result (correctness + speedup), and is the
+agent's TERMINAL action -- the runner keeps the best correct speedup across the
+kernel's attempts, and ``submit`` finalizes the run on that best.
 
 The judge URL comes from the ``JUDGE_URL`` environment variable (set by the
 container topology to ``http://judge:8800``) or defaults to localhost.
@@ -64,24 +66,29 @@ class JudgeClient:
         return self._get(f"/baseline/{kernel}?language={language}&preset={preset}")
 
     # -- submission endpoints --------------------------------------------------
-    def evaluate(self, submission: Submission, kernel: str, *, preset: Optional[str] = None) -> Dict[str, Any]:
-        """Build + grade + time ``submission`` for ``kernel`` (full Score dict)."""
+    def submit(self, submission: Submission, kernel: str, *, preset: Optional[str] = None) -> Dict[str, Any]:
+        """Build + grade + time ``submission`` for ``kernel`` ONCE (full Score dict).
+
+        The agent's terminal action: it returns correctness AND speedup from a
+        single build. The runner tracks the best correct speedup across the
+        kernel's attempts, so ``submit`` finalizes the run on the best so far.
+        """
         body: Dict[str, Any] = {"kernel": kernel, **submission.to_json()}
         if preset is not None:
             body["preset"] = preset
         return self._post("/oracle", body)
 
     def verify(self, submission: Submission, kernel: str, *, preset: Optional[str] = None) -> Dict[str, Any]:
-        """Correctness slice of an evaluation: did the submission match the oracle?"""
-        r = self.evaluate(submission, kernel, preset=preset)
+        """Correctness slice of a submission: did it match the oracle?"""
+        r = self.submit(submission, kernel, preset=preset)
         return {
             k: r.get(k)
             for k in ("correct", "public_correct", "hidden_correct", "max_rel_error", "build_ok", "detail", "oracle")
         }
 
     def score(self, submission: Submission, kernel: str, *, preset: Optional[str] = None) -> Dict[str, Any]:
-        """Speedup slice of an evaluation: how fast against the baseline?"""
-        r = self.evaluate(submission, kernel, preset=preset)
+        """Speedup slice of a submission: how fast against the baseline?"""
+        r = self.submit(submission, kernel, preset=preset)
         return {k: r.get(k) for k in ("correct", "speedup", "native_ns", "baseline_ns", "baseline", "speedups")}
 
 

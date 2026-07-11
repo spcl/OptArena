@@ -21,7 +21,7 @@ The ``.so`` is loaded with cffi in ABI mode: a per-call ``cdef`` built from the 
 dtypes declares the C signature, then ``ffi.dlopen`` + a direct call invoke the kernel.
 """
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -286,6 +286,34 @@ def _primary_baseline(names) -> str:
     """The primary baseline for the scalar speedup row: numpy if it was timed, else C, else none.
     One policy shared by score() and score_cells() so a baseline-precedence change lands in one place."""
     return "numpy" if "numpy" in names else ("c" if "c" in names else "")
+
+
+def resolve_kernel_timeout(spec: BenchSpec) -> float:
+    """The per-kernel agent-run wall-clock budget (seconds), by precedence.
+
+    Strongest first: the global ``timeouts.kernel_s_override`` (null = unset, wins
+    over everything when set) > the kernel manifest's own ``timeout_s`` > the
+    per-level default ``timeouts.kernel_s_by_level[spec.resolved_level]`` (a
+    ``None`` level falls through) > the flat ``timeouts.kernel_s`` fallback. The
+    manifest ``timeout_s`` is read only when the spec actually declares that field
+    (so it applies the moment the schema carries it, and is simply absent -- falls
+    through -- until then). Config keys honour ``$OPTARENA_*`` env overrides.
+    """
+    override = config.get("timeouts.kernel_s_override", None)
+    if override is not None:
+        return float(override)
+    declared = {f.name for f in fields(spec)} if is_dataclass(spec) else set(vars(spec))
+    kernel_yaml = spec.timeout_s if "timeout_s" in declared else None
+    if kernel_yaml is not None:
+        return float(kernel_yaml)
+    level = spec.resolved_level
+    if level is not None:
+        by_level = config.get("timeouts.kernel_s_by_level", {}) or {}
+        # config.yaml keys parse as ints; an env/JSON-sourced map may use strings.
+        for key in (level, str(level)):
+            if key in by_level:
+                return float(by_level[key])
+    return float(config.get("timeouts.kernel_s", 300))
 
 
 def score(submission: Submission,

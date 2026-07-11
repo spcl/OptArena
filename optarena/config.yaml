@@ -172,7 +172,16 @@ record:
 
 timeouts:
   compile_s: 75
-  kernel_s: 300            # 5 minutes per kernel run (agent_bench child process)
+  kernel_s: 300            # final fallback: per-kernel agent-run wall-clock budget (seconds)
+  # Per-KernelBench-level defaults (BenchSpec.resolved_level 1/2/3). A kernel whose
+  # level is one of these takes the matching budget unless a narrower override wins.
+  kernel_s_by_level:
+    1: 180                 # L1 = a single primitive op
+    2: 300                 # L2 = a fused/composite or data-dependent sequence
+    3: 600                 # L3 = a full application (microapp)
+  # Global override (null = unset). When set it wins over EVERY other layer -- the
+  # one knob to cap/extend the whole sweep (e.g. $OPTARENA_TIMEOUTS_KERNEL_S_OVERRIDE=60).
+  kernel_s_override: null
 
 limits:
   kernel_memory_gb: 10     # per-kernel memory budget on top of the harness baseline

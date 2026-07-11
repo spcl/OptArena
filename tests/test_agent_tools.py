@@ -44,10 +44,10 @@ def test_verify_and_score_endpoints(make_judge):
     assert s["speedup"] > 0.0
 
 
-def test_evaluate_returns_both_slices(make_judge):
-    """evaluate() is the single-build all-in-one (verify + score from one POST)."""
+def test_submit_returns_both_slices(make_judge):
+    """submit() is the single-build all-in-one finalize (verify + score from one POST)."""
     _srv, url = make_judge(ServiceConfig(baseline="c", oracle="numpy", repeat=2))
-    r = tools.JudgeClient(url).evaluate(_reference_submission("gemm"), "gemm")
+    r = tools.JudgeClient(url).submit(_reference_submission("gemm"), "gemm")
     assert r["correct"] is True and r["build_ok"] is True and r["speedup"] > 0.0
 
 

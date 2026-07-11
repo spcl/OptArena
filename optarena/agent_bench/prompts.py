@@ -177,17 +177,19 @@ def prompt_env(template_dir=None) -> jinja2.Environment:
 
 
 #: Lead order for the per-tool prompt fragments (``prompts/tools/<tool>.md``);
-#: any extra fragment is appended alphabetically. Each judge tool documents
+#: any extra fragment is appended alphabetically. Each agent-facing tool documents
 #: itself in its own file -- drop a new ``tools/<name>.md`` and it is collected.
-_TOOL_ORDER = ("task", "baseline", "verify", "score", "evaluate")
+#: ``baseline``/``verify``/``score``/``submit`` are judge endpoints; ``web-search``
+#: is a capability declaration (the agent may look techniques/APIs up itself).
+_TOOL_ORDER = ("baseline", "verify", "score", "submit", "web-search")
 
 
 def _tool_fragments() -> list:
     """Template names of the per-tool prompt fragments, in curated order.
 
-    The prompt collects one fragment per agent-facing judge tool from
-    ``prompts/tools/``; :data:`_TOOL_ORDER` leads, then any other ``*.md``
-    alphabetically, so adding a tool file needs no code change.
+    The prompt collects one fragment per agent-facing tool from ``prompts/tools/``;
+    :data:`_TOOL_ORDER` leads, then any other ``*.md`` alphabetically, so adding a
+    tool file needs no code change.
     """
     by_stem = {p.stem: f"tools/{p.name}" for p in (_PROMPTS_DIR / "tools").glob("*.md")}
     ordered = [by_stem.pop(t) for t in _TOOL_ORDER if t in by_stem]

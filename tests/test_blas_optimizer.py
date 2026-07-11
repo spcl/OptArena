@@ -34,7 +34,7 @@ def test_language_option(kernel, make_judge):
     assert any(t == "-lopenblas" for t in sub.build)
 
     _srv, url = make_judge(_cfg())
-    r = tools.JudgeClient(url).evaluate(sub, kernel)
+    r = tools.JudgeClient(url).submit(sub, kernel)
     assert r["build_ok"] is True, r["detail"]
     assert r["correct"] is True, r["detail"]
     assert r["baseline_ns"] > 0 and r["native_ns"] > 0 and r["speedup"] > 0.0
@@ -48,7 +48,7 @@ def test_abi_option(kernel, make_judge):
     assert sub.library is not None and sub.source is None
 
     _srv, url = make_judge(_cfg())
-    r = tools.JudgeClient(url).evaluate(sub, kernel)
+    r = tools.JudgeClient(url).submit(sub, kernel)
     assert r["build_ok"] is True, r["detail"]
     assert r["correct"] is True, r["detail"]
     assert r["baseline_ns"] > 0 and r["speedup"] > 0.0
