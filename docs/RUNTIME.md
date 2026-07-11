@@ -30,9 +30,9 @@ for orchestration (image pulls, fleet of trials, cloud agents).
 **Can Harbor run offline?** Yes — Harbor's network needs are (1) pulling images and
 (2) the agent calling a cloud LLM. Point it at **local** prebuilt images (`.sif` /
 a locally-loaded docker image, no registry) and a **local** agent, and `harbor run`
-works with no internet (its `singularity` provider runs a local `.sif` directly). So:
-offline → local `apptainer`/`udocker` by default, *or* Harbor with local images + a
-local agent; online → Harbor with remote images/agents.
+works with no internet (its `singularity` provider runs a local `.sif` directly). So
+offline can be either local `apptainer`/`udocker` *or* Harbor with local images + a
+local agent; online is Harbor with remote images/agents.
 
 Harbor provides `docker` and `singularity`; pick per run with `harbor run --env <type>`
 (the adapter's `--run` passes `--env singularity` by default). `apptainer` and

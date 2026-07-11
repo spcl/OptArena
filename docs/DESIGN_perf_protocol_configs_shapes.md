@@ -49,11 +49,10 @@ iteration, configs=…, constraints=…)`. A **microkernel declares no configs**
 
 **Configs are declared, never fuzzed.** The judge enumerates `Φ` from the kernel's
 **declared** valid config set (`configs.valid` / `sets`+`rules`) and evaluates those
-as-is; it never fuzzes, randomizes, or otherwise alters the configuration. Only the
-*shapes* are fuzzed. The configuration is part of the fixed problem the judge
-presents; an optimizer may specialize its implementation per configuration, but the
-judge does not perturb it. (`enumerate_configs` returns the declared tuples, capped
-at `perf.max_configs`; `fuzzed_shape`/`edge_shapes`/`large_shapes` vary only sizes.)
+as-is; only the *shapes* are fuzzed. The configuration is part of the fixed problem;
+an optimizer may specialize per configuration, but the judge never perturbs it.
+(`enumerate_configs` returns the declared tuples, capped at `perf.max_configs`;
+`fuzzed_shape`/`edge_shapes`/`large_shapes` vary only sizes.)
 
 ---
 

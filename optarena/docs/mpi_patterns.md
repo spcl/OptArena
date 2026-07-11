@@ -327,5 +327,3 @@ the correctness anchor; the above are perf-variant expert baselines.
 - `Parallel I-O.pdf` (Ch7): p18-27 (`Type_create_darray`, `Type_create_subarray`, local-array-
   with-ghost §7.4.4).
 - `Support for Performance and Correctness Debugging.pdf` (Ch9): MPI_T pvar/cvar interface.
-</content>
-</invoke>

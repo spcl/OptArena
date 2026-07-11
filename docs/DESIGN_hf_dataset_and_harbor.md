@@ -48,8 +48,8 @@ harmonic mean of speedup ratios."* We mirror its layout and parity discipline.
 self-report ("PR a result") path and the Harbor adapter. The dataset ships only
 **public** artifacts (numpy reference, leak-free signature, public inputs); the
 **hidden tests, host timing, `independent_verify`, and the fuzz seed stay
-server-side**. The benchmark can verify but not be overfit — exactly SWE-bench's
-split (dataset = tasks, scoring = held-out tests).
+server-side**. So the benchmark can verify but not be overfit (SWE-bench's split:
+dataset = tasks, scoring = held-out tests).
 
 ---
 
@@ -106,9 +106,9 @@ sets `{set: [...]}`) verbatim — it is already the input to
 server-side secret** (config / `$OPTARENA_SEEDS_FUZZ`, never a dataset column). If
 both the ranges *and* the seed were public, the agent could enumerate the exact `k`
 sizes and tune to them — collapsing the sweep back to the fixed-size case we just
-rejected. So: **publish the ranges, hide the seed.** The agent optimizes for the
-*distribution*; only the judge knows the draws. Same firewall as the hidden tests,
-applied to the size sampler.
+rejected. So: **publish the ranges, hide the seed** — the agent optimizes for the
+*distribution*, only the judge knows the draws (the hidden-tests firewall, applied
+to the size sampler).
 
 ### 2.4 Export & consumption — ✅ IMPLEMENTED (`optarena/hf_export.py`)
 
@@ -197,10 +197,10 @@ construction** — parity is exact, not approximate. Validate on a sampled subse
 > `aggregate → SuiteScore`; the seeded sweep is wired through
 > `scoring.score(..., fuzz_iteration=j)` and `independent_verify(..., fuzz_iteration=j)`.
 
-A benchmark's metric is where most benchmarks fail the paper's bar. The score must
-be **renormalization-consistent** (correct mean for ratios), **monotonic** in
-correctness *and* speed, **ungameable** (no cherry-picking, no timing-noise
-leverage), and a **single rankable figure that never hides the distribution**.
+The score must be **renormalization-consistent** (correct mean for ratios),
+**monotonic** in correctness *and* speed, **ungameable** (no cherry-picking, no
+timing-noise leverage), and a **single rankable figure that never hides the
+distribution**.
 
 ### 4.1 Two-level geometric aggregation
 

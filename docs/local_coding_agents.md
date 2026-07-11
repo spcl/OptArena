@@ -75,13 +75,12 @@ observe (repo state, errors)  ->  think (LLM)  ->  act (edit file / run shell / 
 ```
 
 The LLM never edits files itself — it *emits actions* (a diff, a shell command, a
-tool call), the harness executes them, feeds the result back, and loops. This is
-the **ReAct / tool-use loop**. "Runs independently until completion" just means
-the stop condition is automatic (a passing test suite or a self-declared "done")
-rather than a human pressing enter each turn.
+tool call), the harness executes them, feeds the result back, and loops (the
+**ReAct / tool-use loop**). "Runs until completion" means the stop condition is
+automatic (a passing test suite, or a self-declared "done").
 
-**The most common way to get an autonomous local coder** is to run a mature
-agent in non-interactive mode rather than hand-rolling the loop:
+For an autonomous local coder, run a mature agent in non-interactive mode rather
+than hand-rolling the loop:
 
 - **Aider, scripted** — the simplest turnkey option for a local repo:
   ```bash
