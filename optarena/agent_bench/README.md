@@ -79,7 +79,7 @@ binding, the discovered toolchain) — nothing from `hidden_tests/`. Sections:
 4. delivery — restricted (file name + real compile commands) or any (where to read the ABI)
 5. memory residency (GPU host vs device)
 6. **available resources** — compilers + numeric libraries discovered on the host
-   (`utilities/discover_tools.py`), which the agent may link via the `build` field
+   (`optarena/agent_bench/discover_tools.py`), which the agent may link via the `build` field
 7. timing — the harness times the pure call (CPU monotonic clock / GPU events) and writes
    `time_ns`; the agent never times
 8. correctness, goal, and the JSON response envelope
@@ -105,4 +105,4 @@ python -m optarena.cli prompt gemm --language c                    # print a pro
 python -m optarena.cli agent stub --kernels gemm                   # run the loop
 ```
 
-Available compilers/libraries on this machine: `python utilities/discover_tools.py`.
+Available compilers/libraries on this machine: `python -m optarena.agent_bench.discover_tools`.

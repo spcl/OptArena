@@ -5,10 +5,10 @@ Reads the discovery wishlist ``optarena/envs/toolset.yaml`` and reports, for eac
 tool, whether it is present (with version + path) -- so the harness/agent knows
 which toolchains and numeric libraries the *user's* machine actually offers.
 
-    python utilities/discover_tools.py                  # human report (all targets)
-    python utilities/discover_tools.py --json           # machine-readable JSON
-    python utilities/discover_tools.py --yaml -o env.yaml
-    python utilities/discover_tools.py --require nvidia  # exit 1 if an nvidia-
+    python -m optarena.agent_bench.discover_tools                 # human report (all targets)
+    python -m optarena.agent_bench.discover_tools --json          # machine-readable JSON
+    python -m optarena.agent_bench.discover_tools --yaml -o env.yaml
+    python -m optarena.agent_bench.discover_tools --require nvidia # exit 1 if an nvidia-
                                                        # required tool is missing
 
 Detection uses only the stdlib + the system's own tools (shutil.which,
@@ -28,8 +28,8 @@ import sys
 
 import yaml
 
-REPO = pathlib.Path(__file__).resolve().parent.parent
-TOOLSET = REPO / "optarena" / "envs" / "toolset.yaml"
+_PKG = pathlib.Path(__file__).resolve().parent.parent  # the optarena/ package dir
+TOOLSET = _PKG / "envs" / "toolset.yaml"
 TARGETS = ("cpu", "nvidia", "amd")
 _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 

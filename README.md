@@ -61,7 +61,6 @@ optarena/
 │   └── spec.py  cli.py  config.py
 ├── containers/                   container images (Docker + Apptainer)
 ├── scripts/                      hidden-test firewall + agent_bench setup helpers
-├── utilities/                    discover_tools.py (host compiler/library probe)
 └── run_benchmark.py  quickstart.py  plot_results.py
 ```
 

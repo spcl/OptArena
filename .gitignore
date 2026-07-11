@@ -172,6 +172,7 @@ _session_scratch/
 # Local-only dev tools (kept on disk, not published)
 scripts/infer_output_args.py
 scripts/verify_tvm.py
+tools/pluto_affine_survey_results.txt
 
 # --- Build / cache artifacts (machine-generated; never committed) -------------
 # GT4Py kernel cache, compiled Fortran modules, ruff cache.
