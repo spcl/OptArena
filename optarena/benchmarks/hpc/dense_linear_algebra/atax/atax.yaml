@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: A transpose times A times x
 kind: microkernel
+level: 2
 parameters:
   S:
     M: 4000

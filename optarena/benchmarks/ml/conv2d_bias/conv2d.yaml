@@ -3,6 +3,7 @@
 name: Conv2D with Bias
 func_name: conv2d_bias
 kind: microkernel
+level: 1
 parameters:
   S:
     N: 8
@@ -29,7 +30,7 @@ parameters:
     N: 8
     C_in: 3
     C_out: 64
-    K: 11
+    K: 3
     H: 1024
     W: 1024
 init:

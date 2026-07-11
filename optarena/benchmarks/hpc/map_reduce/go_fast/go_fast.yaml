@@ -3,6 +3,7 @@
 name: GoFast
 short_name: npgofast
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 2000

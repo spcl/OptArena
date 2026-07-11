@@ -3,6 +3,7 @@
 name: HMM Forward
 short_name: hmm_forward
 kind: microapp
+level: 3
 parameters:
   S:
     T: 200

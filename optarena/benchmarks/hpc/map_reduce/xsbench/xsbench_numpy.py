@@ -310,17 +310,16 @@ def calculate_micro_xs_unionized(
     else:
         low_idx = grid_idx
 
-    high_idx = low_idx + 1
+    low = nuclide_grid[nuc, low_idx]
+    high = nuclide_grid[nuc, low_idx + 1]
 
-    f = (float(nuclide_grid[nuc, high_idx, ENERGY]) - p_energy) / (
-        float(nuclide_grid[nuc, high_idx, ENERGY]) - float(nuclide_grid[nuc, low_idx, ENERGY])
-    )
+    f = (float(high[ENERGY]) - p_energy) / (float(high[ENERGY]) - float(low[ENERGY]))
 
     xs_vector = np.zeros(NUM_XS_CHANNELS, dtype=np.float64)
     for k in range(NUM_XS_CHANNELS):
         channel = k + 1
-        xs_vector[k] = float(nuclide_grid[nuc, high_idx, channel]) - f * (
-            float(nuclide_grid[nuc, high_idx, channel]) - float(nuclide_grid[nuc, low_idx, channel])
+        xs_vector[k] = float(high[channel]) - f * (
+            float(high[channel]) - float(low[channel])
         )
 
     _ = n_isotopes
@@ -378,7 +377,6 @@ def xsbench_kernel(
 ) -> np.ndarray:
     """Run the unionized-grid XSBench lookup kernel."""
 
-    out = np.zeros((int(p_energy_samples.shape[0]), NUM_XS_CHANNELS), dtype=np.float64)
     return xsbench(
         p_energy_samples,
         mat_samples,
@@ -388,7 +386,6 @@ def xsbench_kernel(
         index_grid,
         nuclide_grid,
         mats,
-        out,
     )
 
 
@@ -482,7 +479,7 @@ def initialize(
     """Manifest-compatible XSBench input generator."""
 
     _ = datatype
-    inputs = generate_random_xsbench_inputs(
+    return generate_random_xsbench_inputs(
         n_samples=n_samples,
         n_isotopes=n_isotopes,
         n_gridpoints=n_gridpoints,
@@ -490,8 +487,6 @@ def initialize(
         max_num_nucs=max_num_nucs,
         seed=seed,
     )
-    out = np.zeros((int(n_samples), NUM_XS_CHANNELS), dtype=np.float64)
-    return (*inputs, out)
 
 
 def xsbench(
@@ -503,11 +498,11 @@ def xsbench(
     index_grid,
     nuclide_grid,
     mats,
-    out,
 ):
     """Manifest-compatible XSBench benchmark entry point."""
 
     n_samples = int(p_energy_samples.shape[0])
+    out = np.zeros((n_samples, NUM_XS_CHANNELS), dtype=np.float64)
 
     for s in range(n_samples):
         p_energy = float(p_energy_samples[s])

@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Canonicalize wavefront_2d
 kind: microkernel
+level: 1
 parameters:
   S:
     N: 16

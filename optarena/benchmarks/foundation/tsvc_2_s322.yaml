@@ -3,6 +3,7 @@
 name: TSVC s322
 func_name: s322
 kind: microkernel
+level: 1
 parameters:
   S:
     LEN_1D: 512

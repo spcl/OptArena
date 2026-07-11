@@ -35,7 +35,7 @@ offline → local `apptainer`/`udocker` by default, *or* Harbor with local image
 local agent; online → Harbor with remote images/agents.
 
 Harbor provides `docker` and `singularity`; pick per run with `harbor run --env <type>`
-or set `[environment].type` in `adapters/optarena/optarena.yaml`. `apptainer` and
+(the adapter's `--run` passes `--env singularity` by default). `apptainer` and
 `udocker` run an image directly without Harbor (`optarena.containers.local_run_command`).
 Build the two images once (Apptainer/podman, both rootless), then run with any backend.
 

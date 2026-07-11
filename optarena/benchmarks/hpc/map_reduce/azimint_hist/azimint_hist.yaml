@@ -3,6 +3,7 @@
 name: Azimuthal Integration - Histogram
 short_name: azimhist
 kind: microapp
+level: 3
 parameters:
   S:
     N: 400000

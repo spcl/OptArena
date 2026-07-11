@@ -179,7 +179,7 @@ def _validate_inputs(
         raise ValueError("fv must have shape (n_particles, 4)")
 
 
-def lavamd(
+def lavamd_kernel(
     alpha: float,
     box_offsets: np.ndarray,
     neighbor_counts: np.ndarray,
@@ -188,13 +188,9 @@ def lavamd(
     qv: np.ndarray,
     fv: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Manifest-compatible lavaMD benchmark entry point.
+    """Run the lavaMD CPU interaction kernel and return the force array."""
 
-    Pure numeric core, no input validation: the translator/oracle pipeline
-    always supplies well-formed, oracle-generated buffers, and a Python
-    ``raise`` cannot be lowered to C/C++/Fortran. Direct/local callers that
-    want validation should use :func:`lavamd_kernel` instead.
-    """
+    _validate_inputs(box_offsets, neighbor_counts, neighbor_list, rv, qv, fv)
 
     alpha = float(alpha)
     if fv is None:
@@ -267,24 +263,10 @@ def initialize(
     return box_offsets, neighbor_counts, neighbor_list, rv, qv, fv
 
 
-def lavamd_kernel(
-    alpha: float,
-    box_offsets: np.ndarray,
-    neighbor_counts: np.ndarray,
-    neighbor_list: np.ndarray,
-    rv: np.ndarray,
-    qv: np.ndarray,
-    fv: np.ndarray | None = None,
-) -> np.ndarray:
-    """Run the lavaMD CPU interaction kernel and return the force array.
+def lavamd(alpha, box_offsets, neighbor_counts, neighbor_list, rv, qv, fv):
+    """Manifest-compatible lavaMD benchmark entry point."""
 
-    Validates inputs (see :func:`_validate_inputs`) before delegating to the
-    pure numeric core in :func:`lavamd`; intended for direct/local Python
-    callers, not the translator/oracle pipeline.
-    """
-
-    _validate_inputs(box_offsets, neighbor_counts, neighbor_list, rv, qv, fv)
-    return lavamd(
+    return lavamd_kernel(
         alpha,
         box_offsets,
         neighbor_counts,

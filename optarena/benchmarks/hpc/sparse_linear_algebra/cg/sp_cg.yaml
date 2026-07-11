@@ -3,6 +3,7 @@
 name: Sparse Conjugate Gradient
 module_name: cg
 kind: microapp
+level: 3
 parameters:
   S:
     N: 2048

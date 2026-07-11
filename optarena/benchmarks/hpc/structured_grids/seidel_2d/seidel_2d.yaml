@@ -3,6 +3,7 @@
 name: 2-D Seidel stencil computation
 short_name: seidel2d
 kind: microkernel
+level: 1
 parameters:
   S:
     TSTEPS: 8

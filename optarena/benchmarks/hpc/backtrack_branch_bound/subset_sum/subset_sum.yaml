@@ -3,6 +3,7 @@
 name: Subset Sum
 short_name: subset_sum
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 20

@@ -3,6 +3,7 @@
 name: ResNet-50 Bottleneck Residual Block
 func_name: resnet_basicblock
 kind: microapp
+level: 3
 parameters:
   S:
     N: 8

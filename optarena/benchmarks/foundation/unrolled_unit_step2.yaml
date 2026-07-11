@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Canonicalize unrolled_unit_step2
 kind: microkernel
+level: 1
 parameters:
   S:
     M: 16

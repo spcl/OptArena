@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Triangular matrix-multiply
 kind: microkernel
+level: 1
 parameters:
   S:
     M: 65

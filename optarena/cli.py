@@ -14,7 +14,6 @@ of each framework off the legacy harness happens incrementally.
 """
 import argparse
 import json
-import math
 import pathlib
 import time
 from typing import Any, Dict, List
@@ -22,7 +21,7 @@ from typing import Any, Dict, List
 from optarena.flags import Mode
 from optarena.framework import FRAMEWORKS
 from optarena.precision import Precision
-from optarena.spec import BenchSpec, KERNELS, selector_slug
+from optarena.spec import BenchSpec, KERNELS, PRESET_CHOICES, selector_slug
 
 
 def _resolve_benchmarks(arg: str) -> List[str]:
@@ -281,11 +280,11 @@ def cmd_agent(args) -> int:
 
     ok = [r for r in rows if r.status == "ok"]
     speedups = [r.speedup for r in ok if r.speedup > 0]
-    # Log-space geomean: math.prod over a large suite overflows to inf.
-    geomean = math.exp(sum(math.log(s) for s in speedups) / len(speedups)) if speedups else 0.0
+    from optarena.agent_bench.metric import geomean
+    gm = geomean(speedups) if speedups else 0.0  # 0.00x when nothing succeeded (vs geomean's 1.0 identity)
     rounds = max((r.rounds for r in rows), default=1)
     print(f"agentbench {args.agent}: {len(ok)}/{len(rows)} correct, "
-          f"geomean speedup vs {args.baseline} {geomean:.2f}x "
+          f"geomean speedup vs {args.baseline} {gm:.2f}x "
           f"(oracle={args.oracle}, <= {rounds} rounds) -> {out}")
     return 0
 
@@ -468,7 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
                    default="c",
                    help="comma-separated languages (c,cpp,fortran,cuda,hip) "
                    "or 'all'; default 'c'")
-    a.add_argument("--preset", default="S", choices=["S", "M", "L", "XL", "paper"], help="data-size preset (default S)")
+    a.add_argument("--preset", default="S", choices=list(PRESET_CHOICES), help="data-size preset (default S)")
     a.add_argument("--datatype",
                    default="float64",
                    choices=["float64", "float32"],
@@ -481,13 +480,15 @@ def build_parser() -> argparse.ArgumentParser:
                    type=int,
                    default=5,
                    help="timed reps per task; best (min) kept for the speedup (default 5)")
+    from optarena.agent_bench.scoring import BASELINE_CHOICES, ORACLE_CHOICES
+    from optarena.agent_bench.service import INPUT_MODES
     a.add_argument("--oracle",
                    default="numpy",
-                   choices=["numpy", "c", "both"],
+                   choices=list(ORACLE_CHOICES),
                    help="correctness reference (default numpy; c = compiled C reference; both)")
     a.add_argument("--baseline",
                    default="c",
-                   choices=["numpy", "c", "both"],
+                   choices=list(BASELINE_CHOICES),
                    help="speedup denominator (default c = sequential C reference, numpy fallback; numpy; both)")
     a.add_argument("--repair-rounds",
                    type=int,
@@ -555,19 +556,19 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--port", type=int, default=8800, help="bind port (default 8800)")
     sv.add_argument("--oracle",
                     default=None,
-                    choices=["numpy", "c", "both"],
+                    choices=list(ORACLE_CHOICES),
                     help="correctness reference (default from config service.oracle)")
     sv.add_argument("--baseline",
                     default=None,
-                    choices=["numpy", "c", "both"],
+                    choices=list(BASELINE_CHOICES),
                     help="speedup denominator (default from config service.baseline)")
     sv.add_argument("--input-mode",
                     default=None,
-                    choices=["source", "library", "either"],
+                    choices=list(INPUT_MODES),
                     help="what POST /oracle accepts (default from config service.input_mode)")
     sv.add_argument("--preset",
                     default=None,
-                    choices=["S", "M", "L", "XL", "paper"],
+                    choices=list(PRESET_CHOICES),
                     help="data-size preset the judge scores at (default from config)")
     sv.add_argument("--repeat", type=int, default=None, help="timed reps; best kept (default from config)")
     sv.set_defaults(func=cmd_serve)

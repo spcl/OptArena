@@ -3,6 +3,7 @@
 name: Arc Distance
 short_name: adist
 kind: microkernel
+level: 1
 parameters:
   S:
     N: 100000

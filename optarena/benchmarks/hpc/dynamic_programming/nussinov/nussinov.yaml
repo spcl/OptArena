@@ -3,6 +3,7 @@
 name: Nussinov
 func_name: kernel
 kind: microapp
+level: 3
 parameters:
   S:
     N: 40

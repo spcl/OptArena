@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Horizontal Diffusion
 kind: microapp
+level: 3
 parameters:
   S:
     I: 64

@@ -38,7 +38,8 @@ def _ptr_cdecl(dtype) -> str:
     return f"{c_type(np.dtype(dtype).name)} *"
 
 
-#: cffi pointer type for the reserved scratch buffer (§11).
+#: cffi pointer type for the reserved scratch buffer (§11) -- a fixed constant,
+#: computed once and reused by both the host and device call paths.
 WORKSPACE_PTYPE = _ptr_cdecl(np.dtype(WORKSPACE_DTYPE))
 
 

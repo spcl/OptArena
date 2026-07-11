@@ -148,8 +148,7 @@ renders the files as text); the in-container grader is
 
 ```
 adapters/optarena/
-  run_adapter.py         # CLI: generate task dirs (-> optarena.harbor_adapter.generate)
-  optarena.yaml          # Harbor JobConfig (validated against harbor.models.job.config)
+  run_adapter.py         # CLI: generate task dirs + `--run` (harbor run -p <dir>)
   adapter_metadata.json  # name, harness:"agent", tracks, scoring
   pyproject.toml, README.md
 adapters/optarena/tasks/ # GENERATED (gitignored): one task dir per kernel:

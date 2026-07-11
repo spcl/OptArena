@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Viterbi
 kind: microapp
+level: 3
 parameters:
   S:
     T: 200

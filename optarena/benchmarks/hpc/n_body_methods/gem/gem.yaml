@@ -3,6 +3,7 @@
 name: GEM Electrostatics
 short_name: gem
 kind: microapp
+level: 3
 parameters:
   S:
     npoints: 1000

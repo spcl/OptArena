@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Bincojugate Gradient Method
 kind: microkernel
+level: 2
 parameters:
   S:
     M: 4000

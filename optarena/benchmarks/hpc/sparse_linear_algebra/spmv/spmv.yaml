@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Sparse Matrix-Vector Multiplication
 kind: microapp
+level: 3
 parameters:
   S:
     M: 4096

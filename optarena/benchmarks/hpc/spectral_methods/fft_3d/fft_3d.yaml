@@ -3,6 +3,7 @@
 name: NPB FT (3-D FFT)
 short_name: fft_3d
 kind: microapp
+level: 3
 parameters:
   S:
     # Small on purpose: the NumpyToX native backends lower np.fft.fftn/ifftn to

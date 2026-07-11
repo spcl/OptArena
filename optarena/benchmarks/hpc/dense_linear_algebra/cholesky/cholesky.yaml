@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Cholesky Decomposition
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 100

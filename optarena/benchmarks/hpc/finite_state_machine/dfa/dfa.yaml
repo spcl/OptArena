@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: DFA Scan
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 20000

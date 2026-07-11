@@ -57,12 +57,12 @@ properties:
       dispatch keys on it; the track folder (hpc/foundation/ml) drives behavior."
   level:
     type: integer
-    enum:
-    - 1
-    - 2
-    - 3
-    description: "Explicit KernelBench-style difficulty level. When omitted,
-      loaders derive it from benchmark structure."
+    enum: [1, 2, 3]
+    description: "KernelBench difficulty, curated per kernel (read verbatim by
+      BenchSpec.resolved_level, no runtime classifier). L1 = a single primitive op;
+      L2 = a fused/composite sequence or data-dependent control (break/while/search);
+      L3 = a full application (kind: microapp). Foundation is loop microkernels only,
+      so it is L1/L2. Drives the `<track>@lvl<n>` selector."
   parameters:
     type: object
     description: 'preset -> {symbol: value}'

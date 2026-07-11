@@ -3,6 +3,7 @@
 name: Sparse General Minimal Residual
 module_name: gmres
 kind: microapp
+level: 3
 parameters:
   S:
     N: 2048

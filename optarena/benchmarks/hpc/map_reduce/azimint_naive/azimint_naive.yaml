@@ -3,6 +3,7 @@
 name: Azimuthal Integration - Naive
 short_name: azimnaiv
 kind: microapp
+level: 3
 parameters:
   S:
     N: 400000

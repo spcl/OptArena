@@ -3,6 +3,7 @@
 name: CFD (Euler flux)
 short_name: cfd
 kind: microapp
+level: 3
 parameters:
   S:
     ncells: 5000

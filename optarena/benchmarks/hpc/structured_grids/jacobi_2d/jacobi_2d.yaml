@@ -3,6 +3,7 @@
 name: 2-D Jacobi stencil computation
 short_name: jacobi2d
 kind: microkernel
+level: 2
 parameters:
   S:
     TSTEPS: 50

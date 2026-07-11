@@ -3,6 +3,7 @@
 name: Floyd-Warshall
 short_name: floydwar
 kind: microapp
+level: 3
 parameters:
   S:
     N: 200

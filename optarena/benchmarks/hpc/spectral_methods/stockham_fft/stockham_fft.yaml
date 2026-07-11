@@ -3,6 +3,7 @@
 name: Stockham FFT
 short_name: sthamfft
 kind: microkernel
+level: 2
 parameters:
   S:
     R: 2

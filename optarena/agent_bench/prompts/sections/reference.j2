@@ -15,3 +15,14 @@ own from scratch:
 {% else %}Use it as a starting point (it can be added to this prompt on request), or write
 your own from scratch -- your choice.{% endif %}
 {% endif %}
+{% if include_original and has_original %}
+
+An original reference implementation of this kernel (the source it was ported from) is
+available at:
+{% for p in original_paths %}
+- `{{ p }}`
+{% endfor %}
+You MAY read and port/optimize from any of these instead of the NumPy reference; they are
+provided as a convenience and are NOT the scoring oracle -- the NumPy reference remains the
+correctness oracle.
+{% endif %}

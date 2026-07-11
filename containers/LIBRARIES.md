@@ -109,6 +109,25 @@ the agent or judge lands on. Installed to `/usr/local` → `-lhptt`, `#include <
 |---|---|---|
 | Boost | `libboost-all-dev` | **[have]** |
 
+## Performance / profiling tools
+
+Profilers, tracers, and allocator/inspection tools for optimizing and debugging a
+submission in-container. All from apt on the same shared install line.
+
+| Tool | apt package | Provides / use |
+|---|---|---|
+| perf | `linux-tools-generic` | Linux `perf` -- cycle / cache-miss / hotspot sampling (`linux-tools-common` alone lacks the binary) |
+| GDB | `gdb` | interactive debugger |
+| Valgrind | `valgrind` | memcheck / cachegrind / callgrind memory + cache profiling |
+| numactl | `numactl` | NUMA CLI -- bind memory/CPU nodes, inspect topology (`--hardware`) |
+| gperftools | `google-perftools` `libgoogle-perftools-dev` | `pprof` CPU/heap profiler + `tcmalloc` fast allocator (`-ltcmalloc`) |
+| heaptrack | `heaptrack` | heap-allocation profiler (who allocates, how much) |
+| LIKWID | `likwid` | `likwid-topology` / `likwid-perfctr` hardware counters + thread affinity |
+| PAPI | `papi-tools` `libpapi-dev` | `papi_avail` + `-lpapi` performance-counter API |
+| strace | `strace` | syscall tracer |
+| ltrace | `ltrace` | library-call tracer |
+| binutils | `binutils` | `objdump` / `nm` / `readelf` / `size` -- disassembly + binary inspection |
+
 ---
 
 ## Concrete change to the images

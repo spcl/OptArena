@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Adversarial jacobi_2d_tile_swapped_dims
 kind: microkernel
+level: 1
 parameters:
   S:
     N: 64

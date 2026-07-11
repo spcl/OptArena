@@ -3,6 +3,7 @@
 name: HotSpot
 short_name: hotspot
 kind: microapp
+level: 3
 parameters:
   S:
     N: 256

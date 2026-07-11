@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Multi-layer Perceptron
 kind: microapp
+level: 3
 parameters:
   S:
     C_in: 3

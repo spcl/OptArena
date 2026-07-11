@@ -6488,6 +6488,35 @@ class _CallHoister(ast.NodeTransformer):
             shape = self.shape_table.get(args[0].id)
             if shape:
                 return tuple(shape)
+        # ``np.roll`` / ``np.linalg.cholesky`` / ``np.tril`` / ``np.triu`` all
+        # return an array with the FIRST operand's shape -- so an inline
+        # ``acc + np.roll(x, m, axis)`` (the periodic-stencil idiom) can be
+        # hoisted out of the BinOp instead of reaching the emitter unlowered.
+        if op in {"roll", "linalg.cholesky", "tril", "triu"} \
+                and args and isinstance(args[0], ast.Name):
+            shape = self.shape_table.get(args[0].id)
+            if shape:
+                return tuple(shape)
+        # ``np.reshape(a, shape)`` -- output extents are the shape arg, with a
+        # single ``-1`` resolved to prod(source) / prod(other dims). Lets the
+        # flattened-dot idiom ``a.ravel() @ a.ravel()`` (lowered to reshape)
+        # hoist inline out of the matmul.
+        if op == "reshape" and len(args) >= 2 and isinstance(args[0], ast.Name):
+            src = self.shape_table.get(args[0].id)
+            sh = args[1]
+            elts = sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh]
+            toks = [self._extent_to_shape_token(e) for e in elts]
+            if src is not None:
+                prod_src = "(" + ") * (".join(str(s) for s in src) + ")"
+                if any(str(t).strip() == "-1" for t in toks):
+                    others = [t for t in toks if str(t).strip() != "-1"]
+                    if others:
+                        denom = "(" + ") * (".join(str(t) for t in others) + ")"
+                        neg = f"({prod_src}) / ({denom})"
+                    else:
+                        neg = f"({prod_src})"
+                    toks = [neg if str(t).strip() == "-1" else str(t) for t in toks]
+                return tuple(str(t) for t in toks)
         # ``np.concatenate((a, b, ...), axis=k)`` -> common shape, axis summed.
         if op == "concatenate" and args:
             try:

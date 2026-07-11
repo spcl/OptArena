@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: CRC-16
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 1600

@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: General matrix-matrix multiplication
 kind: microkernel
+level: 1
 parameters:
   S:
     NI: 1000

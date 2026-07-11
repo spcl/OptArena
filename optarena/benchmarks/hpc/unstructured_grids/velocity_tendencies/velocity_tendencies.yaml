@@ -19,6 +19,7 @@ short_name: velocity_tendencies
 module_name: velocity_tendencies
 func_name: velocity_tendencies
 kind: microapp
+level: 3
 parameters:
   S:
     nproma: 32

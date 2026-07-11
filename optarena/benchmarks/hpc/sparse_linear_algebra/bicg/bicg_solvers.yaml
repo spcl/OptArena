@@ -3,6 +3,7 @@
 name: Biconjugate Gradient (BiCG) Method
 module_name: bicg
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 1000

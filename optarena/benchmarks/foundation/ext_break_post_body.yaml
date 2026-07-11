@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: TSVC ext_break_post_body
 kind: microkernel
+level: 2
 parameters:
   S:
     LEN_1D: 512

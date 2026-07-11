@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: 2-D Finite Different Time Domain Kernel
 kind: microkernel
+level: 2
 parameters:
   S:
     TMAX: 20

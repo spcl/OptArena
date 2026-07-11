@@ -27,7 +27,8 @@ that the TSVC-2 sources from VectraArtifacts already use:
 The base class' timing override below populates
 :attr:`TimingResult.native` from that module attribute. Wrappers that
 do not implement the contract leave the attribute missing or at 0;
-the framework treats that as ``native=None`` and reports wall-clock only.
+the framework treats that as ``native=None`` and reports wall-clock
+only (the historic OptArena behaviour, unchanged).
 """
 
 import importlib

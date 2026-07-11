@@ -3,6 +3,7 @@
 name: Bitonic Sort
 short_name: bitonic_sort
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 4096

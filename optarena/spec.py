@@ -282,6 +282,17 @@ def derive_array_args(input_args: Tuple[str, ...], init: Optional[InitSpec]) -> 
     return tuple(a for a in input_args if a in shaped)
 
 
+def numpy_reference_path(relative_path: str, module_name: str) -> Optional[pathlib.Path]:
+    """The kernel's numpy reference file: ``<module>_numpy.py`` if present, else the
+    bare ``<module>.py`` fallback, else ``None``. The single source of truth for where a
+    kernel's reference lives (used by both arg and func-name derivation)."""
+    base = paths.BENCHMARKS / relative_path
+    for cand in (base / f"{module_name}_numpy.py", base / f"{module_name}.py"):
+        if cand.exists():
+            return cand
+    return None
+
+
 def derive_input_args(relative_path: str, module_name: str, func_name: str) -> Optional[Tuple[str, ...]]:
     """The kernel's call signature = the NumPy reference's parameter names.
 
@@ -293,14 +304,13 @@ def derive_input_args(relative_path: str, module_name: str, func_name: str) -> O
     definition.) Returns ``None`` if the source/function can't be found, so the
     caller falls back to an explicit ``input_args`` / errors.
     """
-    base = paths.BENCHMARKS / relative_path
-    for cand in (base / f"{module_name}_numpy.py", base / f"{module_name}.py"):
-        if cand.exists():
-            fn = next((n for n in ast.walk(ast.parse(cand.read_text()))
-                       if isinstance(n, ast.FunctionDef) and n.name == func_name), None)
-            if fn is not None:
-                return tuple(a.arg for a in fn.args.args)
-    return None
+    ref = numpy_reference_path(relative_path, module_name)
+    if ref is None:
+        return None
+    fn = next(
+        (n for n in ast.walk(ast.parse(ref.read_text())) if isinstance(n, ast.FunctionDef) and n.name == func_name),
+        None)
+    return tuple(a.arg for a in fn.args.args) if fn is not None else None
 
 
 def derive_func_name(relative_path: str, module_name: str) -> Optional[str]:
@@ -312,15 +322,13 @@ def derive_func_name(relative_path: str, module_name: str) -> Optional[str]:
     (helpers shadow the entry) so the caller falls back to an explicit
     ``func_name`` / errors.
     """
-    base = paths.BENCHMARKS / relative_path
-    for cand in (base / f"{module_name}_numpy.py", base / f"{module_name}.py"):
-        if cand.exists():
-            defs = [n.name for n in ast.parse(cand.read_text()).body if isinstance(n, ast.FunctionDef)]
-            if len(defs) == 1:
-                return defs[0]
-            if module_name in defs:
-                return module_name
-    return None
+    ref = numpy_reference_path(relative_path, module_name)
+    if ref is None:
+        return None
+    defs = [n.name for n in ast.parse(ref.read_text()).body if isinstance(n, ast.FunctionDef)]
+    if len(defs) == 1:
+        return defs[0]
+    return module_name if module_name in defs else None
 
 
 def validate_scale(scale: Optional[str], track: str, source: str = "<spec>") -> None:
@@ -337,12 +345,12 @@ def validate_scale(scale: Optional[str], track: str, source: str = "<spec>") -> 
 
 
 def validate_level(level, source: str = "<spec>") -> None:
-    """Raise ``ValueError`` unless ``level`` is ``None`` or one of 1/2/3 (an explicit
-    override of the per-track derived difficulty; see :attr:`BenchSpec.resolved_level`)."""
+    """Raise ``ValueError`` unless ``level`` is ``None`` or one of 1/2/3 (the KernelBench
+    difficulty declared in the manifest; see :attr:`BenchSpec.resolved_level`)."""
     if level is None:
         return
     if level not in (1, 2, 3):
-        raise ValueError(f"{source}: level {level!r} must be 1, 2, or 3 (or unset to derive it)")
+        raise ValueError(f"{source}: level {level!r} must be 1, 2, or 3 (or omit to leave it unlabeled)")
 
 
 #: Per-format buffer role requirements. The validator's rule #2 checks
@@ -515,8 +523,9 @@ class BenchSpec:
     #: HPC scale class (``micro`` / ``proxy``); ``None`` for non-HPC kernels and
     #: for unset HPC kernels (which resolve to ``micro`` via :attr:`scale_class`).
     scale: Optional[str] = None
-    #: Explicit difficulty level (1/2/3). ``None`` => derived per track from loop-nest
-    #: complexity by :attr:`resolved_level` (KernelBench-style; see optarena.levels).
+    #: KernelBench difficulty level (1/2/3), curated per kernel in the manifest. L1 = a
+    #: single primitive op, L2 = fused/composite or data-dependent control, L3 = a full
+    #: app (``kind: microapp``). ``None`` => unlabeled (excluded from ``@lvl`` filters).
     level: Optional[int] = None
 
     # AgentBench additions (back-compatible defaults)
@@ -805,13 +814,12 @@ class BenchSpec:
         return "micro" if self.track == "hpc" else None
 
     @property
-    def resolved_level(self) -> int:
-        """The 1/2/3 difficulty level: the explicit ``level`` if set, else derived
-        per track from loop-nest complexity (:func:`optarena.levels.classify_level`)."""
-        if self.level is not None:
-            return int(self.level)
-        from optarena.levels import classify_level
-        return classify_level(self)
+    def resolved_level(self) -> Optional[int]:
+        """The KernelBench difficulty level declared in the manifest (``level:``), or
+        ``None`` if unset. Levels are curated static data, not derived at runtime: L1 =
+        a single primitive op, L2 = a fused/composite sequence or data-dependent control,
+        L3 = a full application (``kind: microapp``)."""
+        return int(self.level) if self.level is not None else None
 
     @classmethod
     def load(cls, short_name: str) -> "BenchSpec":
@@ -938,31 +946,39 @@ def _scan_kernels() -> Dict[str, pathlib.Path]:
     return out
 
 
+def selector_slug(selector: str) -> str:
+    """A filesystem-/HF-safe name for a selector: ``hpc/dense`` -> ``hpc_dense``,
+    ``hpc@lvl3`` -> ``hpc_lvl3``. Shared by the CLI (HF config name) and the Harbor
+    adapter (task dir + job name) so the flattening rule lives in one place."""
+    return selector.strip("/").replace("/", "_").replace("@", "_") or "all"
+
+
 def _split_level(selector: str) -> Tuple[str, Optional[int]]:
     """Split a ``<selector>@lvl<n>`` token into ``(selector, level)``.
 
-    Accepts ``@lvl3`` / ``@level3`` / ``@l3`` (case-insensitive); no suffix -> level
-    ``None``. Raises ``KeyError`` on a malformed / out-of-range level suffix."""
+    ``@lvl1`` / ``@lvl2`` / ``@lvl3`` (case-insensitive); no suffix -> level ``None``.
+    Raises ``KeyError`` on a malformed / out-of-range level suffix."""
     at = selector.rfind("@")
     if at < 0:
         return selector, None
     base, tag = selector[:at], selector[at + 1:].lower()
-    for prefix in ("level", "lvl", "l"):
-        if tag.startswith(prefix) and tag[len(prefix):].isdigit():
-            n = int(tag[len(prefix):])
-            if n not in (1, 2, 3):
-                raise KeyError(f"level suffix {selector!r}: level must be 1, 2, or 3")
-            return base, n
+    if tag.startswith("lvl") and tag[3:].isdigit():
+        n = int(tag[3:])
+        if n not in (1, 2, 3):
+            raise KeyError(f"level suffix {selector!r}: level must be 1, 2, or 3")
+        return base, n
     raise KeyError(f"malformed level suffix in {selector!r} (use @lvl1 / @lvl2 / @lvl3)")
 
 
 def _safe_level(path_key: str) -> Optional[int]:
-    """The resolved difficulty level of a kernel, or ``None`` if it fails to load
-    (a malformed manifest is skipped, never crashing the whole selection)."""
+    """The resolved difficulty level of a kernel, or ``None`` if its manifest fails to
+    load (a malformed manifest is skipped, never crashing the whole selection). A bug in
+    level classification itself is NOT swallowed -- it surfaces as a real error."""
     try:
-        return BenchSpec.load(path_key).resolved_level
+        spec = BenchSpec.load(path_key)
     except Exception:  # noqa: BLE001 -- a broken manifest just doesn't match a level filter
         return None
+    return spec.resolved_level
 
 
 @functools.lru_cache(maxsize=1)
@@ -1045,11 +1061,7 @@ class KernelRegistry:
         """
         selector, level = _split_level(selector)
         scan = _scan_kernels()
-        if selector == "all" and level is None:
-            return sorted(scan)
-        base = sorted(scan) if selector == "all" else None
-        if base is None:
-            base = self._select_group_or_kernel(selector, scan)
+        base = sorted(scan) if selector == "all" else self._select_group_or_kernel(selector, scan)
         if level is None:
             return base
         keep = [k for k in base if _safe_level(k) == level]

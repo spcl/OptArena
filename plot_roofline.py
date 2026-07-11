@@ -13,7 +13,9 @@ Combines:
   (GFLOP/s = flops / 1e9 / median_time) are plotted as a scatter point.
 
 Benchmarks without flops/bytes entries are listed under "Skipped:" in
-stdout. The rooflines render even with zero data.
+stdout so it's obvious what's missing. The rooflines themselves render
+even with zero data, so the script doubles as "show me what this CPU
+is theoretically capable of".
 
 Outputs: ``roofline.pdf`` + ``roofline.png`` in the current directory.
 

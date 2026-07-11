@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Vertical Advection
 kind: microapp
+level: 3
 parameters:
   S:
     I: 64

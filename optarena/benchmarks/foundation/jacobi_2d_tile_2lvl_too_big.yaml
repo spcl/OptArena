@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Adversarial jacobi_2d_tile_2lvl_too_big
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 64

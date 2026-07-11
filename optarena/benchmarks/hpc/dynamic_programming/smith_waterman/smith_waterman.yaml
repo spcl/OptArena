@@ -3,6 +3,7 @@
 name: Smith-Waterman
 short_name: smith_waterman
 kind: microapp
+level: 3
 parameters:
   S:
     N: 500

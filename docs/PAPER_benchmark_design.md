@@ -71,7 +71,8 @@ defines the denominator.
 ## 4. Evaluation against the five properties
 
 We assess the design against von Kistowski/Huppler's five criteria — **relevance,
-reproducibility, fairness, verifiability, and usability**.
+reproducibility, fairness, verifiability, and usability** — and state where it is
+strong and where a gap remains.
 
 **Relevance.** Tasks are real HPC, ML, and compiler-optimization kernels under an
 established taxonomy (the Berkeley dwarfs), and the metric — speedup of a real
@@ -100,7 +101,7 @@ unchanged but requires per-kernel FLOP/byte accounting, which we defer.
 **Verifiability.** Correctness is established by an independent verification stage
 (fresh rebuild, determinism, fresh-seed re-grade, dual-oracle) layered over both
 public and hidden inputs, so a result is not trusted on a single lucky run.
-The benchmark also **verifies its own baseline**: a macrokernel
+Distinctively, the benchmark also **verifies its own baseline**: a macrokernel
 oracle compiles the lowered C++ of each reference and checks it numerically against
 the NumPy specification, so the denominator the whole suite divides by is itself
 validated rather than assumed.

@@ -17,6 +17,7 @@ short_name: fv3_xppm
 module_name: fv3_xppm
 func_name: fv3_xppm
 kind: microapp
+level: 3
 parameters:
   S:
     ni: 24

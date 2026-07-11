@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Symmetric rank-2k operations
 kind: microkernel
+level: 2
 parameters:
   S:
     M: 35

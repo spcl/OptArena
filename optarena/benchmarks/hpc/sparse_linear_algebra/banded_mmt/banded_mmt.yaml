@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Banded Matrix-Matrix-Transposed Multiplication
 kind: microapp
+level: 3
 parameters:
   S:
     N: 100

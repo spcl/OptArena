@@ -3,6 +3,7 @@
 name: Gram-Schmidt decomposition
 short_name: gramschm
 kind: microkernel
+level: 2
 parameters:
   S:
     M: 70

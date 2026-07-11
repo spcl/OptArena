@@ -178,4 +178,6 @@ scripts/verify_tvm.py
 .gt_cache/
 *.mod
 .ruff_cache/
-.DS_Store
+
+# Paper draft (working artifact, not part of the repo)
+paper/

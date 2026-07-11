@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: TSVC s235
 kind: microkernel
+level: 2
 parameters:
   S:
     LEN_2D: 64

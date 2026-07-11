@@ -16,6 +16,7 @@
 name: SeisSol ADER-DG batched star GEMM
 short_name: seissol_batched_gemm
 kind: microkernel
+level: 1
 parameters:
   S:
     batch: 1024

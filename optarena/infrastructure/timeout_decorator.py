@@ -51,7 +51,10 @@ def cdquit(fn_name):
 
 
 def exit_after(s):
-    '''Decorator: exit the process if the function runs longer than s seconds.'''
+    '''
+    use as decorator to exit process if 
+    function takes longer than s seconds
+    '''
 
     def outer(fn):
 

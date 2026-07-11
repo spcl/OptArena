@@ -3,6 +3,7 @@
 name: Compute
 short_name: clipping
 kind: microkernel
+level: 1
 parameters:
   S:
     M: 2000

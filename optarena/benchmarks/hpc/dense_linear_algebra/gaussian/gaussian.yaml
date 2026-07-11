@@ -3,6 +3,7 @@
 name: Gaussian Elimination
 short_name: gaussian
 kind: microapp
+level: 3
 parameters:
   S:
     N: 400

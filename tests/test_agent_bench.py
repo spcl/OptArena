@@ -254,7 +254,7 @@ def test_submission_distribution_structural_validation():
     ok = {
         "grid": [2, 2],
         "arrays": {
-            "A": {"axes": [{"grid_dim": 0, "scheme": "block", "halo": 1}, {"grid_dim": None}]},
+            "A": {"axes": [{"grid_dim": 0, "scheme": "block"}, {"grid_dim": None}]},
             "b": {"replicated": True},
         },
     }

@@ -1,6 +1,6 @@
 # Authoring TVM kernels for OptArena
 
-Spec for hand-writing the per-benchmark TVM implementations
+This is the spec for hand-writing the per-benchmark TVM implementations
 (the "TVM track", analogous to the pluto track). Every canonical
 benchmark (`<dir>/<module>_numpy.py`) gets two files:
 

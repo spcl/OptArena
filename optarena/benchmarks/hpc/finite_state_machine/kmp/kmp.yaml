@@ -3,6 +3,7 @@
 name: KMP Search
 short_name: kmp
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 20000

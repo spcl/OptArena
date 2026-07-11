@@ -26,6 +26,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       gdb \
       valgrind \
       linux-tools-common \
+      linux-tools-generic \
+      linux-cpupower \
+      util-linux \
+      hwloc \
+      msr-tools \
+      numactl \
+      google-perftools \
+      libgoogle-perftools-dev \
+      heaptrack \
+      likwid \
+      papi-tools \
+      libpapi-dev \
+      strace \
+      ltrace \
+      binutils \
       ca-certificates \
       git \
       curl \

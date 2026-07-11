@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Lennard-Jones Force (molecular dynamics)
 kind: microapp
+level: 3
 parameters:
   S:
     N: 500

@@ -412,8 +412,9 @@ def _functionalize_stmt(s: ast.stmt) -> List[ast.stmt]:
             base = base.value
         indices.reverse()
         arr = base
+        arr_name = _base_name(arr)
         sl = indices[0] if len(indices) == 1 else ast.Tuple(elts=indices, ctx=ast.Load())
-        name = ast.Name(id=_base_name(arr), ctx=ast.Store())
+        name = ast.Name(id=arr_name, ctx=ast.Store())
         if _is_full_slice(sl):
             # ``a[:] = <scalar>`` fills every element -- a plain ``a = <scalar>``
             # would rebind ``a`` to a SCALAR (then ``a.at[...]`` / array uses
@@ -423,7 +424,7 @@ def _functionalize_stmt(s: ast.stmt) -> List[ast.stmt]:
                 fill = ast.Call(func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()),
                                                    attr="full_like",
                                                    ctx=ast.Load()),
-                                args=[ast.Name(id=_base_name(arr), ctx=ast.Load()), s.value],
+                                args=[ast.Name(id=arr_name, ctx=ast.Load()), s.value],
                                 keywords=[])
                 new = ast.Assign(targets=[name], value=fill)
             else:

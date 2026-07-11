@@ -3,6 +3,7 @@
 name: HotSpot 3D
 short_name: hotspot_3d
 kind: microapp
+level: 3
 parameters:
   S:
     N: 32

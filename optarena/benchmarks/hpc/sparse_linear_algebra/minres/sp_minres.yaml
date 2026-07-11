@@ -3,6 +3,7 @@
 name: Sparse Minimal Residual
 module_name: minres
 kind: microapp
+level: 3
 parameters:
   S:
     N: 2048

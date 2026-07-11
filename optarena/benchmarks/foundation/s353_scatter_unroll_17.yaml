@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Adversarial s353_scatter_unroll_17
 kind: microkernel
+level: 1
 parameters:
   S:
     N: 1024

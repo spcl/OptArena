@@ -26,8 +26,7 @@ def _c_driver():
 int main(void) {{
     int64_t data[]        = {{{tu.c_int_list(DATA)}}};
     static const int64_t want[] = {{{tu.c_int_list(WANT)}}};
-    int64_t time_ns = 0;
-    bitonic_sort_fp64(data, {N}, &time_ns);
+    bitonic_sort_fp64(data, {N});
     for (int i = 0; i < {N}; ++i)
         if (data[i] != want[i]) {{
             printf("bitonic i=%d got %lld want %lld\\n",

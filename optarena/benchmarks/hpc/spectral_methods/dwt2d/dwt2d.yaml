@@ -3,6 +3,7 @@
 name: DWT 2D (Haar)
 short_name: dwt2d
 kind: microapp
+level: 3
 parameters:
   S:
     N: 256

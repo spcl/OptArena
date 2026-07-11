@@ -1,3 +1,0 @@
-[submodule "optarena/pytorch_translator/KernelBench"]
-	path = optarena/pytorch_translator/KernelBench
-	url = https://github.com/ScalingIntelligence/KernelBench

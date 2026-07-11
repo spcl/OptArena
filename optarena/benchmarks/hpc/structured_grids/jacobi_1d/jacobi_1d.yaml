@@ -3,6 +3,7 @@
 name: 1-D Jacobi stencil computation
 short_name: jacobi1d
 kind: microkernel
+level: 2
 parameters:
   S:
     TSTEPS: 800

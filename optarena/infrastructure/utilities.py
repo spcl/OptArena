@@ -21,7 +21,8 @@ def str2bool(v: Union[str, bool]) -> bool:
 
 # Taken from shttps://www.sqlitetutorial.net/sqlite-python/create-tables/
 def create_connection(db_file) -> sqlite3.Connection:
-    """ Create a database connection to the SQLite database specified by db_file.
+    """ create a database connection to the SQLite database
+        specified by db_file
     :param db_file: database file
     :return: Connection object or None
     """
@@ -145,9 +146,9 @@ def ensure_cpu_column(conn):
 
 
 def cpu_model() -> str:
-    """Best-effort CPU model string stamped on every result row so a native-arch
-    run is attributable to a microarchitecture. Honors the ``$OPTARENA_CPU``
-    override; falls back to platform info."""
+    """Best-effort CPU model string stamped on every result row so a run made
+    with native-arch optimization is attributable to a microarchitecture. Honors the
+    ``$OPTARENA_CPU`` override; falls back to platform info."""
     import os
     import platform
     env = os.environ.get("OPTARENA_CPU")

@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Canonicalize vertical_flux_prefix_scan
 kind: microkernel
+level: 1
 parameters:
   S:
     N: 16

@@ -20,6 +20,18 @@ thin CLI.
   per-kernel `S_i`. **Microapps are always one task per app** -- an app is the unit
   of work and is never bundled, regardless of `--group`.
 
+## Task layout (`--layout`)
+
+- **`--layout kernel`** (default) -- ship an empty `submission.<ext>` stub the agent fills.
+- **`--layout repo`** -- ship a small **mock git repo** under `environment/<kernel>/repo/`
+  whose `src/<func>.<ext>` is a **naive-but-correct seed** (the NumpyToX translation of the
+  reference, which already exports the C-ABI symbol) plus an `ISSUE.md` framing it as **too
+  slow**; the agent edits the function in place. Grading is unchanged -- the verifier compiles
+  the in-repo source. `tests/test.sh` runs a guarded `git init` at grade time (the generated
+  dir ships no `.git`), so the agent works in a real git tree while the task dir stays clean.
+  A kernel with no translation for the language has no seed and is **skipped** (logged +
+  counted). Single-node, one kernel per task (`--group kernel`).
+
 ## Layout of a generated task (Terminal-Bench format)
 
 ```

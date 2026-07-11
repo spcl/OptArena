@@ -53,10 +53,10 @@ def get(name: str) -> Callable:
 
 
 def generate(name: str, shape, precision: Precision, spec: Dict[str, Any] = None):
-    """Resolve ``name`` and invoke the generator.
+    """Convenience wrapper: resolve ``name`` and invoke the generator.
 
     :param name: Distribution short name.
-    :param shape: Output array shape.
+    :param shape: Output array shape (passed to the generator).
     :param precision: Target :class:`Precision` (drives the dtype).
     :param spec: Variant-specific parameters from the kernel manifest.
     """

@@ -3,6 +3,7 @@
 name: k-means
 short_name: kmeans
 kind: microapp
+level: 3
 parameters:
   S:
     npoints: 5000

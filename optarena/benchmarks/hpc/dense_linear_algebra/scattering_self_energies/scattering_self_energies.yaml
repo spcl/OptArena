@@ -3,6 +3,7 @@
 name: Scattering Self Energies
 short_name: sselfeng
 kind: microapp
+level: 3
 parameters:
   S:
     Nkz: 2

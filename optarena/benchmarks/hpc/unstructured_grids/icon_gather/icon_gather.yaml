@@ -3,6 +3,7 @@
 name: ICON unstructured/semi-structured gather
 short_name: icon_gather
 kind: microkernel
+level: 1
 parameters:
   S:
     nproma: 8

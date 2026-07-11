@@ -7,8 +7,8 @@ CUDA / … and is **scored by its speedup over a baseline while staying numerica
 correct**. The harness generates the language bindings, compiles the submission,
 times it, and grades it against the reference -- one reproducible number per kernel.
 
-> **Timing unit:** all results are in **milliseconds** (`time` / `native_time` in
-> `optarena.db`).
+> **Timing unit:** all times are host-measured **nanoseconds** (`baseline_ns` /
+> `native_ns` in `optarena.db`).
 
 ---
 
@@ -136,7 +136,7 @@ python quickstart.py && python plot_results.py     # smoke-run a few benchmarks 
 ## Frameworks
 
 Almost every implementation is **auto-generated from the reference** and compiled
-through one flag matrix (`optarena/flags.py`, default `-O3 -march=native -ffast-math …`):
+through one flag matrix (`optarena/flags.py`, default `-O3 -march=native -fopenmp …`, `-ffast-math` **off** so results match the NumPy reference):
 
 - **Auto-generated:** C (`cc`/gcc) · C++ (`llvm`/clang) · Fortran (gfortran) ·
   DaCe · Numba · CuPy · Pythran. Native sources are precision-monomorphic
@@ -207,7 +207,7 @@ python run_framework.py -f <framework>                    # all kernels, one fra
 ```
 
 Use a kernel's **short name** (the co-located manifest's `short_name`). Frameworks
-are the names above (`numpy`, `numba`, `dace_cpu`, `cc_auto`, `llvm_auto`, …).
+are the names above (`numpy`, `numba`, `dace_cpu`, `cc`, `llvm`, …).
 
 ### Presets
 
@@ -220,8 +220,8 @@ cache, DRAM/HBM-bound). Default is `S`; choose with `-p`:
 python run_benchmark.py -b gemm -f numpy -p XL
 ```
 
-A fifth preset, **`fuzzed`**, samples sizes in `[L, L+XL]` and cycles input
-distributions -- **opt in with `-p fuzzed`** when you want fuzzed verification
+A fifth preset, **`fuzzed`**, samples sizes in `[L, XL]` and cycles input
+distributions -- **opt in with `optarena run --preset fuzzed`** when you want fuzzed verification
 (it is not run by default).
 
 ---
@@ -257,20 +257,20 @@ curl -s -X POST localhost:8800/oracle -H 'Content-Type: application/json' \
      -d '{"kernel":"gemm","language":"c","source":"<your C source>"}'
 ```
 
-**Every response is one of two shapes:**
+**Every `200` response is the same shape -- a build or numeric failure is a NORMAL
+scored result (`correct:false`), not a separate error envelope:**
 
 ```jsonc
-// SUCCESS: it built, it was correct, here is your score
-{"status":"success","score":12.4,"speedup":12.4,"native_ns":...,"baseline_ns":...,
- "correct":true}
-// ERROR: it failed -- the phase + reason tell you what to fix, then resubmit
-{"status":"error","phase":"compile"|"run"|"validate","reason":"<compiler log / mismatch / crash>"}
+// It built and ran: correctness + your score. A failure has the SAME shape with
+// correct:false / build_ok:false and the compiler log or mismatch text in "detail".
+{"correct":true,"build_ok":true,"speedup":12.4,"native_ns":...,"baseline_ns":...,
+ "max_rel_error":0.0,"detail":"","kernel":"gemm","language":"c"}
 ```
 
-The agent's whole loop is: submit → if `status=error`, fix per `phase`+`reason` and
-resubmit; if `status=success`, keep the best `score` and try to beat it. Compile
-errors, runtime crashes, and correctness mismatches all come back as a structured
-`error` with a `reason` -- nothing fails silently.
+The agent's whole loop is: submit → if `build_ok` or `correct` is `false`, read
+`detail` (compiler log / mismatch / crash), fix, and resubmit; otherwise keep the
+best `speedup` and try to beat it. Only a malformed request or unknown kernel
+diverts from `200` (a `4xx`/`5xx` `{"error": ...}`) -- nothing fails silently.
 
 ### Configurable settings (per run / per `config.yaml`)
 
@@ -352,8 +352,7 @@ the order once.
 
 > **⚠️ Still open (security boundary):** the workspace makes *agent-built* libraries
 > first-class, but **fetching arbitrary libraries from the internet** (an allow-list
->
-> - network inside the agent container) is the remaining supply-chain /
+> + network inside the agent container) is the remaining supply-chain /
 > reproducibility decision. Today the agent builds against the offline fixed
 > toolchain + the workspace. See [Under Construction].
 
@@ -431,6 +430,58 @@ template and the source of every interpolated value, with a context-provenance t
 3. Replace generation entirely -- `prompt.generator: "module:function"` (or
    `--prompt-generator module:func`), signature `fn(task, *, oracle, baseline, feedback) -> str`.
 
+### Prompt variants
+
+Every knob above lives on one `PromptConfig`
+([optarena/agent_bench/prompts.py](optarena/agent_bench/prompts.py)); each field is a
+`prompt.<field>` config key that `PromptConfig.from_config()` reads once:
+
+| knob | effect |
+| --- | --- |
+| `template` | top-level template to render (default `task.j2`) |
+| `template_dir` | dir whose files SHADOW the built-in `prompts/` (whole `task.j2` or one `sections/<name>.j2`) |
+| `generator` | `"module:function"` that fully replaces prompt generation |
+| `inline_kernel` | embed the NumPy reference source (copy-paste the kernel body) |
+| `disclose_public_seed` | state the public perf-sampling seed (public perf mode only) |
+| `include_translation` | embed a NumpyToX C/C++/Fortran translation as a starting point |
+| `include_original` | offer the original ported source (`<kernel>_original.*`) when it exists |
+| `optimization_guidance` | include the how-to-optimize section (loop-nest tuning, fusion, profiling) |
+| `language_track` | emphasize implementing + optimizing idiomatically in the forced language |
+| `strategy` | named optimization strategy shaping the how-to section (see below) |
+| `rtol` / `atol` | correctness tolerances shown to the agent (fp64 reference target) |
+
+`strategy` picks one of the `STRATEGIES` presets that reshape the how-to section:
+`default` (balance locality/vectorization with cross-nest fusion), `loopnest` (one loop
+nest at a time, then fuse), `profile_first` (profile BEFORE editing, hotspots choose the
+work), `language_native` (reach for idiomatic language features first).
+
+A **named variant** is the coarse "which prompt style" preset -- a bundle of field
+overrides on top of the config defaults. The built-ins (`PROMPT_VARIANTS`) are `default`,
+`loopnest`, `profile_first`, `language_native`, `with_original`, `with_translation`, and
+`minimal`. Pick, list, and A/B-render them:
+
+```sh
+optarena prompt gemm --variant profile_first   # render under one named variant
+optarena prompt --list-variants                # list every variant + its overrides
+optarena prompt gemm --all-variants            # render the prompt under EVERY variant (A/B)
+```
+
+The **super-easy path** to a new variant is ONE entry under `prompt.variants` in
+`config.yaml` -- no Python edit, no fork. A config entry adds a new variant (or overrides a
+built-in of the same name); explicit CLI flags still win over it:
+
+```yaml
+prompt:
+  variants:
+    my_exp: {strategy: profile_first, include_original: true}
+```
+
+`optarena prompt gemm --variant my_exp` then renders it, and it appears in
+`--list-variants` / `--all-variants`. (Equivalently, add one line to the `PROMPT_VARIANTS`
+dict in `prompts.py`.) Programmatically the per-call API is
+`build_prompt(task, prompt_config=PromptConfig.variant("loopnest"))`; explicit kwargs beat
+the variant, e.g. `PromptConfig.variant("loopnest", strategy="profile_first")`.
+
 The compile flags shown are the real ones (`-fopenmp` on, `-ffast-math` off, `-fPIC`, the
 FP-relax set -- from `flags.py`). No optimization hint is ever revealed: foundation kernels
 ship the kernel only; discovering the transform is the agent's job.
@@ -452,13 +503,9 @@ optarena/benchmarks/hpc/<dwarf>/<kernel>/<kernel>_numpy.py    (hpc)
 optarena/benchmarks/ml/<kernel>/<kernel>_numpy.py             (ml)
 ```
 
-If you are curating raw PyTorch corpora for translation rather than OptArena benchmarks, they live
-under `optarena/pytorch_translator/` (KernelBench sources via submodule, levels 1-2; NumPy outputs in
-`result/level*/`), never under `optarena/benchmarks/`.
-
 Write it the everyday NumPy way. The reference may either **write into
 pre-allocated output buffers** (C-style, no `return`) *or* **return its result
-arrays**. **Prefer pre-allocated buffers**: they map
+arrays** -- the harness supports both. **Prefer pre-allocated buffers**: they map
 straight onto the C-ABI and avoid an allocation, and they are what the
 native (C/C++/Fortran) backends require. (Buffer-class frameworks
 numpy/dace/numba/cupy/pythran write in place; functional ones jax/tvm/triton
@@ -553,6 +600,29 @@ now an *override* the regenerator never touches.
 - *shape mismatch at validation* -- an `init.arrays` expression doesn't match what the
   kernel writes; fix the shape.
 
+### (Optional) an original-source sidecar
+
+A ported kernel may ship the upstream source it was ported from, beside its numpy
+reference, named `<kernel>_original.<ext>` in the original language:
+
+```
+optarena/benchmarks/hpc/structured_grids/jacobi_2d/jacobi_2d_original.c      (polybench C)
+optarena/benchmarks/hpc/unstructured_grids/velocity_tendencies/velocity_tendencies_original.f90  (dace-fortran single-TU)
+optarena/benchmarks/hpc/structured_grids/cloudsc/cloudsc_original.py         (gt4py / icon4py numpy)
+```
+
+The extension is the original language (`.c` / `.cpp` / `.f90` / `.py`). It is **not
+the scoring oracle** -- the `<kernel>_numpy.py` reference stays the correctness
+ground truth. The sidecar is a convenience: the agent may read and optimize from
+the original instead of the numpy port. It is surfaced in the prompt only when the
+`prompt.include_original` knob is on **and** the sidecar exists (a kernel without
+one renders nothing). Not every kernel has an original -- coverage is partial.
+
+Populate them reproducibly with `python scripts/collect_original_sources.py` (per-
+family: polybench C upstream, dace-fortran single-TU Fortran, npbench / gt4py-
+icon4py Python, TSVC C). Coverage is tracked in
+[`optarena/benchmarks/ORIGINAL_SOURCES.md`](optarena/benchmarks/ORIGINAL_SOURCES.md).
+
 ---
 
 ## Contributing: add a container
@@ -593,7 +663,6 @@ rust:
   compile: ["{cc}", "-O", "--crate-type=cdylib", "{baseline}", "{src}", "-o", "{lib}"]
   link: []                       # cdylib already links a C-ABI shared object
 ```
-
 ```python
 # optarena/languages.py
 LANG_EXT = { ..., "rust": ".rs" }
@@ -677,8 +746,6 @@ OptArena adapts scientific Python/NumPy codes from many sources:
 - 2-D discrete wavelet transform adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (dwt2d)
 - HotSpot 3D thermal simulation adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (hotspot3D)
 - Gaussian elimination adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (gaussian)
-- lavaMD cell-list molecular dynamics adapted from [Rodinia](https://github.com/yuhc/gpu-rodinia) (lavaMD)
-- ML kernels from [KernelBench](https://github.com/ScalingIntelligence/KernelBench)
 - Band-parallel exact-exchange (Fock) operator adapted from [Quantum ESPRESSO](https://www.quantum-espresso.org/) (vexx_k)
 
 Each adapted kernel retains the license of its original source (all GPLv3-compatible);

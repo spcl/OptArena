@@ -3,6 +3,7 @@
 name: Channel Flow
 short_name: chanflow
 kind: microapp
+level: 3
 parameters:
   S:
     ny: 61

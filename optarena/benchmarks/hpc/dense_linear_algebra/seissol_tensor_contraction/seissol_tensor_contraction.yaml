@@ -19,6 +19,7 @@
 name: SeisSol ADER-DG volume tensor contraction
 short_name: seissol_tensor_contraction
 kind: microkernel
+level: 2
 parameters:
   S:
     batch: 1024

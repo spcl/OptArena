@@ -3,6 +3,7 @@
 name: Covariance2
 short_name: covarian2
 kind: microkernel
+level: 2
 parameters:
   S:
     M: 500

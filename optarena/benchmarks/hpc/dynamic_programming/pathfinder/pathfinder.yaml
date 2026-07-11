@@ -3,6 +3,7 @@
 name: PathFinder
 short_name: pathfinder
 kind: microapp
+level: 3
 parameters:
   S:
     rows: 100

@@ -135,6 +135,17 @@ class _MethodCallRewriter(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         func = node.func
+        # ``a.ravel()`` / ``a.flatten()`` -> ``np.reshape(a, (-1,))``: a 1-D view /
+        # copy the reshape expander already lowers (``.ravel() @ .ravel()`` is the
+        # flattened-dot idiom in the CG kernels).
+        if (isinstance(func, ast.Attribute) and func.attr in ("ravel", "flatten")
+                and not node.args
+                and isinstance(func.value, ast.Name)
+                and func.value.id not in self._MODULE_NAMES):
+            return ast.Call(
+                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                args=[func.value, ast.Tuple(elts=[ast.Constant(value=-1)], ctx=ast.Load())],
+                keywords=[])
         if not (isinstance(func, ast.Attribute) and func.attr in _METHOD_TO_NP):
             return node
         recv = func.value
@@ -798,24 +809,58 @@ class _EnumerateZipRewriter(ast.NodeTransformer):
     def __init__(self, shape_table):
         self.shape_table = shape_table
 
+    @staticmethod
+    def _enumerate_start(call: ast.Call) -> ast.expr:
+        """The ``start=`` of ``enumerate(seq, start=s)`` (positional or kw), else 0."""
+        for kw in call.keywords:
+            if kw.arg == "start":
+                return kw.value
+        if len(call.args) >= 2:
+            return call.args[1]
+        return ast.Constant(value=0)
+
     def visit_For(self, node: ast.For) -> ast.AST:
         self.generic_visit(node)
         it = node.iter
         if isinstance(it, ast.Call) and isinstance(it.func, ast.Name):
+            # ``for m, w in enumerate((a, b, c), start=s):`` over a LITERAL/const
+            # sequence (the finite-difference-stencil idiom ``enumerate(_CW)``):
+            # unroll to straight-line ``m = s+i; w = <elt i>; <body>`` blocks so the
+            # element values are compile-time constants (an axis/shift a roll needs).
+            if (it.func.id == "enumerate" and it.args
+                    and isinstance(it.args[0], (ast.Tuple, ast.List))
+                    and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2):
+                idx_name, val_name = node.target.elts[0], node.target.elts[1]
+                start = self._enumerate_start(it)
+                out: List[ast.stmt] = []
+                for i, elt in enumerate(it.args[0].elts):
+                    out.append(ast.Assign(targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
+                                          value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(),
+                                                          right=ast.Constant(value=i))))
+                    out.append(ast.Assign(targets=[ast.Name(id=val_name.id, ctx=ast.Store())],
+                                          value=copy.deepcopy(elt)))
+                    out.extend(copy.deepcopy(stmt) for stmt in node.body)
+                return out
             if it.func.id == "enumerate" and it.args and isinstance(it.args[0], ast.Name):
                 arr = it.args[0]
                 shape = self.shape_table.get(arr.id)
                 if shape and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2:
                     idx_name, val_name = node.target.elts[0], node.target.elts[1]
+                    start = self._enumerate_start(it)
+                    ei = "__ei"
+                    # idx = start + __ei ; val = arr[__ei]
+                    idx_assign = ast.Assign(
+                        targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
+                        value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(), right=ast.Name(id=ei, ctx=ast.Load())))
+                    val_assign = ast.Assign(
+                        targets=[ast.Name(id=val_name.id, ctx=ast.Store())],
+                        value=ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()),
+                                            slice=ast.Name(id=ei, ctx=ast.Load()), ctx=ast.Load()))
                     new_for = ast.For(
-                        target=ast.Name(id=idx_name.id, ctx=ast.Store()),
+                        target=ast.Name(id=ei, ctx=ast.Store()),
                         iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()),
                                       args=[ast.Name(id=shape[0], ctx=ast.Load())], keywords=[]),
-                        body=[ast.Assign(
-                            targets=[ast.Name(id=val_name.id, ctx=ast.Store())],
-                            value=ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()),
-                                                slice=ast.Name(id=idx_name.id, ctx=ast.Load()),
-                                                ctx=ast.Load()))] + node.body,
+                        body=[idx_assign, val_assign] + node.body,
                         orelse=node.orelse)
                     return new_for
             if it.func.id == "zip" and len(it.args) == 2 and all(isinstance(a, ast.Name) for a in it.args):

@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Generalized Minimum Residual (GMRES) Method
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 1000

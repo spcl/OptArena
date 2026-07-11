@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: N-Queens
 kind: microkernel
+level: 2
 parameters:
   S:
     N: 10

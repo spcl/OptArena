@@ -3,6 +3,7 @@
 name: Needleman-Wunsch
 short_name: needleman_wunsch
 kind: microapp
+level: 3
 parameters:
   S:
     N: 500

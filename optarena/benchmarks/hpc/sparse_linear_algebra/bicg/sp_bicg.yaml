@@ -3,6 +3,7 @@
 name: Sparse Biconjugate Gradient
 module_name: bicg
 kind: microapp
+level: 3
 parameters:
   S:
     N: 2048

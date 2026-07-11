@@ -15,6 +15,7 @@ short_name: cloudsc
 module_name: cloudsc
 func_name: cloudsc
 kind: microapp
+level: 3
 parameters:
   # S correctness preset: small, valid, fast. nlev must exceed ncldtop (=15, the
   # level where cloudsc_numpy's microphysics loop starts) so the kernel exercises
@@ -303,3 +304,15 @@ taxonomy:
   domain: Weather
   tags:
   - weather_stencil
+# Distributed-track envelope (residency: distributed). CLOUDSC is column physics: the vertical
+# loop (jk in [ncldtop, nlev]) couples LEVELS within a column, but columns (the `klon` axis) are
+# independent, so a block split over `klon` needs NO halo -- the cleanest no-communication
+# decomposition. Note `klon` is the LAST axis of the 2-D/3-D fields (and axis 0 of the 1-D ones),
+# so the distribution is per-array (each array splits its own `klon` axis); the default
+# array-axis-d -> grid-dim-d layout does not apply. Work is O(nlev * klon) = linear in klon, so
+# work_exponent = 1 (weak scaling grows klon by R, keeping per-rank column count constant).
+mpi:
+  decomposition:
+    axis:
+    - klon
+    work_exponent: 1

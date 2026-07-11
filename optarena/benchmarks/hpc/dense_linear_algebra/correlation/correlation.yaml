@@ -3,6 +3,7 @@
 name: Correlation
 short_name: correlat
 kind: microkernel
+level: 2
 parameters:
   S:
     M: 500

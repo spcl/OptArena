@@ -22,7 +22,7 @@ compiles + runs but the result disagrees with numpy.
 |-----------|---------|----------------|
 | **DBCSR** | ✗ won't-fix | Python-OO: classes, dicts, dict-comprehensions — out of scope |
 | **XSBench** | ✓ **fixed** | Manifest lacked `init.shapes` + `init.dtypes` → declare them (all backends pass) |
-| **GROMACS NBNxM** | ✓ **c/cpp/numba bit-exact** | Numerical all-zero-force bug **fixed** (int-cast truncation barrier); Fortran needs one more emit fix (ternary/merge kind); data-dependent pair list still needs a size symbol |
+| **GROMACS NBNxM** | ✓ **c/cpp/fortran/numba bit-exact** | Numerical all-zero-force bug **fixed** (int-cast truncation barrier) + 4 Fortran-emit fixes; pythran unsupported, jax data-dependent; pair list still needs a size symbol |
 | **LavaMD** | ◑ structural | Needs shapes/dtypes; `particles_per_box` pinned to a module constant + product-dimension shape; JAX can't trace the data-dependent loops |
 
 Two general **translator** gaps surfaced and were fixed on `main` (helping every
@@ -129,15 +129,16 @@ Diagnosed in order; each fix exposed the next:
 
 **Remaining (real work):**
 
-- **Fortran** now clears the shared int-typing bug plus two more that this kernel
-  exercised — a bitwise flag nested in a comparison (`(flags & CI_DO_LJ) != 0`,
-  whose `flags` operand of `IAND` must be INTEGER) and boolean SCALAR locals
-  (`do_lj` / `do_coul` / `half_lj`) that were declared `logical` but wrapped
-  `/= 0` at use sites. **One issue remains**: the ternary `ci_sh = ci if ish == 0
-  else -1` emits `merge(ci, -1, ...)` where `ci` is int64 and the `-1` literal is
-  int32 — a `merge` kind mismatch (the literal-branch kind promotion misses the
-  sanitized inlined name). GROMACS is the only corpus kernel that hits this, so
-  it is tracked separately; c/cpp/numba do not need it.
+- **Fortran is now bit-exact** after four emit fixes this kernel exercised: (a)
+  the shared int-typing barrier; (b1) a bitwise flag nested in a comparison
+  (`(flags & CI_DO_LJ) != 0`, whose `flags` operand of `IAND` must be INTEGER);
+  (b2) boolean SCALAR locals (`do_lj` / `do_coul` / `half_lj`) declared `logical`
+  but wrapped `/= 0` at use sites; (c) the ternary `ci_sh = ci if ish == 0 else
+  -1` -> `merge(ci, -1, ...)` where the `-1` literal (parsed `UnaryOp(USub,
+  Constant(1))`, not `Constant(-1)`) fell through the merge-branch kind promotion
+  and defaulted to int32 beside the int64 `ci`. `_int_literal_value` now
+  recognises the negated form, so the literal is kinded to its partner
+  (`-1_c_int64_t`). Regression test: `test_ternary_int_literal_kind.py`.
 - **`cj_cluster` / `cj_excl` have a data-dependent length** (the total number of
   cluster *pairs*, `23` at `S`) — not a clean function of the manifest params.
   It needs a dedicated size symbol (e.g. `n_cj`) whose value the harness resolves
@@ -237,6 +238,17 @@ Two distinct facts:
   descends into `Compare` / `BoolOp` (a bitwise flag can hide in `(f & M) != 0`);
   boolean SCALAR locals are registered as `logical` so a bare use is not wrapped
   `/= 0`.
+- **Fortran `merge` (ternary) kind promotion** recognises a NEGATED integer
+  literal (`-1` = `UnaryOp(USub, Constant(1))`, not `Constant(-1)`) via
+  `_int_literal_value`, so a constant branch takes its partner's int64 kind
+  instead of defaulting to int32.
+
+With these, **GROMACS is bit-exact on c / cpp / fortran / numba** (pythran
+unsupported, jax data-dependent). Regression tests:
+`test_int_cast_truncation.py`, `test_ternary_int_literal_kind.py`. Verified
+against the full e2e gate: **1909 passed / 43 xfailed, zero tracked-corpus
+regressions** (the only failures are the untracked repro benches — `gromacs-jax`
+and `lavamd`, both benchmark-side).
 
 **Benchmark follow-ups (manifest / kernel — for the PR):**
 

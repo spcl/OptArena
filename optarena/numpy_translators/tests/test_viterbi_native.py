@@ -54,9 +54,8 @@ int main(void) {{
     static const int64_t obs[]  = {{{tu.c_int_list(OBS)}}};
     static const int64_t want[] = {{{tu.c_int_list(PATH)}}};
     int64_t path[{T}];
-    int64_t time_ns = 0;
     for (int i = 0; i < T; ++i) path[i] = 0;
-    viterbi_fp64(log_emit, log_init, log_trans, obs, path, K, M, T, &time_ns);
+    viterbi_fp64(log_emit, log_init, log_trans, obs, path, K, M, T);
     for (int i = 0; i < T; ++i)
         if (path[i] != want[i]) {{
             printf("viterbi i=%d got %lld want %lld\\n",

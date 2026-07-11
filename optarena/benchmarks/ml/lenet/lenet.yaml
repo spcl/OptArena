@@ -3,6 +3,7 @@
 name: Lenet-5
 func_name: lenet5
 kind: microapp
+level: 3
 parameters:
   S:
     N: 4

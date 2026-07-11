@@ -3,6 +3,7 @@
 name: ICON zekinh mixed gather (3-edge bilinear)
 short_name: zekin_gather
 kind: microkernel
+level: 1
 parameters:
   S:
     NB: 4

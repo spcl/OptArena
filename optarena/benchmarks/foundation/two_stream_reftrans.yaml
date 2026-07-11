@@ -2,6 +2,7 @@
 # Schema: optarena/schemas/bench_spec.schema.yaml
 name: Canonicalize two_stream_reftrans
 kind: microkernel
+level: 2
 parameters:
   S:
     NG: 16

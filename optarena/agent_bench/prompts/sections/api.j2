@@ -25,4 +25,8 @@
   here is FREE -- it never counts against your speedup. If you do not request any,
   `workspace` is `NULL` and `workspace_size` is `0`; the buffer is uninitialised
   scratch (write before read) and need not be freed.
+{% if language_track and source_mode == "restricted" %}
+- Implement and optimize idiomatically in {{ language }}; the goal is to see how far
+  {{ language }} can be pushed on this kernel.
+{% endif %}
 {% include "lang/" ~ language ~ ".j2" ignore missing %}

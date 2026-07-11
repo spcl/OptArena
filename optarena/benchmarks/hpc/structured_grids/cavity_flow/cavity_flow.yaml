@@ -3,6 +3,7 @@
 name: Cavity Flow
 short_name: cavtflow
 kind: microapp
+level: 3
 parameters:
   S:
     ny: 61

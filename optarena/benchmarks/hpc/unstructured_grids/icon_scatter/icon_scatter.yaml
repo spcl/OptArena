@@ -3,6 +3,7 @@
 name: ICON unstructured/semi-structured scatter
 short_name: icon_scatter
 kind: microkernel
+level: 1
 parameters:
   S:
     nproma: 8

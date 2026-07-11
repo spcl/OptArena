@@ -2,54 +2,127 @@
 
 Tracked work that is scoped but not yet done. Newest on top.
 
-## Translator capability gaps — empirically verified 2026-07-04
+## Measurement-rigor parity: wire three `measurement.*` knobs into the timing core
 
-Each claimed gap was probed with a minimal kernel through c/cpp/fortran via the
-op-oracle (`run_op`). Most catalogued "gaps" are DEAD `raise`s in secondary
-paths shadowed by the real lowering — do NOT re-implement those. The ones that
-ACTUALLY fail today:
+The Harbor adapter reads all `config.yaml` `measurement.*` policy, but three knobs live
+only in `harbor_grade`/config and are inert in the native timing core (`scoring.py` /
+`metric.py`), so the native and Harbor paths do not measure identically. Wire them to the
+same config keys:
 
-- **`np.pad` reflect / wrap / symmetric** (c/cpp/fortran): only `constant` /
-  `edge` lower to a native pad; other modes raise. (numba/pythran already inline
-  an edge-pad copy nest.) Pure index-remap → bit-exact-testable.
-- **matrix `np.linalg.norm(A, 1)` / `(A, inf)`** (max col / row abs-sum): the
-  VECTOR ord=1/inf forms now lower (fixed 2026-07-04); the matrix forms raise
-  cleanly (a different reduction).
-- **einsum ellipsis `...`**: raises by design
-  (`test_parse_einsum_ellipsis_unsupported` asserts it); needs a rank-aware
-  ellipsis expansion of the subscript before the contraction lowering.
-- **axis-aware L2 norm `np.linalg.norm(x, axis=1)`**: PRE-EXISTING compile bug
-  (`__cb1 undeclared`, from the `_expand_axis_reduction` post-fn temp); the
-  full-reduction `norm(r)` and Frobenius forms are fine.
+- `gsd_z` (dispersion-gate z): applied in `harbor_grade` from per-iteration timings; mirror
+  it in `metric.aggregate` so the native `S_i` is gated too. `harbor_grade.grade()` already
+  returns `gsd` and the per-iteration `native_ns`/`baseline_ns`, so the gate moves over verbatim.
+- `warmup_runs` (untimed runs before timing): inert; add a warmup loop in `scoring.py` before
+  the timed reps.
+- `aggregation` (`mean`/`median`/`min` reduce over reps): inert (core hard-codes `min`); honor
+  it in `scoring.py`, default `mean`. (Overlaps the pluggable-aggregation design section below.)
 
-Confirmed ALREADY DONE (catalog was stale — do not re-implement): batched ≥3-D
-matmul, `tril`, N-D `argmax`, einsum / tensordot / inner / vdot,
-cumsum / cumprod / diagonal / trace / median, method `.reshape`, ellipsis
-INDEXING (`a[..., 0]`), Frobenius / L2 norm.
+Two more knobs are handled in Harbor (`harbor_grade.pin_threads()`, `harbor run -n`) but the
+native CLI sweep should honor them too: `pin_threads` (affinity + OMP placement) and
+`n_concurrent_trials` (no co-located timing).
+
+Until the timing-core knobs land, the Harbor reward is the gated/clamped `S_i` while native
+`S_i` is ungated -- same correctness, slightly different headline. (Migrated from the retired
+`docs/HANDOFF_measurement_rigor.md`.)
+
+## Fast-correctness comparison by default (output hashing + cache)
+
+Grading should compare outputs by HASH as the default fast path, not element-wise every time.
+Compute a hash of the reference output ONCE and cache it (per kernel x config x shape x seed);
+grade a submission by hashing its output and comparing to the cached reference hash. A matching
+hash is a guaranteed pass (bit-identical => within any tolerance), so the fast path NEVER accepts
+a wrong answer. On a hash MISMATCH, fall back to the full `rtol/atol` comparison (a correct-but-
+fp-reassociated submission still passes there). Wins: skips the O(size) elementwise compare on the
+common bit-exact case, and the cached reference hash avoids recomputing/holding the reference array
+across the config x shape sweep and across repeats. Implementation: `grading._grade` /
+`_grade_against` grow a hash short-circuit; the reference-hash cache keys on the same identifiers
+`_data_seeded` uses. Applies to the MPI gathered-output path too. Paper: design.tex sec:arch
+already states the default fast path. Open: choose the hash (blake2b over the raw dtype-native
+bytes, canonicalized shape/dtype), and decide the cache lifetime (per-process vs on-disk).
+
+## Per-kernel prompt hints as auto-collected Jinja templates
+
+Config hints and strong/weak MPI scaling hints must NOT live in the kernel YAML (keep prose out of
+manifests). Instead, per-kernel prompt fragments live as Jinja templates auto-collected from a
+per-kernel prompt folder (e.g. `prompts/kernels/<kernel>/{config,mpi_strong,mpi_weak}.j2`) and are
+spliced into `task.j2` when present. `prompts.py`/`build_context` gains the auto-collection (glob
+the per-kernel folder, expose the fragments to the template); `task.j2` renders them in the config
+and distributed blocks. Absent => no hint. Paper design.tex sec:loop already describes this.
+
+## MPI distributed track -- slice 6 (scoring wiring) + follow-ons
+
+Slices 1-6b DONE (uncommitted): mpi_sizing (work_exponent), the `distributed` residency, the
+optional `mpi:` block, the sparse guard, ABI §12, `config.yaml mpi:`, `score_distributed` +
+`_verify_distributed` (both gated e2e green on scaled_add). Remaining:
+- **score_cells distributed path**: the fuzzed config x shape sweep currently forks `_call_isolated`;
+  add the `residency=="distributed"` branch there too (score() already dispatches). `images.mpi.*`.
+- **jacobi/heat as scored distributed kernels (BLOCKED)**: needs `Nrow`/`Ncol` DECOUPLING so the
+  local row count is an unambiguous ABI scalar (§12). BUT jacobi/heat use a custom `initialize(N)`
+  and A/B have `shape=None` in the binding -- the NumpyToX EMITTER infers their dims from the
+  reference, so changing N->NR/NC risks the top-priority canon npbench gate and is the translator
+  chat's shape-inference domain. Coordinate before editing; do NOT silently change the corpus.
+- **v2 sparse under MPI (D-CSR)**: a sparse-aware ownership scheme that row-partitions a CSR matrix
+  and rebuilds each rank's local `indptr`/`indices`/`data` (offset the local indptr); gather is the
+  re-offset concatenation. Weak-scale rows proportional to R at fixed nnz/row (k=1). Currently barred
+  (spec rejects `sparse_layouts` + `mpi:`); this lifts it.
+- **v2 unstructured explicit owner-map scheme**: for graph-partitioned meshes (METIS) the ownership
+  is data-dependent, not formulaic; add an `explicit` scheme carrying a per-element owner array so a
+  partitioner (or the manifest) supplies it. The agent still owns the indexed remote gather.
+- **DaCe work-exponent validator (authoring aid, optional)**: for dense/affine kernels, lower the
+  NumPy reference to an SDFG and read the symbolic work polynomial's leading exponent to SUGGEST /
+  cross-check the manifest `work_exponent`. Never authoritative; useless for sparse (nnz work) and
+  data-dependent control flow -- the manifest value wins.
+
+## Pluggable score / overall-ranking aggregation (design)
+
+Today `metric.py` hard-codes the two-level aggregation: `S_i = clamp(geomean_j r(i,j),
+1..c_max)` and the headline `OptArena Score = geomean_i S_i`. The geomean is the
+principled DEFAULT (the only renormalization-invariant mean, Fleming-Wallace), and the
+disclosure views (solve rate, harmonic-mean speedup, per-dwarf geomean, `fast_p`, MU/NMU)
+are all computed on `SuiteScore` alongside it -- but the RANKING key is not selectable and
+the aggregation function is not swappable without editing `metric.py`.
+
+Want: make the score + overall-ranking calculation a clean pluggable policy, so a suite can
+rank by a different scheme (e.g. `fast_p@2` for a KernelBench-style board, harmonic-mean for
+throughput, or a custom aggregate) WITHOUT touching the measurement path (`scoring.py` /
+the within-cell timing backend stay put -- the aggregation already sits as a layer on top,
+so this is exposing a seam, not a rewrite). Sketch: a named registry of aggregation
+policies (like `timing_backend`) selected via `config.yaml` (`measurement.aggregation` /
+`ranking`), each a `Sequence[TaskScore] -> SuiteScore` (or a per-task `cells -> S_i`) with
+the geomean policy as the default; keep the renormalization-invariance note in the docs so a
+non-geomean ranking is a documented, opt-in trade of machine-independence. Paper: §metric
+already frames geomean as the default-with-reasons and the views as first-class/selectable.
+
+## Translator capability gaps — re-verified 2026-07-06
+
+The four gaps catalogued on 2026-07-04 are ALL FIXED and re-verified through the
+op-oracle (`run_op`) — do NOT re-open: `np.pad` reflect / wrap / symmetric
+(2c1c16d2), matrix `np.linalg.norm(A, 1)` / `(A, inf)`, einsum ellipsis `...`
+(4fce0cae), and axis-aware L2 norm `np.linalg.norm(x, axis=1)` (the `__cb1`
+post-fn-temp bug, aa4e9c69) all lower + validate bit-exact on c/cpp/fortran now.
+
+Native gaps STILL open, found auditing the KernelBench corpus (full context in
+`docs/BACKLOG_kernelbench_translator.md`):
+
+- **`np.var(x, axis=k, keepdims=)`**: emits an undeclared reduction buffer
+  (`__cb1`) → FAIL compile on c/cpp/fortran. `np.std(x, axis)` and scalar
+  `np.var(x)` compile, so it is specifically var's axis two-pass temp — the same
+  post-reduction-temp family as the now-fixed axis-norm `__cb1`. Blocks
+  LayerNorm / GroupNorm / InstanceNorm (~40 KernelBench models).
+- **`np.take_along_axis`**: raises `NotImplementedError` at emit (CrossEntropy /
+  gather-select); needs the axis-gather lowering wired to the emit.
+- **`np.pad(..., constant_values=-inf)`**: emits but pads with 0, ignoring the
+  given constant (a maxpool-with-pad reads 0 at the border).
+
+Confirmed ALREADY DONE (do not re-implement): batched ≥3-D **and 4-D** matmul,
+`np.swapaxes`, `tril`, N-D `argmax`, einsum (incl. ellipsis) / tensordot / inner
+/ vdot, cumsum / cumprod / diagonal / trace / median, `np.concatenate`,
+`np.roll`, `np.add.at` scatter, method `.reshape`, ellipsis INDEXING
+(`a[..., 0]`), Frobenius / L2 / axis / matrix norm.
 
 NOT here — the OTHER chat owns it: strided slice-assign `out[::2] = a[::2]`
 (their in-progress step-handling in `lowering.py`; currently miscompiles — leave
 it alone). The naive-lowering and contraction-family sections below are DONE.
-
-## Translator BUG: batched-einsum Fortran emit non-determinism (flaky, real)
-
-`np.einsum('...ij,...jk->...ik', ...)` — and the explicit `'Bij,Bjk->Bik'`
-batched-GEMM form — emit CORRECT c/c++, but the FORTRAN emit
-non-deterministically declares a size symbol `REAL` instead of `INTEGER`
-(`out(N, M, B)` → "Expression must be of INTEGER type, found REAL"), so ~40% of
-runs fail to compile. The einsum LOWERING (`expand_einsum`) is deterministic
-(dict/list, insertion-ordered); the non-determinism is in the Fortran emit's
-size-symbol type resolution — hash / iteration-order dependent (a fixed
-`PYTHONHASHSEED` is stable per-seed; it only surfaces in the c→cpp→fortran
-multi-emit sequence of one `run_op` — ~40% of `pytest` runs). Pre-existing —
-reproduces on the EXPLICIT form, so it is NOT the ellipsis expansion. NOTE: the
-`_const` numpy-scalar coercion (emit `0` not `np.int64(0)`) is ORTHOGONAL and
-does NOT fix this — the numpy scalar reaches the size-symbol classification via a
-different path (the `_is_int_scalar`/`is_int_expr` gate in numpyto_fortran/emit.py
-~L393, `isinstance(_, int)`). FIX: make the emit's size-symbol integer
-classification order-independent (sort the symbol set, or type size symbols
-int64 unconditionally). Relevant to the SeisSol batched-GEMM / tensor-contraction
-kernels. Repro: einsum matmul via the op-oracle on c/cpp/fortran, ~5 pytest runs.
 
 ## FV3 dycore — remaining after the gt==4 dry core (assembled + validated)
 
@@ -215,7 +288,7 @@ einsum is the keystone, the rest are thin wrappers:
 
 ## Translator: naive-lowering ops (trace / cumsum / diagonal / median)
 
-Lower to naive implementations (user-approved):
+Lower to straightforward naive implementations (user-approved):
 - **trace** -> `acc += A[i,i]`; **diagonal** -> `out[i]=A[i,i]` (build: `out[i,i]=v[i]`).
 - **cumsum / cumprod** -> sequential prefix-scan loop `out[i]=out[i-1] ∘ a[i]`
   (axis-aware: kept axes outside, scan axis inside).

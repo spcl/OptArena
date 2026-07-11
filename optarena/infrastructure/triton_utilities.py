@@ -1,8 +1,10 @@
-"""Generic Triton matrix-multiplication kernels.
-
-The float32 kernel is the official tutorial's; the float64 was adapted from it
-and is much slower since it cannot use tl.dot. Neither is specifically tuned;
-some autotuning configs are commented out.
+"""
+This file contains generic kernels for matrix multiplication using Triton.
+The float32 kernel is the one that appears in the official tutorial, while
+the float64 was adapted from it. Since the float64 kernel cannot use tl.dot,
+it is significantly slower.
+Neither of the kernels were tuned specifically. The auto-tuning options are
+currently commented out for faster development.
 """
 import itertools
 import operator
@@ -35,10 +37,11 @@ def complex_mul(a_real, a_imag, b_real, b_imag):
 
 @triton.jit()
 def complex_mul2(a, b):
-    """Multiply tiles of complex numbers.
-
-    Tiles may be any shape whose last dimension is size 2 (real, imag). Returns a
-    tile broadcast to the common shape, last dimension size 2.
+    """
+    Performs a multiply operation of tiles of complex numbers.
+    The tiles may be of any shape where the last dimension is of size 2.
+    It represents the real and complex component respectively.
+    Returns a tile broadcast to the common shape where the last dimension is guaranteed to be of size 2.
     """
 
     a_real, a_imag = tl.split(a)
@@ -56,18 +59,24 @@ def complex_div(a_real, a_imag, b_real, b_imag):
 
 @triton.jit()
 def micro_matmul(a, b):
-    """Matrix-multiply tiles 'a' (N, K) and 'b' (K, M), returning (N, M).
+    """
+    Performs a matrix multiply of the tiles 'a' and 'b'.
+    'a' should be of shape (N, K), while 'b' should be of shape (K, M).
 
-    Always works unlike 'tl.dot', regardless of datatype and shape.
+    Returns a tile of shape (N, M).
+    Note: Always works unlike 'tl.dot', regardless of datatype and shape.
     """
     return tl.sum(a[:, :, None] * b[None, :, :], axis=1)
 
 
 @triton.jit()
 def complex_matmul2(a, b):
-    """Matrix-multiply complex tiles 'a' (N, K, 2) and 'b' (K, M, 2), returning (N, M, 2).
-
+    """
+    Performs a matrix multiply of the tiles 'a' and 'b'.
+    'a' should be of shape (N, K, 2), while 'b' should be of shape (K, M, 2).
     The last dimension represents the real and imaginary component respectively.
+
+    Returns a tile of shape (N, M, 2).
     """
     a_real, a_imag = tl.split(a)
     b_real, b_imag = tl.split(b)
@@ -77,12 +86,15 @@ def complex_matmul2(a, b):
 
 
 def derive_launch_arguments(extra_kw: Callable):
-    """Decorator that adds launch arguments derived from the existing ones.
+    """
+    Function decorator capable of adding extra launch arguments by deriving them from existing.
+    This can be used to make triton kernels (functions annotated with @triton.jit) less verbose to call
+    (more like numpy and torch implementations).
 
-    Makes @triton.jit kernels less verbose to call (more like numpy/torch). All
-    arguments are converted to keyword arguments and passed to ``extra_kw``, which
-    returns a dict of new keyword arguments to add; returned values may override
-    existing ones.
+    All arguments passed to the kernel are first converted to keyword arguments and then passed to
+    ``extra_kw``.
+    ``extra_kw`` should return a dictionary with new keyword arguments that are to be added.
+    Values returned within this dictionary may also override existing keyword arguments.
     """
 
     def decorator(fn):
@@ -104,7 +116,10 @@ def derive_launch_arguments(extra_kw: Callable):
 
 
 def use_grid(grid: Callable):
-    """Decorator that always applies ``grid`` when calling a triton kernel."""
+    """
+    Decorator that can be added to always apply ``grid`` as the grid when calling
+    a triton kernel.
+    """
 
     def decorator(fn):
         return fn[grid]

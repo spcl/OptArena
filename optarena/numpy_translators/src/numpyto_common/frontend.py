@@ -841,6 +841,20 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
                     val = _const_value(v)
                     if val is not None and sub.id not in shadowed:
                         consts[sub.id] = val
+    # Module-level numeric SEQUENCE constants (``_CW = (8/5, -1/5, 8/315, -1/560)``
+    # -- finite-difference stencil weights). Inline as a literal tuple of folded
+    # constants so ``for m, w in enumerate(_CW, start=1)`` unrolls to compile-time
+    # weights instead of leaking ``_CW`` as a free parameter.
+    seq_consts: Dict[str, ast.AST] = {}
+    for stmt in tree.body:
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            continue
+        v = stmt.value
+        if isinstance(v, (ast.Tuple, ast.List)) and v.elts and stmt.targets[0].id not in shadowed:
+            folded = [_const_value(e) for e in v.elts]
+            if all(f is not None for f in folded):
+                seq_consts[stmt.targets[0].id] = ast.Tuple(
+                    elts=[ast.Constant(value=f) for f in folded], ctx=ast.Load())
     # Module-level DTYPE constants (``FLOAT_DTYPE = np.float64``, ``INDEX_DTYPE =
     # np.int32``) -- substitute the dtype EXPRESSION so a ``dtype=FLOAT_DTYPE`` kwarg
     # resolves like a literal ``np.float64`` instead of leaking as a free parameter
@@ -855,7 +869,7 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
         if (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id in ("np", "numpy")
                 and v.attr in _DTYPE_ATTRS and stmt.targets[0].id not in shadowed):
             dtype_consts[stmt.targets[0].id] = v.attr
-    if not consts and not dtype_consts:
+    if not consts and not dtype_consts and not seq_consts:
         return
 
     class _Sub(ast.NodeTransformer):
@@ -864,6 +878,8 @@ def _inline_module_constants(tree: ast.Module, fn: ast.FunctionDef, input_args: 
             if isinstance(node.ctx, ast.Load):
                 if node.id in consts:
                     return ast.copy_location(ast.Constant(value=consts[node.id]), node)
+                if node.id in seq_consts:
+                    return ast.copy_location(copy.deepcopy(seq_consts[node.id]), node)
                 if node.id in dtype_consts:
                     return ast.copy_location(
                         ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype_consts[node.id],

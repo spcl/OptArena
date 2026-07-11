@@ -26,6 +26,7 @@ import ctypes
 import json
 import os
 import pathlib
+import re
 import select
 import shutil
 import signal
@@ -67,51 +68,32 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 # ``JAX_PLATFORMS=cuda`` (e.g. a single-worker perf probe) if they want the GPU.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
+from optarena import dtypes as _dtypes  # noqa: E402
 from optarena.spec import BenchSpec  # noqa: E402
 from optarena.initialize import auto_initialize  # noqa: E402
 from optarena.precision import Precision  # noqa: E402
 
-_CT = {
-    "int": ctypes.c_int,
-    "double": ctypes.c_double,
-    "float": ctypes.c_float,
-    "int64": ctypes.c_int64,
-    "int32": ctypes.c_int32,
-    "int16": ctypes.c_int16,
-    "int8": ctypes.c_int8,
-    "uint64": ctypes.c_uint64,
-    "uint32": ctypes.c_uint32,
-    "uint16": ctypes.c_uint16,
-    "uint8": ctypes.c_uint8
-}
+#: by-value scalar ``kind`` -> ctypes type, sourced from the shared dtype registry
+#: (the single source of truth the emitters marshal against) so a scalar's
+#: marshalling width matches the emitted signature. ``int`` (bool's scalar kind)
+#: maps to ``c_bool``; shape symbols use the ``int64`` kind, not ``int``.
+_CT = {r.scalar_kind: r.ctype for r in _dtypes.REGISTRY.values() if r.ctype is not None}
+
+#: ctypes types that hold a floating-point value (everything else in ``_CT`` --
+#: signed / unsigned integers and bool -- takes an ``int()`` cast). Classifying by
+#: the resolved ctype avoids matching the ``kind`` string by name prefix.
+_CT_FLOAT = (ctypes.c_double, ctypes.c_float, ctypes.c_longdouble)
 
 
-#: Binding ptr-kind suffix -> numpy storage dtype for allocating an output
-#: buffer the kernel writes. ``double``/``float`` track the run precision (the
-#: emitter already picks the kind per ``--precision``); int / complex widths are
-#: exact. Used so a promoted output's buffer width matches the emitted writes.
 def _np_dtype_for_kind(kind: str, np_float):
-    suffix = kind[len("ptr_"):] if kind.startswith("ptr_") else kind
-    if suffix == "double":
-        return np.float64
-    if suffix == "float":
-        return np.float32
-    if suffix in ("complex128", "complex"):
-        return np.complex128
-    if suffix == "complex64":
-        return np.complex64
-    table = {
-        "int64": np.int64,
-        "int32": np.int32,
-        "int16": np.int16,
-        "int8": np.int8,
-        "uint64": np.uint64,
-        "uint32": np.uint32,
-        "uint16": np.uint16,
-        "uint8": np.uint8,
-        "int": np.intc
-    }
-    return table.get(suffix, np_float)
+    """numpy storage dtype for a binding ``kind`` (a by-value scalar kind or a
+    ``ptr_*`` array kind), resolved through the shared dtype registry so an output
+    buffer's width matches the emitted writes. ``np_float`` is the fallback for a
+    kind the registry does not know."""
+    try:
+        return np.dtype(_dtypes.numpy_for_kind(kind)).type
+    except KeyError:
+        return np_float
 
 
 COMPILE = {
@@ -289,7 +271,8 @@ def run_kernel(short: str,
                precision: str = "fp64",
                seed: int = 0,
                max_size: Optional[int] = None,
-               only_backends: Optional[set] = None) -> Dict[str, str]:
+               only_backends: Optional[set] = None,
+               config: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     """Return ``{backend: "ok" | "skip:..." | "FAIL:..."}`` for ``short``.
 
     ``max_size`` caps every size dimension to at most this value (on top of the
@@ -380,6 +363,14 @@ def run_kernel(short: str,
     # would be shrunk to ~48. A preset symbol of the same name wins (setdefault).
     for _sk, _sv in (spec.init.scalars or {}).items():
         syms.setdefault(_sk, _sv)
+    # Config-parameters are an axis ORTHOGONAL to the size preset: a kernel with
+    # discrete config flags (vexx_k's okvan / okpaw / noncolin / tqr / gamma_only
+    # / negrp, enumerated in ``fuzz.configs.valid``) crosses any config with any
+    # size. Apply the override AFTER size-scaling so a chosen config (from the
+    # set, not baked into S/M/L) selects the code path while the size stays the
+    # preset's -- exactly how the fuzzer draws size and config independently.
+    if config:
+        syms.update(config)
     # Bound the input magnitude to [-8, 8]: codegen correctness is
     # magnitude-independent (the numpy ref and each backend see identical
     # data), but the default uniform [-1000, 1000] drives transcendental
@@ -611,11 +602,12 @@ def run_kernel(short: str,
         # legacy correctness suites that scan the whole status dict for FAIL) never
         # sees a pluto entry. The e2e gate + generator pass only_backends=E2E_BACKENDS.
         if only_backends is not None and PLUTO in only_backends:
-            # Pluto transforms the emitted C source, so it inherits the native
-            # emit failure (no source to polyhedrally optimize).
-            status[PLUTO] = (native_emit_error
-                             if native_emit_error is not None else _run_pluto(
-                                 tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol))
+            # Pluto transforms the emitted C source, so when the native emit
+            # itself fails there is nothing to polyhedrally optimize -- that gap
+            # is already the ``c`` backend's FAIL, so pluto SKIPS rather than
+            # double-counting the same root cause as a second FAIL.
+            status[PLUTO] = ("skip:native-emit" if native_emit_error is not None else _run_pluto(
+                tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol))
         # Python/JIT backends (numba / pythran / cupy): skip cleanly when
         # the dependency is absent, else emit + run + compare like above.
         for pb in PY_BACKENDS:
@@ -989,6 +981,19 @@ def _binding_shape(arg, syms) -> tuple:
     return tuple(out) or (1, )
 
 
+def _drop_core_dumps():
+    """Child preexec: disable core dumps. polycc/pluto aborts (SIGABRT) when pet
+    rejects a scop it can't model -- e.g. a data-dependent ternary from ``np.where``
+    (vadv/hdiff): affine ACCESSES but non-static control flow. That is a legitimate
+    ``skip:unsupported:polycc``, but the abort would otherwise dump a core file per
+    such kernel; RLIMIT_CORE=0 keeps the skip clean."""
+    import resource
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ValueError, OSError):  # pragma: no cover -- best effort
+        pass
+
+
 def _run_bounded(cmd, timeout, cwd):
     """``subprocess`` with a hard timeout that reaps the child's whole process GROUP.
 
@@ -1003,7 +1008,8 @@ def _run_bounded(cmd, timeout, cwd):
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
                             text=True,
-                            start_new_session=True)
+                            start_new_session=True,
+                            preexec_fn=_drop_core_dumps)
     try:
         out, err = proc.communicate(timeout=timeout)
         return proc.returncode, out, err
@@ -1014,6 +1020,46 @@ def _run_bounded(cmd, timeout, cwd):
             pass
         proc.wait()
         raise
+
+
+def _scop_nonaffine_reason(scop_c: str) -> Optional[str]:
+    """Pluto is a polyhedral (affine) optimizer: an array access whose index is
+    non-affine is outside its model, and ``polycc`` may silently MISCOMPILE it
+    rather than reject it. Scan the scop's array subscripts and return the first
+    non-affine index pattern found -- ``indirection`` (``b[ip[i]]``), ``modulo``
+    (``a[i % k]``) or ``integer-division`` (``a[i / k]``) -- so pluto can be
+    deemed inapplicable (a clean skip) instead of trusting a transform it cannot
+    soundly make. Returns None when every subscript index is affine. (Value-side
+    ``/`` and ``%`` are ignored -- only the index inside ``[...]`` matters to the
+    polyhedral model; an affine program pluto merely miscompiles stays a tracked
+    FAIL, not a skip.)"""
+    m = re.search(r"#pragma scop(.*?)#pragma endscop", scop_c, re.S)
+    body = m.group(1) if m else scop_c
+    i, n = 0, len(body)
+    while i < n:
+        if body[i] != "[":
+            i += 1
+            continue
+        depth, j, inner = 1, i + 1, []
+        while j < n and depth:
+            c = body[j]
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            inner.append(c)
+            j += 1
+        sub = "".join(inner)
+        if "[" in sub:
+            return "indirection"
+        if "%" in sub:
+            return "modulo"
+        if "/" in sub:
+            return "integer-division"
+        i = j + 1
+    return None
 
 
 def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol) -> str:
@@ -1034,6 +1080,11 @@ def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, a
         # numpyto_c emits no scop for this kernel -- nothing for polycc to optimize.
         return "skip:unsupported:no-scop"
     src = inputs[0]
+    nonaffine = _scop_nonaffine_reason(src.read_text())
+    if nonaffine:
+        # A non-affine index (gather/modulo/int-div) is outside pluto's model;
+        # skip rather than let polycc miscompile it into a spurious FAIL.
+        return f"skip:unsupported:non-affine:{nonaffine}"
     base = src.stem.replace("_pluto_input", "")
     out_c = src.with_name(base + "_pluto.c")
     try:
@@ -1123,7 +1174,6 @@ def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, at
 def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol) -> str:
     lib = ctypes.CDLL(str(so))
     fn = getattr(lib, binding["symbols"][backend])
-    is_f = backend == "fortran"
     call = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in by.items()}
     cargs: List[Any] = []
     keep: List[np.ndarray] = []
@@ -1133,12 +1183,12 @@ def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol) -> st
             val = call.get(nm, syms.get(nm))
             if val is None:
                 return f"FAIL:unresolved:{nm}"
-            cv = _CT[kind](int(val) if kind.startswith("int") else float(val))
+            ct = _CT[kind]
+            cv = ct(float(val) if ct in _CT_FLOAT else int(val))
             # C-ABI binding: input scalars pass BY VALUE for every backend.
             # Fortran's bind(C) dummies carry the ``value`` attribute, so a
             # byref here would feed the pointer address as the value (a huge
-            # bogus size -> OOB loop -> SIGSEGV). Only the trailing time_ns
-            # (intent(out), no value) is a genuine pointer, handled below.
+            # bogus size -> OOB loop -> SIGSEGV).
             cargs.append(cv)
         elif kind.startswith("ptr_"):
             buf = call.get(nm)
@@ -1159,7 +1209,6 @@ def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol) -> st
             cargs.append(buf.ctypes.data_as(ctypes.c_void_p))
         else:
             return f"FAIL:kind:{kind}"
-    cargs.append(ctypes.byref(ctypes.c_int64(0)) if is_f else np.zeros(1, np.int64).ctypes.data_as(ctypes.c_void_p))
     fn(*cargs)
     for nm in compare:
         got = _norm(call[nm])

@@ -21,6 +21,7 @@ short_name: fv3_dycore
 module_name: fv3_dycore
 func_name: finite_volume_transport
 kind: microapp
+level: 3
 parameters:
   S:
     ni: 24

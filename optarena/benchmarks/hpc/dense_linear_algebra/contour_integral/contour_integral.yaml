@@ -3,6 +3,7 @@
 name: Contour Integral
 short_name: coninteg
 kind: microapp
+level: 3
 parameters:
   S:
     NR: 50

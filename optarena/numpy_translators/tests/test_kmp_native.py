@@ -1,9 +1,9 @@
 """Standalone-TU e2e test for the kmp kernel (finite-state-machine dwarf).
 
-The kernel is compiled into a SINGLE translation unit with a self-checking driver
-that embeds the text + pattern and the numpy-reference occurrence count; a
-mismatch exits nonzero. Exercises the loop-carried failure-function build + scan
-(nested while with a compound condition and index fall-back).
+The emitted kernel is compiled into a SINGLE translation unit with a self-checking
+driver that embeds the text + pattern and the numpy-reference occurrence count,
+then run; a mismatch exits nonzero. Exercises the loop-carried failure-function
+build + scan (nested while with a compound condition and index fall-back).
 """
 import importlib.util
 import tempfile
@@ -38,8 +38,7 @@ int main(void) {{
     static const int64_t pattern[] = {{{tu.c_int_list(PATTERN)}}};
     static const int64_t text[]    = {{{tu.c_int_list(TEXT)}}};
     int64_t matches[1] = {{0}};
-    int64_t time_ns = 0;
-    kmp_fp64(matches, pattern, text, {M}, {N}, &time_ns);
+    kmp_fp64(matches, pattern, text, {M}, {N});
     if (matches[0] != {WANT}) {{
         printf("kmp got %lld want {WANT}\\n", (long long)matches[0]);
         return 1;

@@ -3,6 +3,7 @@
 name: Mandelbrot2
 short_name: mandel2
 kind: microkernel
+level: 2
 parameters:
   S:
     xmin: -2.0
