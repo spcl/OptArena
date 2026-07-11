@@ -63,7 +63,7 @@ service:
 # native run and a Harbor run measure IDENTICALLY (parity). The ranked metric is a
 # speedup over `baseline`. The Harbor grader reads these directly; the judge's
 # timing core (scoring.py / metric.py, owned separately) should read the SAME keys
-# so the two measurement paths cannot drift -- see docs/HANDOFF_measurement_rigor.md.
+# so the two measurement paths cannot drift.
 measurement:
   baseline: c              # speedup denominator (mirrors service.baseline): sequential C, numpy fallback
   repeat: 100              # timed reps kept per measurement (>= 20; 100 for a stable mean)

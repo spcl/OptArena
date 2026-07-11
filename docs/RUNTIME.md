@@ -130,7 +130,6 @@ measurement.
 Set `measurement.timing_lock` to a shared path and the grader `flock`s it around the
 timing section: agents solve in parallel while exactly one performance measurement runs
 at a time. The clean separation — parallel correctness, serial timing — needs the timing
-core to split verify (parallel) from measure (serial); see
-[HANDOFF_measurement_rigor.md](HANDOFF_measurement_rigor.md). Until then the lock
+core to split verify (parallel) from measure (serial). Until then the lock
 serializes the whole grade, which still lets agents run in parallel and keeps every
 measurement contention-free.

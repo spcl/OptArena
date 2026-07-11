@@ -113,8 +113,7 @@ applied to the size sampler.
 ### 2.4 Export & consumption — ✅ IMPLEMENTED (`optarena/hf_export.py`)
 
 The exporter is a **pure regenerator** over the manifest tree — it caches nothing
-in the repo, so a new benchmark is reflected by re-running it (see
-`docs/PLAN_hf_export.md` for the full auto-update design + options analysis).
+in the repo, so a new benchmark is reflected by re-running it.
 
 - `optarena export-hf [--selector all|hpc|<dwarf>|<kernel>] [--out f.parquet]
   [--format parquet|jsonl] [--push spcl/optarena]`: `KERNELS.select` → `BenchSpec.load`
@@ -268,13 +267,12 @@ warmup model yet) and composes cleanly with the deferred roofline normalization
 - **Per-dwarf geomean** — where the agent is strong/weak.
 - **Verified vs suspect** counts, and the §4.3 confidence share.
 - **Cost axis** — total tokens + speedup-per-Mtoken (and `$` with a price table),
-  plus the per-call (tokens, score) trajectory. See `docs/DESIGN_cost_and_baseline.md`.
+  plus the per-call (tokens, score) trajectory.
 
 ### 4.5 Baseline = sequential C; roofline deferred
 The speedup denominator is the **sequential-C reference** (the consistent fully
 serial starting point), numpy fallback for kernels that don't emit to C — the
-implemented default (`metric.py`, `baseline="c"`); see
-`docs/DESIGN_cost_and_baseline.md`. Raw speedup is not *difficulty-fair* (1.1× is
+implemented default (`metric.py`, `baseline="c"`). Raw speedup is not *difficulty-fair* (1.1× is
 near-roofline on a memory-bound kernel, poor on a compute-bound one); the fair
 refinement is **roofline-normalized speedup** (`achieved / achievable`), but it
 needs HPL/STREAM + FLOP/byte rooflines and a cache model, generalizes poorly across
@@ -328,7 +326,7 @@ extras):
 |---|---|---|
 | **0 — Score backbone** | `metric.py` (`score_task_fuzzed`, `aggregate`) + `fuzz_iteration` threading in `scoring.py`; 7/7 in `tests/test_metric.py`, no regression in `test_agent_bench.py`. | ✅ **done** |
 | 0.5 — Dispersion enrichment (§4.3) | `gsd` field + min-detectable-speedup gate; ~10 lines over samples already collected. | optional, ready |
-| **1 — export** | `optarena export-hf` (all tracks) → parquet/jsonl; pure regenerator + completeness guard + auto-publish workflow. **One row per sub-benchmark** (353 rows, per-layout ABI, 1:1 with the judge); all export clean; `tests/test_hf_export.py` 13/13 (+1 parquet skip). See `docs/PLAN_hf_export.md`. | ✅ **done** |
+| **1 — export** | `optarena export-hf` (all tracks) → parquet/jsonl; pure regenerator + completeness guard + auto-publish workflow. **One row per sub-benchmark** (353 rows, per-layout ABI, 1:1 with the judge); all export clean; `tests/test_hf_export.py` 13/13 (+1 parquet skip). | ✅ **done** |
 | 2 — MVP adapter | `adapters/optarena` for `foundation`, mirroring `algotune`; one agent e2e on ~5 kernels. | |
 | 3 — Parity + scale | validate parity vs the native judge on a sample; extend to `hpc`/`ml` + preset/datatype sweeps; push the full Dataset. | |
 | 4 — Leaderboard | Gradio Space over the results Dataset (per-track geomean + per-benchmark best); self-report PRs gated by re-`independent_verify`. | |

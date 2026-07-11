@@ -59,7 +59,7 @@ def test_einsum_ellipsis_batched_matmul_e2e():
     # (a batched GEMM). c/cpp only: the batched-einsum FORTRAN emit
     # non-deterministically types a size symbol REAL (~40% flaky, hash/order
     # dependent, reproduces on the EXPLICIT 'Bij,Bjk->Bik' too -- NOT the ellipsis
-    # expansion). Tracked in BACKLOG; root is the emit's size-symbol integer
+    # expansion). Root is the emit's size-symbol integer
     # classification, separate from the np.int64-in-constants hardening.
     rng = np.random.default_rng(0)
     src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.einsum('...ij,...jk->...ik', a, b)\n"

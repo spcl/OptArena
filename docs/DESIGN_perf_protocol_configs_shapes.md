@@ -2,9 +2,8 @@
 
 **Status.** Design, not yet implemented. Agreed in chat 2026-06-29. Builds on the
 seeded-fuzz metric (`metric.score_task_fuzzed`), `fuzz.sample_params`, the
-sequential-C baseline (`docs/DESIGN_cost_and_baseline.md`), and the micro-app
-config/shape model (`docs/DESIGN_microapp_config_fuzzing.md`). The anti-cheat
-techniques cited here come from `docs/RESEARCH_anticheat_related_work.md`.
+sequential-C baseline, and the micro-app config/shape model
+(`docs/DESIGN_microapp_config_fuzzing.md`).
 
 This document specifies **how performance is measured** once an optimized
 submission exists: over multiple **configs** and multiple **shapes**, gated on
@@ -88,8 +87,8 @@ solved(submission) =
 
 ### Anti-cheat posture (what defeats which cheat)
 
-Mapped against `docs/RESEARCH_anticheat_related_work.md` (KernelBench adversarial
-tests). The first two cheats are **defeated by OptArena's existing isolation**, not
+Mapped against KernelBench adversarial
+tests. The first two cheats are **defeated by OptArena's existing isolation**, not
 by added guards:
 
 1. **Input mutation** (candidate zeros/mutates the shared input so the oracle then
@@ -157,7 +156,7 @@ inside the judge. This is AlgoTune's held-out-test principle applied to shape
 selection (they measured ≈0 overfit with a separate held-out set).
 
 `r(φ, L)` is the speedup ratio over the sequential-C baseline measured at the
-**same** `(φ, L)` (`docs/DESIGN_cost_and_baseline.md`): `r = c_baseline_ns /
+**same** `(φ, L)`: `r = c_baseline_ns /
 candidate_ns`, numpy-fallback when C can't be emitted. Timing is **serialized**
 on a pinned core via the existing `timing_lock` so concurrent service requests
 cannot perturb a measurement.
