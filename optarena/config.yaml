@@ -55,7 +55,7 @@ service:
   baseline: c              # speedup denominator: c (sequential C, the serial start) | numpy | both;
                            # c falls back to numpy per-kernel when C cannot be emitted
   input_mode: source       # POST /oracle accepts: source | library | either
-  preset: S                # data-size preset the judge scores at
+  preset: fuzzed           # data-size preset the judge scores at
   datatype: float64
   repeat: 5                # timed reps; best (min) kept
 

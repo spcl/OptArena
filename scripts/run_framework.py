@@ -6,7 +6,7 @@ from multiprocessing import Process
 from typing import Dict, List
 from optarena.infrastructure import (Benchmark, generate_framework, Test, utilities as util)
 from optarena.precision import DATATYPE_CHOICES
-from optarena.spec import PRESET_CHOICES
+from optarena.spec import preset_arg, resolve_preset
 
 
 def run_benchmark(benchname,
@@ -121,7 +121,7 @@ if __name__ == "__main__":
                               "dwarf (e.g. dense_linear_algebra), a directory "
                               "prefix, or a single kernel short-name."))
     parser.add_argument("-f", "--framework", type=str, nargs="?", default="numpy")
-    parser.add_argument("-p", "--preset", choices=list(PRESET_CHOICES), nargs="?", default='S')
+    parser.add_argument("-p", "--preset", type=preset_arg, nargs="?", default='fuzzed')
     parser.add_argument("-m", "--mode", type=str, nargs="?", default="main")
     parser.add_argument("-v", "--validate", type=util.str2bool, nargs="?", default=True)
     parser.add_argument("-r", "--repeat", type=int, nargs="?", default=10)
@@ -144,6 +144,7 @@ if __name__ == "__main__":
                               "`variants` section). Skipped for benchmarks "
                               "that don't declare any."))
     args = vars(parser.parse_args())
+    args["preset"] = resolve_preset(args["preset"])
 
     from optarena.spec import BenchSpec, KERNELS
     # --benchmark selects: 'all', a track (hpc/ml/foundation), a dwarf

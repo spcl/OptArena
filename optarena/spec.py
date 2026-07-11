@@ -35,6 +35,41 @@ from optarena import paths
 PRESET_CHOICES = ("S", "M", "L", "XL", "fuzzed")
 
 
+def parse_preset(preset: str) -> Tuple[str, Optional[int]]:
+    """Split a preset token into ``(base, seed)``. ``S``/``M``/``L``/``XL``/``fuzzed``
+    give ``(base, None)``; ``fuzzed:42`` gives ``("fuzzed", 42)``. Only ``fuzzed``
+    takes a ``:seed`` suffix. Raises ``ValueError`` on an unknown base or a
+    non-integer / misplaced seed."""
+    base, sep, rest = preset.partition(":")
+    if base not in PRESET_CHOICES:
+        raise ValueError(f"unknown preset {base!r}; choose from {', '.join(PRESET_CHOICES)}")
+    if not sep:
+        return base, None
+    if base != "fuzzed":
+        raise ValueError(f"only the fuzzed preset takes a ':seed' suffix (got {preset!r})")
+    try:
+        return base, int(rest)
+    except ValueError:
+        raise ValueError(f"fuzzed seed must be an integer (got {rest!r})") from None
+
+
+def preset_arg(preset: str) -> str:
+    """argparse ``type`` that validates a preset token (including ``fuzzed:seed``)
+    and returns it unchanged -- use instead of ``choices=`` so ``fuzzed:42`` passes."""
+    parse_preset(preset)
+    return preset
+
+
+def resolve_preset(preset: str) -> str:
+    """Parse a preset token, apply any ``fuzzed:seed`` as a ``seeds.fuzz`` override for
+    this process, and return the base preset (``fuzzed``/``S``/...) to run with."""
+    from optarena import config
+    base, seed = parse_preset(preset)
+    if seed is not None:
+        config.set_override("seeds.fuzz", seed)
+    return base
+
+
 def _parse_sparse_layouts(raw: Dict[str, Any], source: str) -> Dict[str, "SparseLayout"]:
     """Parse the ``sparse_layouts`` block of a bench_info dict.
 

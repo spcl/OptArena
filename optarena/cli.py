@@ -21,7 +21,7 @@ from typing import Any, Dict, List
 from optarena.flags import Mode
 from optarena.framework import FRAMEWORKS
 from optarena.precision import Precision
-from optarena.spec import BenchSpec, KERNELS, PRESET_CHOICES, selector_slug
+from optarena.spec import BenchSpec, KERNELS, PRESET_CHOICES, preset_arg, resolve_preset, selector_slug
 
 
 def _resolve_benchmarks(arg: str) -> List[str]:
@@ -139,6 +139,7 @@ def cmd_run(args) -> int:
     benchmarks = _resolve_benchmarks(args.benchmark)
     frameworks = _resolve_frameworks(args.framework)
     mode = Mode(args.mode)
+    args.preset = resolve_preset(args.preset)  # 'fuzzed:seed' -> base 'fuzzed' + a seeds.fuzz override
     out = pathlib.Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     rows = 0
@@ -233,6 +234,7 @@ def cmd_agent(args) -> int:
     if args.agent not in registry:
         raise SystemExit(f"unknown agent {args.agent!r}; choices: {sorted(registry)}")
     agent = registry[args.agent]()
+    args.preset = resolve_preset(args.preset)  # 'fuzzed:seed' -> base 'fuzzed' + a seeds.fuzz override
     tasks = expand_tasks(kernels=_csv_or_none(args.kernels),
                          languages=_csv_or_none(args.languages),
                          residencies=_residencies(args.residency))
@@ -444,10 +446,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--precision", default="all", help="precision name (fp64/fp32/fp16/bf16/fp8_e4m3/...) or 'all'")
     r.add_argument("--variant", default="all", help="variant name or 'all'")
     r.add_argument("--preset",
-                   default="S",
-                   choices=["S", "M", "L", "XL", "fuzzed"],
-                   help="data-size preset (default S); 'fuzzed' samples sizes over "
-                   "fuzz.iterations from each param's [lo,hi] range")
+                   default="fuzzed",
+                   type=preset_arg,
+                   help="data-size preset (default fuzzed): S/M/L/XL are fixed sizes; 'fuzzed' samples "
+                   "sizes over fuzz.iterations from each param's [lo,hi] range; 'fuzzed:<seed>' pins the RNG")
     r.add_argument("--mode",
                    default="single_core",
                    choices=[m.value for m in Mode],
@@ -467,7 +469,10 @@ def build_parser() -> argparse.ArgumentParser:
                    default="c",
                    help="comma-separated languages (c,cpp,fortran,cuda,hip) "
                    "or 'all'; default 'c'")
-    a.add_argument("--preset", default="S", choices=list(PRESET_CHOICES), help="data-size preset (default S)")
+    a.add_argument("--preset",
+                   default="fuzzed",
+                   type=preset_arg,
+                   help="data-size preset (default fuzzed; 'fuzzed:<seed>' pins the RNG)")
     a.add_argument("--datatype",
                    default="float64",
                    choices=["float64", "float32"],
@@ -568,8 +573,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="what POST /oracle accepts (default from config service.input_mode)")
     sv.add_argument("--preset",
                     default=None,
-                    choices=list(PRESET_CHOICES),
-                    help="data-size preset the judge scores at (default from config)")
+                    type=preset_arg,
+                    help="data-size preset the judge scores at (default from config; 'fuzzed:<seed>' pins the RNG)")
     sv.add_argument("--repeat", type=int, default=None, help="timed reps; best kept (default from config)")
     sv.set_defaults(func=cmd_serve)
 
