@@ -6,7 +6,7 @@ from typing import Dict, List
 from optarena.infrastructure import (Benchmark, generate_framework, Test, utilities as util)
 from optarena.infrastructure.forked import run_forked
 from optarena.precision import DATATYPE_CHOICES
-from optarena.spec import preset_arg, resolve_preset
+from optarena.spec import BenchSpec, KERNELS, preset_arg, resolve_preset
 
 
 def run_benchmark(benchname,
@@ -146,7 +146,6 @@ if __name__ == "__main__":
     args = vars(parser.parse_args())
     args["preset"] = resolve_preset(args["preset"])
 
-    from optarena.spec import BenchSpec, KERNELS
     # --benchmark selects: 'all', a track (hpc/ml/foundation), a dwarf
     # (dense_linear_algebra), a directory prefix, or a single kernel.
     benchnames = KERNELS.select(args.get("benchmark") or "all")

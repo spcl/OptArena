@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from optarena import paths
+from optarena import config, paths
 
 #: Size presets a benchmark can be run at (the CLI ``-p`` / ``--preset`` choices).
 #: The ``fuzzed`` preset is a separate opt-in (see ``optarena run --preset``).
@@ -63,7 +63,6 @@ def preset_arg(preset: str) -> str:
 def resolve_preset(preset: str) -> str:
     """Parse a preset token, apply any ``fuzzed:seed`` as a ``seeds.fuzz`` override for
     this process, and return the base preset (``fuzzed``/``S``/...) to run with."""
-    from optarena import config
     base, seed = parse_preset(preset)
     if seed is not None:
         config.set_override("seeds.fuzz", seed)

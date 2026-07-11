@@ -13,7 +13,7 @@ This is the shared isolation primitive for the native framework-baseline collect
 and the native agent run (and the per-kernel wall-clock budget).
 """
 import multiprocessing
-import queue as _queue
+import queue
 import signal
 import sys
 import traceback
@@ -84,7 +84,7 @@ def run_forked(fn: Callable, *args, label: str = "", timeout: Optional[float] = 
         return RunResult(ok=False, exit_code=ec, signal=sig, error=msg)
     try:
         status, payload = q.get(timeout=_DRAIN_S)
-    except _queue.Empty:
+    except queue.Empty:
         return RunResult(ok=False, exit_code=ec, error=f"{tag}child exited {ec} with no result")
     if status == "ok":
         return RunResult(ok=True, exit_code=ec, result=payload)

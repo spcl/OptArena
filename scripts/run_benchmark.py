@@ -2,7 +2,7 @@ import argparse
 
 from optarena.infrastructure import (Benchmark, generate_framework, Test, utilities as util)
 from optarena.precision import DATATYPE_CHOICES
-from optarena.spec import preset_arg, resolve_preset
+from optarena.spec import KERNELS, preset_arg, resolve_preset
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -40,7 +40,6 @@ if __name__ == "__main__":
     args = vars(parser.parse_args())
     args["preset"] = resolve_preset(args["preset"])
 
-    from optarena.spec import KERNELS
     # --benchmark selects a single kernel, a track (hpc/ml/foundation), a dwarf
     # (dense_linear_algebra / hpc/dense_linear_algebra), a directory prefix, or
     # 'all'. A group expands to every kernel under it, run in this process.
