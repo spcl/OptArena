@@ -2,9 +2,9 @@ import argparse
 import pathlib
 import sqlite3
 
-from multiprocessing import Process
 from typing import Dict, List
 from optarena.infrastructure import (Benchmark, generate_framework, Test, utilities as util)
+from optarena.infrastructure.forked import run_forked
 from optarena.precision import DATATYPE_CHOICES
 from optarena.spec import preset_arg, resolve_preset
 
@@ -163,19 +163,29 @@ if __name__ == "__main__":
     if isinstance(framework_arg, str):
         framework_arg = [framework_arg]
 
+    # Fork EACH kernel so a crash (segfault) or a framework exception in one cannot
+    # take down the sweep; run_forked surfaces the cause to stdout (never eaten).
     failed = []
     for benchname in benchnames:
-        p = Process(target=run_benchmark,
-                    args=(benchname, framework_arg, args["preset"], args["validate"], args["repeat"], args["timeout"],
-                          args["ignore_errors"], args["save_strict_sdfg"], args["load_strict_sdfg"], args["datatype"]),
-                    kwargs={"variant": args.get("variant")})
-        p.start()
-        p.join()
-        exit_code = p.exitcode
-        if exit_code != 0:
+        r = run_forked(run_benchmark,
+                       benchname,
+                       framework_arg,
+                       args["preset"],
+                       args["validate"],
+                       args["repeat"],
+                       args["timeout"],
+                       args["ignore_errors"],
+                       args["save_strict_sdfg"],
+                       args["load_strict_sdfg"],
+                       args["datatype"],
+                       variant=args.get("variant"),
+                       label=benchname)
+        if not r.ok:
+            why = r.signal or (r.error.strip().splitlines()[-1] if r.error else "unknown")
+            print(f"[FAIL] {benchname}: {why}")
             failed.append(benchname)
 
-    if len(failed) != 0:
+    if failed:
         print(f"Failed: {len(failed)} out of {len(benchnames)}")
         for bench in failed:
-            print(bench)
+            print(f"  {bench}")
