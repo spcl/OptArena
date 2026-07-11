@@ -90,7 +90,6 @@ def test_wrap_kernel_matches_numpy(framework, dtype, fptype):
         rt = 1e-6 if dtype == np.float32 else 1e-9
         assert np.allclose(ea, na, rtol=rt, atol=rt)
         assert np.allclose(eb, nb, rtol=rt, atol=rt)
-        assert cpp_runtime.LAST_NATIVE_NS > 0  # self-timed
 
 
 # A sparse kernel is emitted ONE source per configuration; the layout IS the
@@ -139,7 +138,6 @@ def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype):
     call(data.copy(), ind.copy(), ptr.copy(), x.copy(), y, M, N, A.nnz)
     rt = 1e-5 if dtype == np.float32 else 1e-9
     assert np.allclose(y, y_ref, rtol=rt, atol=rt)
-    assert cpp_runtime.LAST_NATIVE_NS > 0
 
 
 # --- Canonical integer width: int64 symbols/iterators + int32-array promotion ---

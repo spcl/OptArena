@@ -11,9 +11,10 @@ Two paths share this module:
      :mod:`optarena.autogen` from ``<short>_numpy.py`` -- the repo commits none of
      them), then builds + dlopens ``lib<short>_<framework>.so`` via
      :func:`load_backend_so`;
-  2. returns a callable that maps numpy args to ctypes, appends a 1-element
-     ``int64_t time_ns`` buffer, calls the C-ABI symbol, and stashes the kernel's
-     own measured nanoseconds in :data:`LAST_NATIVE_NS`.
+  2. returns a callable that maps numpy args to ctypes and calls the C-ABI
+     symbol. Timing is the judge's job -- it wraps this call (or the Python
+     call) with its own wall-clock bracket -- so the kernel carries no timing
+     side-channel.
 
 Native files and symbols share ONE canonical name -- ``<short>[_<sparse>]_<fptype>``
 (see :func:`numpyto_common.naming.native_base`). There is no ``_auto`` suffix and
@@ -31,9 +32,6 @@ import pathlib
 import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Tuple
-
-#: Module-level int the cpp-backend framework timing hook reads after every call.
-LAST_NATIVE_NS: int = 0
 
 #: framework name -> the source language it compiles. One ``.so`` per framework;
 #: the compiler is chosen per language by :mod:`optarena.languages` (gcc for c,
@@ -196,9 +194,7 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str) -> Callable:
     if framework not in FRAMEWORK_LANG:
         raise ValueError(f"unknown native framework {framework!r}; "
                          f"known: {sorted(FRAMEWORK_LANG)}")
-    state: Dict[str, Any] = {"loaded": False, "syms": {}, "bound": set(),
-                             "time_ns_buf": np.zeros(1, dtype=np.int64)}
-    module = sys.modules[__name__]
+    state: Dict[str, Any] = {"loaded": False, "syms": {}, "bound": set()}
 
     from optarena.dtypes import ctype_for as _registry_ctype
     _int_ctype = _registry_ctype("int")  # canonical symbol type (int64)
@@ -246,15 +242,11 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str) -> Callable:
             raise RuntimeError(f"{short} ({framework}): no symbol for {fptype}")
         if fptype not in state["bound"]:
             argtypes = [_ctype_arg(a) for a in args]
-            argtypes.append(ctypes.POINTER(ctypes.c_int64))
             sym.argtypes = argtypes
             sym.restype = None
             state["bound"].add(fptype)
         c_args = [_to_ctypes(a) for a in args]
-        buf = state["time_ns_buf"]
-        buf[0] = 0
-        sym(*c_args, buf.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)))
-        module.LAST_NATIVE_NS = int(buf[0])
+        sym(*c_args)
 
     return call
 

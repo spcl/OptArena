@@ -413,8 +413,8 @@ class Framework(object):
     # host-side perf_counter wall-clock. A framework with its own clock
     # overrides stop_timer to ALSO return TimingResult.native (the
     # authoritative kernel-only time): dace -> sdfg.instrument report,
-    # C/C++/Fortran/CUDA/HIP -> the time_ns ABI buffer (LAST_NATIVE_NS),
-    # cupy/triton -> CUDA events.
+    # cupy/triton -> CUDA events. The C/C++/Fortran backends carry no
+    # self-timing side-channel -> wall-clock only (native=None).
     #
     # INTEGRITY: every timer call lives in THIS framework/harness code,
     # OUTSIDE the kernel the benchmark implementer (or an AI agent) writes, so
