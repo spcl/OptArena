@@ -1,5 +1,6 @@
 import os
 import subprocess
+from pathlib import Path
 
 
 def check_sudo_privileges():
@@ -24,7 +25,6 @@ def _resolve_dump_file(dump_file=None):
     if dump_file is None:
         # Default cache location (consistent with the HPL + SuiteSparse
         # cache the rest of optarena uses).
-        from pathlib import Path
         repo_root = Path(__file__).resolve().parents[3]
         candidate = repo_root / ".optarena_cache" / "dmidecode.dump"
         if candidate.exists():

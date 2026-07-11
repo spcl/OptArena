@@ -36,13 +36,11 @@ class TuningBudget:
     :ivar scale: the named scale (``small`` / ``full`` / ``custom``).
     :ivar trials: candidate schedules to evaluate (TVM MetaSchedule).
     :ivar configs: autotune-config cap (Triton).
-    :ivar time_s: optional wall-clock ceiling (an Agent / time-boxed tuner).
     :ivar cost: optional dollar/token ceiling (an Agent).
     """
     scale: str = DEFAULT_SCALE
     trials: int = 64
     configs: int = 4
-    time_s: Optional[float] = None
     cost: Optional[float] = None
 
     @classmethod

@@ -182,6 +182,11 @@ def _wants(choice: str, name: str) -> bool:
     return choice == name or choice == "both"
 
 
+def c_reference_task(task: Task) -> Task:
+    """``task`` reshaped for the sequential-C reference (restricted-C, host residency)."""
+    return replace(task, language="c", source_mode="restricted", residency="host")
+
+
 def _c_reference_submission(spec: BenchSpec, task: Task) -> Submission:
     """The NumpyToX **C reference** for this kernel as a restricted-C submission.
 
@@ -192,7 +197,7 @@ def _c_reference_submission(spec: BenchSpec, task: Task) -> Submission:
     not translate) -- the caller turns that into a scored ``score_error``.
     """
     from optarena.agent_bench.agent import reference_source
-    ctask = replace(task, language="c", source_mode="restricted", residency="host")
+    ctask = c_reference_task(task)
     return Submission(language="c", source=reference_source(ctask))
 
 
@@ -248,7 +253,7 @@ def _run_c_reference(spec: BenchSpec,
 
     ``warmup`` warmup reps run first and are DISCARDED from the returned samples (0 by default; the
     timed callers pass :func:`timing.warmup_count` so the C baseline is warmed like the submission)."""
-    ctask = replace(task, language="c", source_mode="restricted", residency="host")
+    ctask = c_reference_task(task)
     try:
         csub = _c_reference_submission(spec, task)
     except Exception as exc:  # noqa: BLE001 -- emit failure is a scored C-oracle error

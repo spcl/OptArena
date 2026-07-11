@@ -29,6 +29,7 @@ precisions x residencies, filtered by each kernel's declared ``languages`` (skip
 never fail, on a combination a kernel does not support). ``distributed`` is opt-in
 (it needs a ``distribution`` + a kernel ``mpi:`` block), so it is not emitted here.
 """
+import itertools
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
 
@@ -89,13 +90,10 @@ def expand_tasks(
         except Exception:  # noqa: BLE001 -- unloadable kernel is a skip, not a failure
             continue
         langs = languages if languages is not None else (spec.languages or DEFAULT_LANGUAGES)
-        for mode in source_modes:
-            for lang in langs:
-                for precision in precisions:
-                    for residency in residencies:
-                        if residency == "device" and lang not in GPU_LANGUAGES:
-                            continue  # device residency needs a GPU language
-                        # Use the registry key (resolvable by BenchSpec.load), not
-                        # short_name -- 25/281 kernels have short_name != stem.
-                        out.append(Task(name, mode, lang, precision, residency=residency))
+        for mode, lang, precision, residency in itertools.product(source_modes, langs, precisions, residencies):
+            if residency == "device" and lang not in GPU_LANGUAGES:
+                continue  # device residency needs a GPU language
+            # Use the registry key (resolvable by BenchSpec.load), not
+            # short_name -- 25/281 kernels have short_name != stem.
+            out.append(Task(name, mode, lang, precision, residency=residency))
     return out

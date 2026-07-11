@@ -108,7 +108,11 @@ def run(infile: str,
     rank = cart.rank
 
     # Only rank 0 touches the infile; per-rank tiles/scalars/workspace are scattered out.
-    parsed = unpack_infile(open(infile, "rb").read()) if rank == 0 else None
+    if rank == 0:
+        with open(infile, "rb") as f:
+            parsed = unpack_infile(f.read())
+    else:
+        parsed = None
     k_repeats = cart.bcast(parsed.k_repeats if rank == 0 else None, root=0)
     n_ptr = cart.bcast(len(parsed.ptrs) if rank == 0 else None, root=0)
     is_output = cart.bcast([p.is_output for p in parsed.ptrs] if rank == 0 else None, root=0)

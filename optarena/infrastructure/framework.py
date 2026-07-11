@@ -329,22 +329,18 @@ class Framework(object):
         self.ensure_impls(bench)
         module_pypath = "optarena.benchmarks.{r}.{m}".format(r=bench.info["relative_path"].replace('/', '.'),
                                                              m=bench.info["module_name"])
-        if "postfix" in self.info.keys():
-            postfix = self.info["postfix"]
-        else:
-            postfix = self.fname
+        postfix = self.info["postfix"]
         module_str = "{m}_{p}".format(m=module_pypath, p=postfix)
         func_str = bench.info["func_name"]
 
-        ldict = dict()
         try:
             module = importlib.import_module(module_str)
-            ldict["impl"] = vars(module)[func_str]
+            impl = vars(module)[func_str]
         except Exception as e:
             print("Failed to load the {r} {f} implementation.".format(r=self.info["full_name"], f=func_str))
             raise e
 
-        return [(ldict['impl'], 'default')]
+        return [(impl, 'default')]
 
     # ----- Direct-callable invocation (replaces the old setup_str/exec_str
     # string `exec` + the ``__npb_<prefix>_<arg>`` generated-name builders).

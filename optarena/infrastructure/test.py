@@ -59,7 +59,7 @@ class Test(object):
         self.numpy = npfrmwrk
 
     def _execute(self, frmwrk: Framework, impl: Callable, impl_name: str, mode: str, bdata: Dict[str, Any], repeat: int,
-                 ignore_errors: bool) -> Tuple[Any, Sequence[float]]:
+                 ignore_errors: bool) -> Tuple[Any, Optional[Sequence[float]], Optional[Sequence[float]]]:
         """Run ``impl`` ``repeat`` times via the framework's timing hooks.
 
         Replaces the historic ``util.benchmark`` (``timeit.repeat`` with
@@ -71,9 +71,9 @@ class Test(object):
         backends consult their 1-element timing buffer, JAX wraps
         ``block_until_ready``, etc.
 
-        Returns ``(outputs, python_time_list)`` for back-compat with the
-        existing :meth:`run` consumer. The native-time series is stashed
-        on ``self._last_native_times`` so ``run`` can pick it up if it
+        Returns ``(outputs, python_time_list, native_time_list)`` for the
+        existing :meth:`run` consumer. The native-time series is returned
+        directly as the third element so ``run`` can pick it up if it
         wants the dual report.
         """
         report_str = frmwrk.info["full_name"] + " - " + impl_name
@@ -170,10 +170,12 @@ class Test(object):
 
         # Some of the input data is taken from float constants defined in the benchmark JSON file.
         # These constants are stored as Python floats.
-        # However, frameworks like DaCe generally expect scalars to be in a specific datatype (e.g., np.float32 or np.float64).
+        # However, frameworks like DaCe generally expect scalars to be in a specific
+        # datatype (e.g., np.float32 or np.float64).
         # Since we don't have any information about the expected datatype of these constants in the JSON file,
         # we try to detect the expected datatype from the input data we got from the benchmark.
-        # Ideally, we would store the expected datatype information in the benchmark JSON file directly so we don't have to guess here.
+        # Ideally, we would store the expected datatype information in the benchmark
+        # JSON file directly so we don't have to guess here.
         dtypes = set(type(v) for v in bdata.values() if type(v) in [np.float32, np.float64])
         dtypes |= set(
             type(v.dtype.type()) for v in bdata.values()

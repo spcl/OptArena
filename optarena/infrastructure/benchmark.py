@@ -137,7 +137,6 @@ class Benchmark(object):
         # default. (Resolving it here, not per-branch, is what lets a
         # custom-generate kernel honour fuzz.data_distributions too.)
         if info_init:
-            from optarena.spec import BenchSpec
             spec = BenchSpec.from_dict(self.info, source=self.bname)
             is_fuzz = preset == fuzz.FUZZED_PRESET
             base_seed = input_seed if input_seed is not None else int(config.get("seeds.input_dist", 0))
@@ -149,9 +148,8 @@ class Benchmark(object):
                 dist_name = config.get("fuzz.data_distribution", "uniform") if is_fuzz else "uniform"
         if info_init and not info_init.get("func_name"):
             from optarena.initialize import auto_initialize
-            from optarena.precision import Precision
-            precision = (Precision.from_str(datatype) if datatype in {"fp32", "fp64"} else Precision.FP64
-                         if datatype == "float64" else Precision.FP32 if datatype == "float32" else Precision.FP64)
+            from optarena.precision import precision_from_datatype
+            precision = precision_from_datatype(datatype)
             values = auto_initialize(spec,
                                      preset,
                                      precision,

@@ -20,12 +20,15 @@ path and are NOT generated here.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import subprocess
 import sys
 from typing import Dict, Iterable, List, Optional
 
 from optarena import paths
+from optarena.emit_bridge import bench_info_tempfile
+from optarena.spec import BenchSpec
 
 #: Auto-generatable Python targets and the canonical filename each produces
 #: (``{m}`` = the kernel's module_name). dace and jax are generated in-process;
@@ -52,7 +55,6 @@ def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Pat
     # form that covers the widest kernel set. write_generated's marker guard
     # leaves a hand-written *_jax.py override (the committed microbench ones)
     # untouched.
-    import json
     from numpyto_jax import emit_jax
     from numpyto_common.emit_io import write_generated
     func = json.loads(bench_info.read_text())["benchmark"]["func_name"]
@@ -89,7 +91,6 @@ def _emit_target(target: str, numpy_py: pathlib.Path, kdir: pathlib.Path, bench_
 def emit_targets(spec, targets: Iterable[str]) -> Dict[str, str]:
     """Emit ``targets`` for one :class:`~optarena.spec.BenchSpec` to their
     canonical names (override-aware). Returns ``{target: status}``."""
-    from optarena.emit_bridge import bench_info_tempfile
     kdir = paths.BENCHMARKS / spec.relative_path
     numpy_py = kdir / f"{spec.module_name}_numpy.py"
     if not numpy_py.exists():
@@ -113,7 +114,6 @@ def ensure(short_name: str, targets: Iterable[str]) -> None:
     if not targets:
         return
     try:
-        from optarena.spec import BenchSpec
         spec = BenchSpec.load(short_name)
     except Exception:
         return
@@ -228,7 +228,6 @@ def ensure_native(short_name: str, lang: Optional[str] = None) -> None:
     Best-effort: a failed emit is swallowed so the caller surfaces the real
     error at build/import time."""
     try:
-        from optarena.spec import BenchSpec
         spec = BenchSpec.load(short_name)
     except Exception:
         return

@@ -14,6 +14,7 @@ import functools
 import importlib.util
 import math
 import multiprocessing as mp
+import queue
 import sys
 import time
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from cffi import FFI
 
-from optarena import config, osinfo
+from optarena import osinfo
 from optarena.bindings.contract import Binding, WORKSPACE_DTYPE
 from optarena.dtypes import c_type
 from optarena.fuzz import _safe_eval
@@ -387,8 +388,6 @@ def _call_isolated(lib_path,
     an ``RLIMIT_AS`` memory cap; device kernels use ``spawn`` (a CUDA context does
     not survive ``fork``) and skip the cap (GPU memory is a separate resource).
     """
-    import queue as queuemod
-
     # A python delivery always runs on the HOST (it is a plain callable, no device
     # transfer), so it never takes the spawn/device path even for a device task.
     use_device = device and lang != "python"
@@ -416,7 +415,7 @@ def _call_isolated(lib_path,
             try:
                 result = q.get(timeout=0.05)
                 break
-            except queuemod.Empty:
+            except queue.Empty:
                 if not proc.is_alive():
                     break  # child exited without a result -> crash
                 if time.perf_counter() - start > timeout:

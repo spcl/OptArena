@@ -22,6 +22,7 @@ the framework's :meth:`compile_args`.
 import enum
 import os
 import re
+import subprocess
 from typing import Dict, Optional
 
 from optarena import osinfo
@@ -159,7 +160,6 @@ def detect_sm() -> str:
     if env:
         return env if env.startswith("sm_") else f"sm_{env}"
     try:
-        import subprocess
         out = subprocess.check_output(["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
                                       timeout=5).decode().strip().splitlines()
         if out:
@@ -180,7 +180,6 @@ def detect_gfx() -> str:
     if env:
         return env
     try:
-        import subprocess
         out = subprocess.check_output(["rocminfo"], timeout=5).decode()
         m = re.search(r"Name:\s+(gfx\w+)", out)
         if m:

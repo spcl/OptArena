@@ -78,9 +78,10 @@ def _flatten_buffer_style_sparse(bench: Dict[str, Any], spec: BenchSpec, config:
             continue  # logical-style -> leave for the emitter to expand
         # Replace the logical name with its ordered physical buffers + supply
         # each buffer's shape/dtype so the emitter classifies them as arrays.
-        idx = new_array_args.index(logical) if logical in new_array_args else len(new_array_args)
+        present = logical in new_array_args
+        idx = new_array_args.index(logical) if present else len(new_array_args)
         names = [b.name for b in bufs]
-        new_array_args[idx:idx + (1 if logical in new_array_args else 0)] = names
+        new_array_args[idx:idx + (1 if present else 0)] = names
         for b in bufs:
             shapes[b.name] = "(" + ", ".join(b.shape) + ",)"
             dtypes[b.name] = b.dtype

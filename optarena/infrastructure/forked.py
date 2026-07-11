@@ -41,6 +41,12 @@ class RunResult:
     result: Any = None
 
 
+def forked_failure_reason(r: RunResult) -> str:
+    """One-line cause for a failed :class:`RunResult`: the fatal signal name, else the
+    last line of the child's traceback, else ``"unknown"``."""
+    return r.signal or (r.error.strip().splitlines()[-1] if r.error else "unknown")
+
+
 def _child(fn, args, kwargs, q):
     try:
         out = fn(*args, **kwargs)

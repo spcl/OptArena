@@ -21,26 +21,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from __future__ import print_function
-
 import sys
 import threading
-from time import sleep
-try:
-    import thread
-except ImportError:
-    import _thread as thread
-
-try:  # use code that works the same in Python 2 and 3
-    range, _print = xrange, print
-
-    def print(*args, **kwargs):
-        flush = kwargs.pop('flush', False)
-        _print(*args, **kwargs)
-        if flush:
-            kwargs.get('file', sys.stdout).flush()
-except NameError:
-    pass
+import _thread as thread
 
 
 def cdquit(fn_name):
@@ -70,55 +53,3 @@ def exit_after(s):
         return inner
 
     return outer
-
-
-@exit_after(1)
-def a():
-    print('a')
-
-
-@exit_after(2)
-def b():
-    print('b')
-    sleep(1)
-
-
-@exit_after(3)
-def c():
-    print('c')
-    sleep(2)
-
-
-@exit_after(4)
-def d():
-    print('d started')
-    for i in range(10):
-        sleep(1)
-        print(i)
-
-
-@exit_after(5)
-def countdown(n):
-    print('countdown started', flush=True)
-    for i in range(n, -1, -1):
-        print(i, end=', ', flush=True)
-        sleep(1)
-    print('countdown finished')
-
-
-def main():
-    a()
-    b()
-    c()
-    try:
-        d()
-    except KeyboardInterrupt as error:
-        print('d should not have finished, printing error as expected:')
-        print(error)
-    countdown(3)
-    countdown(10)
-    print('This should not print!!!')
-
-
-if __name__ == '__main__':
-    main()

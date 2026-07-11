@@ -87,7 +87,6 @@ class JaxFramework(Framework):
         """
         # Lazy autogen: emit ``<m>_jax.py`` from the numpy reference if it is
         # missing (no-op when a hand override or a prior autogen already exists).
-        self.ensure_impls(bench)
         module_pypath = "optarena.benchmarks.{r}.{m}".format(r=bench.info["relative_path"].replace('/', '.'),
                                                              m=bench.info["module_name"])
         if "postfix" in self.info.keys():
@@ -97,18 +96,9 @@ class JaxFramework(Framework):
         module_str = "{m}_{p}".format(m=module_pypath, p=postfix)
         func_str = bench.info["func_name"]
 
-        implementations = []
-
-        # appending the default implementation
-        try:
-            ldict = dict()
-
-            module = importlib.import_module(module_str)
-            ldict['impl'] = vars(module)[func_str]
-            implementations.append((ldict['impl'], 'default'))
-        except Exception as e:
-            print("Failed to load the {r} {f} implementation.".format(r=self.info["full_name"], f=func_str))
-            raise e
+        # appending the default implementation (base class re-runs ensure_impls
+        # and rebuilds module_str/func_str internally; both are idempotent/pure).
+        implementations = list(super().implementations(bench))
 
         for impl_name, impl_postfix in _impl.items():
             ldict = dict()

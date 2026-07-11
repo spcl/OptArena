@@ -206,17 +206,7 @@ def compile_variant(
         "lib": str(lib),
     }
 
-    cmd: List[str] = []
-    for tok in block["compile"]:
-        rendered = tok.format(**subst)
-        # The {baseline} token expands to a flag string; shell-split it back into
-        # argv items (shlex keeps a quoted group like nvcc's ``-Xcompiler='...'``
-        # together; an empty baseline contributes nothing).
-        if tok == "{baseline}":
-            cmd.extend(shlex.split(rendered))
-        else:
-            cmd.append(rendered)
-    return cmd
+    return _render_argv(block["compile"], subst)
 
 
 def build_kernel_lib_commands(
@@ -261,18 +251,6 @@ wrap_kernel` dlopens. Flags resolve from :mod:`optarena.flags` via
     out_so = pathlib.Path(out_so)
     build_dir = pathlib.Path(build_dir) if build_dir is not None else out_so.parent
 
-    def render(tokens: List[str], subst: Dict[str, str]) -> List[str]:
-        out: List[str] = []
-        for tok in tokens:
-            rendered = tok.format(**subst)
-            # {baseline} and {objs} each expand to a space-joined string that
-            # must become several argv items; everything else is one token.
-            if tok in ("{baseline}", "{objs}"):
-                out.extend(shlex.split(rendered))
-            else:
-                out.append(rendered)
-        return out
-
     forced = None
     if compiler is not None:
         if compiler not in compilers:
@@ -297,7 +275,7 @@ wrap_kernel` dlopens. Flags resolve from :mod:`optarena.flags` via
             "objs": str(obj),
             "lib": str(out_so),
         }
-        cmds.append(render(block["compile"], subst))
+        cmds.append(_render_argv(block["compile"], subst))
         objs.append(str(obj))
         has_cpp = has_cpp or lang == "cpp"
         has_fortran = has_fortran or lang == "fortran"
@@ -319,7 +297,7 @@ wrap_kernel` dlopens. Flags resolve from :mod:`optarena.flags` via
         "objs": " ".join(objs),
         "lib": str(out_so),
     }
-    link_argv = render(link_block["link"], link_subst)
+    link_argv = _render_argv(link_block["link"], link_subst)
     link_argv.extend(link_block.get("link_extra") or [])
     if extra_flags:  # Polly/Pluto need -fopenmp -lgomp at link too
         link_argv.extend(shlex.split(extra_flags))
@@ -507,22 +485,12 @@ def build_shared_lib_commands(
         "lib": str(out_so),
     }
 
-    def render(tokens: List[str]) -> List[str]:
-        out: List[str] = []
-        for tok in tokens:
-            rendered = tok.format(**subst)
-            if tok == "{baseline}":
-                out.extend(shlex.split(rendered))  # shell-split (keeps quoted -Xcompiler groups)
-            else:
-                out.append(rendered)
-        return out
-
-    cmds: List[List[str]] = [render(block["compile"])]
+    cmds: List[List[str]] = [_render_argv(block["compile"], subst)]
     if extra_compile:
         cmds[0].extend(extra_compile)  # first argv compiles the source (sees -I/-D)
     link = block.get("link")
     if link:
-        link_argv = render(link)
+        link_argv = _render_argv(link, subst)
         link_argv.extend(block.get("link_extra") or [])
         # An OpenMP-parallelized object (multi-core / autopar baseline carries
         # -fopenmp) emits GOMP_* references that must also be resolved at link;

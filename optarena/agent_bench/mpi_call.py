@@ -15,6 +15,7 @@ scatter/gather I/O and process launch sit OUTSIDE the timed number.
 """
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
@@ -117,7 +118,6 @@ def run(artifact: Path,
         infile.write_bytes(pack_infile(binding, descriptor, arrays, scalars, k_repeats, workspace_bytes))
 
         if python_exe is None:
-            import sys
             python_exe = sys.executable
         program = _program_argv(artifact,
                                 infile,

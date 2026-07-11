@@ -92,7 +92,7 @@ def get_cpu_flops(num_cores):
     return flops_sp, flops_dp
         
 
-def get_theoretical_bandwidth(num_cores=0, dump_file=None):
+def get_theoretical_bandwidth(dump_file=None):
     """returns the theoretical bandwidth in GB/s.
 
     Uses ``dmidecode``. Pass a pre-generated binary dump via
@@ -130,13 +130,17 @@ def get_theoretical_bandwidth(num_cores=0, dump_file=None):
                 if speed_mt == 0:
                     speed_mt = device_speed
                 elif speed_mt != device_speed:
-                    raise NotImplementedError("The function for calculating theoretical bandwidth has not been designed to support multiple different memory speeds")
+                    raise NotImplementedError(
+                        "The function for calculating theoretical bandwidth has not been designed to "
+                        "support multiple different memory speeds")
 
                 device_width = int(device.get("Total Width", "0").split()[0])/8
                 if width == 0:
                     width = device_width
                 elif width != device_width:
-                    raise NotImplementedError("The function for calculating theoretical bandwidth has not been designed to support multiple different memory widths")
+                    raise NotImplementedError(
+                        "The function for calculating theoretical bandwidth has not been designed to "
+                        "support multiple different memory widths")
         return speed_mt * width * len(used_channels)
     else:
         with open(f"{os.path.dirname(os.path.realpath(__file__))}/cpu_info.yaml", "r") as file:
@@ -197,4 +201,4 @@ if __name__ == "__main__":
     print("CPU flops:", get_cpu_flops(psutil.cpu_count(logical=False))[1], "GFLOPs/s")
     print(get_cpu_cache_size())
     for gpu in get_gpu_flops():
-        print(f"{gpu["name"]} flops: {gpu["TFLOPs (FP32)"]} TFLOPs/s (FP32)")
+        print(f"{gpu['name']} flops: {gpu['TFLOPs (FP32)']} TFLOPs/s (FP32)")

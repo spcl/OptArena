@@ -171,7 +171,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
         return kernel, language
 
     def do_GET(self):
-        parts = [p for p in urlparse(self.path).path.strip("/").split("/")]
+        parts = urlparse(self.path).path.strip("/").split("/")
         route = parts[0] if parts else ""
         if route == "health":
             return self._send(200, {
@@ -209,7 +209,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
         return self._send(404, {"error": f"unknown route {self.path!r}"})
 
     def do_POST(self):
-        parts = [p for p in urlparse(self.path).path.strip("/").split("/")]
+        parts = urlparse(self.path).path.strip("/").split("/")
         route = parts[0] if parts else ""
         if route not in ("oracle", "submit", "score"):
             return self._send(404, {"error": f"unknown route {self.path!r}"})

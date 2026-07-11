@@ -694,6 +694,9 @@ class BenchSpec:
                                  f"'{bench['func_name']}' could not be read from "
                                  f"{bench['relative_path']}/{bench['module_name']}_numpy.py to infer the "
                                  f"signature; declare 'input_args' explicitly.")
+        # Union of every size symbol across all parameter tuples; used both to
+        # classify inputs on the inferred path and to check reserved ABI names.
+        param_syms = set().union(*(set(p) for p in bench["parameters"].values())) if bench["parameters"] else set()
         # Resolve the (optional) array list: declared, else inferred from init.
         if bench.get("array_args") is not None:
             array_args = tuple(bench["array_args"])
@@ -709,8 +712,7 @@ class BenchSpec:
             # (init.shapes), a scalar value (init.scalars), or a size symbol
             # (parameters). This strict check runs only on the inferred path;
             # manifests with an explicit ``array_args`` are trusted as-is.
-            sizes = set().union(*(set(p) for p in bench["parameters"].values())) if bench["parameters"] else set()
-            classified = set(init_spec.shapes) | set(init_spec.scalars) | sizes
+            classified = set(init_spec.shapes) | set(init_spec.scalars) | param_syms
             unknown = [a for a in input_args if a not in classified]
             if unknown:
                 raise ValueError(f"{source}: input(s) {unknown} are undeclared. With 'array_args' inferred, every "
@@ -726,7 +728,6 @@ class BenchSpec:
         # the error is clear here, not deep in binding assembly. Deferred import
         # avoids a cycle (contract imports from spec).
         from optarena.bindings.contract import RESERVED_ARG_NAMES
-        param_syms = set().union(*(set(p) for p in bench["parameters"].values())) if bench["parameters"] else set()
         reserved_used = sorted((set(input_args) | set(array_args) | set(output_args) | param_syms) & RESERVED_ARG_NAMES)
         if reserved_used:
             raise ValueError(f"{source}: name(s) {reserved_used} are reserved by the C-ABI "

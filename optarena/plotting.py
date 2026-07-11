@@ -73,7 +73,7 @@ def my_runtime_abbr(x):
 def bootstrap_ci(data, statfunction=np.median, alpha=0.05, n_samples=300):
     """inspired by https://github.com/cgevans/scikits-bootstrap"""
 
-    def bootstrap_ids(data, n_samples=100):
+    def bootstrap_ids(data, n_samples):
         for _ in range(n_samples):
             yield np.random.randint(data.shape[0], size=(data.shape[0], ))
 
@@ -157,7 +157,6 @@ def plot_heatmap(benchmark="all", preset="S", datatype="float64", variant=None, 
                     how="inner")  # do a join on data and best
 
     frmwrks = list(data['framework'].unique())
-    print(frmwrks)
     assert ('numpy' in frmwrks)
     frmwrks.remove('numpy')
     frmwrks.append('numpy')

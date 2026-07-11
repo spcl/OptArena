@@ -79,6 +79,17 @@ class Agent(ABC):
         self-report path (the SDK's own usage) and a future MITM proxy."""
         self.__dict__["_usage"] = self.usage + TokenUsage(input_tokens, output_tokens, cached_tokens)
 
+    def _dispatch_solve(self, task: Task, prompt: str, budget: "Optional[object]",
+                        backend: Callable[[str, "Optional[object]"], str]) -> Submission:
+        """Shared model-agent ``solve`` body: assemble the prompt if the runner did
+        not pass one, run the injected ``complete_fn`` (else the agent's ``backend``),
+        and parse the reply into a :class:`Submission`."""
+        if not prompt:
+            from optarena.agent_bench.prompts import build_prompt
+            prompt = build_prompt(task)
+        reply = self._complete_fn(prompt) if self._complete_fn is not None else backend(prompt, budget)
+        return Submission.from_response(reply, default_language=task.language)
+
 
 def budget_tokens(budget: "object", default: int) -> int:
     """Resolve an agent token ceiling from the unified budget: a
@@ -212,7 +223,7 @@ class ClaudeAgent(Agent):
     def _anthropic_complete(self, prompt: str, budget: Optional[int]) -> str:
         import anthropic
         client = anthropic.Anthropic()
-        max_tokens = budget if isinstance(budget, int) and budget > 0 else self.max_tokens
+        max_tokens = budget_tokens(budget, self.max_tokens)
         message = client.messages.create(model=self.model,
                                          max_tokens=max_tokens,
                                          system=_SYSTEM_PROMPT,
@@ -225,12 +236,7 @@ class ClaudeAgent(Agent):
         return "".join(block.text for block in message.content if block.type == "text")
 
     def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
-        if not prompt:
-            from optarena.agent_bench.prompts import build_prompt
-            prompt = build_prompt(task)
-        reply = (self._complete_fn(prompt) if self._complete_fn is not None else self._anthropic_complete(
-            prompt, budget))
-        return Submission.from_response(reply, default_language=task.language)
+        return self._dispatch_solve(task, prompt, budget, self._anthropic_complete)
 
 
 class LocalHFAgent(Agent):
@@ -269,16 +275,12 @@ class LocalHFAgent(Agent):
         messages = [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
         text = self._tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self._tok(text, return_tensors="pt").to(self._model.device)
-        max_new = budget if isinstance(budget, int) and budget > 0 else self.max_tokens
+        max_new = budget_tokens(budget, self.max_tokens)
         out = self._model.generate(**inputs, max_new_tokens=max_new)
         return self._tok.decode(out[0][inputs.input_ids.shape[-1]:], skip_special_tokens=True)
 
     def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
-        if not prompt:
-            from optarena.agent_bench.prompts import build_prompt
-            prompt = build_prompt(task)
-        reply = (self._complete_fn(prompt) if self._complete_fn is not None else self._hf_complete(prompt, budget))
-        return Submission.from_response(reply, default_language=task.language)
+        return self._dispatch_solve(task, prompt, budget, self._hf_complete)
 
 
 class OllamaAgent(Agent):
@@ -314,7 +316,7 @@ class OllamaAgent(Agent):
         import json
         import urllib.error
         import urllib.request
-        num_predict = budget if isinstance(budget, int) and budget > 0 else self.max_tokens
+        num_predict = budget_tokens(budget, self.max_tokens)
         payload = {
             "model": self.model_id,
             "stream": False,
@@ -347,8 +349,4 @@ class OllamaAgent(Agent):
         return body.get("message", {}).get("content", "")
 
     def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
-        if not prompt:
-            from optarena.agent_bench.prompts import build_prompt
-            prompt = build_prompt(task)
-        reply = (self._complete_fn(prompt) if self._complete_fn is not None else self._ollama_complete(prompt, budget))
-        return Submission.from_response(reply, default_language=task.language)
+        return self._dispatch_solve(task, prompt, budget, self._ollama_complete)

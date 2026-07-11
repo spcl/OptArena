@@ -289,7 +289,8 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
     # (the unpacked members of a sparse logical array, which a buffer-style
     # kernel lists directly in ``input_args``) are excluded so they are not
     # re-emitted as spurious scalars.
-    symbol_set = set(_symbol_names(spec))
+    symbol_names = _symbol_names(spec)
+    symbol_set = set(symbol_names)
     ptr_names = {a.name for a in pointers}
     scalars: List[Arg] = []
     for name in spec.input_args:
@@ -303,7 +304,7 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
                 is_const=True,  # every scalar input is const (§5)
             ))
 
-    for sym in _symbol_names(spec):
+    for sym in symbol_names:
         if sym in PHANTOM_ARG_NAMES:
             continue
         scalars.append(Arg(

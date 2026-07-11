@@ -49,8 +49,8 @@ def _resolve_variants(arg: str, spec: BenchSpec) -> List[str]:
     return sorted(spec.variants) if arg == "all" else [arg]
 
 
-def _run_cell(short_name: str, framework_name: str, precision: Precision, variant: str, preset: str, mode: Mode,
-              repeat: int, timeout: float, validate: bool) -> Dict[str, Any]:
+def _run_cell(short_name: str, framework_name: str, precision: Precision, variant: str, preset: str, repeat: int,
+              timeout: float, validate: bool) -> Dict[str, Any]:
     """Run one ``(kernel, framework, precision, variant)`` cell.
 
     Delegates to the legacy :class:`optarena.infrastructure.Test` for
@@ -161,7 +161,7 @@ def cmd_run(args) -> int:
                 for precision in precisions:
                     for variant in variants:
                         ts = int(time.time())
-                        result = _run_cell(bench_name, fw_name, precision, variant, args.preset, mode, args.repeat,
+                        result = _run_cell(bench_name, fw_name, precision, variant, args.preset, args.repeat,
                                            args.timeout, args.validate)
                         row = dict(timestamp=ts,
                                    benchmark=bench_name,

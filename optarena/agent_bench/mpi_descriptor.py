@@ -403,7 +403,7 @@ def distribution_for_kernel(mpi_block: Optional[dict],
 # --------------------------------------------------------------------------------------- #
 
 
-def _array_dist_from_layout(name: str, layout: dict, grid: Grid) -> ArrayDist:
+def _array_dist_from_layout(layout: dict) -> ArrayDist:
     """Resolve one array's ``{replicated | axes:[...]}`` layout dict into an :class:`ArrayDist`
     (structural fields already validated by the envelope)."""
     if layout.get("replicated"):
@@ -497,7 +497,7 @@ class Descriptor:
             if name not in ptrs:
                 raise ValueError(f"distribution names unknown array {name!r}; "
                                  f"binding arrays are {sorted(ptrs)}")
-            ad = _array_dist_from_layout(name, layout, grid)
+            ad = _array_dist_from_layout(layout)
             if not ad.replicated and name in ndims and len(ad.axes) != ndims[name]:
                 raise ValueError(f"distribution.arrays[{name!r}] declares {len(ad.axes)} axis/axes but "
                                  f"the array has {ndims[name]} dimension(s)")

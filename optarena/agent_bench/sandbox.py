@@ -124,6 +124,30 @@ class Sandbox:
             self._tmp.cleanup()
         return False
 
+    def _run_build_commands(self, cmds) -> Tuple[bool, str]:
+        """Run the compile/link argv sequence, capturing a combined log.
+
+        Returns ``(failed, log)``: ``failed`` is True on the first command that
+        cannot be spawned (``OSError``) or exits nonzero; ``log`` is the joined
+        transcript either way. Callers do their own artifact-existence check and
+        success ``BuildResult``.
+        """
+        log: List[str] = []
+        for argv in cmds:
+            log.append("$ " + " ".join(argv))
+            try:
+                proc = subprocess.run(argv, cwd=str(self.root), capture_output=True, text=True)
+            except OSError as e:  # compiler not installed (e.g. no gfortran/mpicc on a stock mac) -> scored failure
+                log.append(f"{argv[0]}: {e}")
+                return True, "\n".join(log)
+            if proc.stdout:
+                log.append(proc.stdout)
+            if proc.stderr:
+                log.append(proc.stderr)
+            if proc.returncode != 0:
+                return True, "\n".join(log)
+        return False, "\n".join(log)
+
     def build(self, submission: Submission, *, mode: Mode = Mode.SINGLE_CORE) -> BuildResult:
         """Compile (restricted) or copy in (any) the submission's ``.so``."""
         if self.root is None:
@@ -168,23 +192,12 @@ class Sandbox:
         except (KeyError, FileNotFoundError) as e:
             return BuildResult(False, None, f"no compiler for {submission.language}: {e}")
 
-        log: List[str] = []
-        for argv in cmds:
-            log.append("$ " + " ".join(argv))
-            try:
-                proc = subprocess.run(argv, cwd=str(self.root), capture_output=True, text=True)
-            except OSError as e:  # compiler not installed (e.g. no gfortran on a stock mac) -> scored build failure
-                log.append(f"{argv[0]}: {e}")
-                return BuildResult(False, None, "\n".join(log))
-            if proc.stdout:
-                log.append(proc.stdout)
-            if proc.stderr:
-                log.append(proc.stderr)
-            if proc.returncode != 0:
-                return BuildResult(False, None, "\n".join(log))
+        failed, log = self._run_build_commands(cmds)
+        if failed:
+            return BuildResult(False, None, log)
         if not lib.exists():
-            return BuildResult(False, None, "compile reported success but produced no .so\n" + "\n".join(log))
-        return BuildResult(True, lib, "\n".join(log))
+            return BuildResult(False, None, "compile reported success but produced no .so\n" + log)
+        return BuildResult(True, lib, log)
 
     def build_mpi(self,
                   submission: Submission,
@@ -268,20 +281,9 @@ class Sandbox:
         except (KeyError, FileNotFoundError, ValueError) as e:
             return BuildResult(False, None, f"no MPI compiler for {submission.language}: {e}")
 
-        log: List[str] = []
-        for argv in cmds:
-            log.append("$ " + " ".join(argv))
-            try:
-                proc = subprocess.run(argv, cwd=str(self.root), capture_output=True, text=True)
-            except OSError as e:  # compiler not installed (e.g. no gfortran/mpicc on a stock mac) -> scored failure
-                log.append(f"{argv[0]}: {e}")
-                return BuildResult(False, None, "\n".join(log))
-            if proc.stdout:
-                log.append(proc.stdout)
-            if proc.stderr:
-                log.append(proc.stderr)
-            if proc.returncode != 0:
-                return BuildResult(False, None, "\n".join(log))
+        failed, log = self._run_build_commands(cmds)
+        if failed:
+            return BuildResult(False, None, log)
         if not exe.exists():
-            return BuildResult(False, None, "compile reported success but produced no executable\n" + "\n".join(log))
-        return BuildResult(True, None, "\n".join(log), exe=exe)
+            return BuildResult(False, None, "compile reported success but produced no executable\n" + log)
+        return BuildResult(True, None, log, exe=exe)

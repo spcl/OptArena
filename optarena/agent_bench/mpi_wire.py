@@ -100,7 +100,6 @@ class ParsedInfile:
     nranks: int
     k_repeats: int
     ptrs: List[PtrPlan]
-    scalar_names: List[str]  # canonical order (from the binding at pack time)
     scalar_values: List[List]  # [rank][scalar] -- localised size symbols, replicated others
     workspace_bytes: List[int]  # per rank
 
@@ -219,7 +218,6 @@ def unpack_infile(raw: bytes) -> ParsedInfile:
     return ParsedInfile(nranks=nranks,
                         k_repeats=k_repeats,
                         ptrs=ptrs,
-                        scalar_names=[],
                         scalar_values=scalar_values,
                         workspace_bytes=workspace_bytes)
 

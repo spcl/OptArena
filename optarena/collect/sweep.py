@@ -22,7 +22,7 @@ import time
 from typing import Dict, List, Optional, Sequence
 
 from optarena.infrastructure import Benchmark, generate_framework, Test
-from optarena.infrastructure.forked import run_forked
+from optarena.infrastructure.forked import forked_failure_reason, run_forked
 from optarena.spec import BenchSpec, KERNELS
 
 
@@ -204,7 +204,7 @@ def run_framework_sweep(benchmark: str,
                        variant=variant,
                        label=benchname)
         if not r.ok:
-            why = r.signal or (r.error.strip().splitlines()[-1] if r.error else "unknown")
+            why = forked_failure_reason(r)
             print(f"[FAIL] {benchname}: {why}")
             failed.append(benchname)
 
@@ -258,7 +258,7 @@ def _run_sparse_one(benchname, variant, framework, preset, validate, repeat, tim
                    label=label)
     elapsed = time.time() - t0
     if not r.ok:
-        why = r.signal or (r.error.strip().splitlines()[-1] if r.error else "unknown")
+        why = forked_failure_reason(r)
         print(f"[sparse-sweep] {label} failed: {why}", file=sys.stderr)
     return (0 if r.ok else 1), elapsed
 
