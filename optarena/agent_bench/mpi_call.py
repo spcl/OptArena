@@ -14,6 +14,7 @@ here. A non-zero launcher exit or a timeout is a SCORED failure (``RuntimeError`
 scatter/gather I/O and process launch sit OUTSIDE the timed number.
 """
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -136,22 +137,32 @@ def run(artifact: Path,
         if env:
             launch_env.update({k: str(v) for k, v in env.items()})
         launch_env.setdefault("HWLOC_COMPONENTS", _HWLOC_NO_GPU_PLUGINS)
+        # start_new_session: the launcher leads its own process group so a timeout can
+        # SIGKILL the WHOLE group -- otherwise only the launcher dies and its spawned MPI
+        # ranks orphan (leaking cores / files / GPUs across the run).
+        # errors="replace": a kernel may emit non-UTF8 bytes on stderr; a strict decode would
+        # raise UnicodeDecodeError and turn a scored failure into a runner crash (adversarial DoS).
+        proc = subprocess.Popen(cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                errors="replace",
+                                env=launch_env,
+                                start_new_session=True)
         try:
-            # errors="replace": a kernel may emit non-UTF8 bytes on stderr; a strict decode would
-            # raise UnicodeDecodeError and turn a scored failure into a runner crash (adversarial DoS).
-            proc = subprocess.run(cmd,
-                                  capture_output=True,
-                                  text=True,
-                                  errors="replace",
-                                  timeout=timeout,
-                                  env=launch_env)
+            stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as e:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
             raise RuntimeError(f"MPI launch exceeded {timeout:g}s and was killed") from e
         if proc.returncode != 0:
-            tail = (proc.stderr or proc.stdout or "")[-2000:]
+            tail = (stderr or stdout or "")[-2000:]
             raise RuntimeError(f"MPI launch failed (exit {proc.returncode}): {tail}")
         if not outfile.exists():
-            raise RuntimeError(f"MPI driver produced no outfile: {(proc.stderr or '')[-2000:]}")
+            raise RuntimeError(f"MPI driver produced no outfile: {(stderr or '')[-2000:]}")
 
         samples, decoded = unpack_outfile(outfile.read_bytes())
         outputs = _gather_outputs(binding, descriptor, arrays, decoded)

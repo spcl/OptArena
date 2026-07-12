@@ -111,8 +111,11 @@ def run_forked(fn: Callable,
         if progress_q is not None:
             last_progress = _drain(progress_q, last_progress)
         if deadline is not None and time.monotonic() >= deadline:
-            p.terminate()
-            p.join()
+            p.terminate()          # SIGTERM
+            p.join(5.0)
+            if p.is_alive():       # a child that ignores/blocks SIGTERM would hang the
+                p.kill()           # parent on an unbounded join -- escalate to SIGKILL
+                p.join()
             if progress_q is not None:
                 last_progress = _drain(progress_q, last_progress)
             msg = f"{tag}timed out after {timeout}s"

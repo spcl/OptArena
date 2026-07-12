@@ -145,7 +145,9 @@ def ncores() -> int:
     """
     env = os.environ.get("OPTARENA_NCORES")
     if env and env.isdigit():
-        return int(env)
+        n = int(env)
+        if n > 0:  # OPTARENA_NCORES=0 must NOT set OMP/autopar thread counts to 0
+            return n
     n = os.cpu_count()
     return n if n else 1
 
