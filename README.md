@@ -7,8 +7,51 @@ CUDA / … and is **scored by its speedup over a baseline while staying numerica
 correct**. The harness generates the language bindings, compiles the submission,
 times it, and grades it against the reference -- one reproducible number per kernel.
 
-> **Timing unit:** all times are host-measured **nanoseconds** (`baseline_ns` /
-> `native_ns` in `optarena.db`).
+> **Timing unit:** all times are host-measured **nanoseconds**. The harness brackets
+> the pure kernel call from outside; kernels carry no self-timer.
+
+---
+
+## Quick start
+
+Install for CPU, then optimize a kernel with an agentic loop -- no container needed:
+
+```sh
+pip install -r requirements/cpu.txt && pip install -e .
+export ANTHROPIC_API_KEY=sk-...          # the agent calls Claude
+
+# 1) one kernel: Claude writes C, the harness compiles + validates + times it and
+#    scores the speedup over the C baseline (--native = in-process, no container):
+optarena agent claude --kernels gemm --native
+
+# 2) a whole HPC sub-track at level 2 (the structured-grids dwarf), default prompt:
+optarena agent claude --kernels hpc/structured_grids@lvl2 --native
+```
+
+`--kernels` takes a kernel name, a track (`hpc` / `ml` / `foundation`), a dwarf
+(`hpc/structured_grids`), or a level suffix (`@lvl1` / `@lvl2` / `@lvl3`) -- and any
+combination (`hpc/dense_linear_algebra@lvl2`). Omit `--native` to run the measured
+build inside a container (next).
+
+### Run an automatic optimizer in one container
+
+An automatic optimizer like **DaCe** is self-contained (NumPy -> SDFG -> optimized
+C), so the *whole* optimizer runs in a single container -- unlike an LLM agent, which
+stays outside and reaches the container over its API. Build the image once, then run:
+
+```sh
+apptainer build optarena-cpu.sif containers/cpu.def        # rootless, once
+
+apptainer exec --bind "$PWD:$PWD" --pwd "$PWD" optarena-cpu.sif \
+    python -m optarena.cli run --framework dace_cpu --benchmark hpc/structured_grids@lvl2
+```
+
+For an **LLM agent** in a container instead (agent outside, only the measured build
+inside the image), use the wrapper:
+
+```sh
+scripts/run_agent_in_container.sh cpu -- claude --kernels gemm
+```
 
 ---
 
@@ -198,15 +241,19 @@ directly -- no compile, graded on the same held-out inputs. **C / C++ / Fortran 
 
 ---
 
-## Running benchmarks
+## Running benchmarks (no agent)
+
+Compile + validate + time the framework implementations directly -- no LLM:
 
 ```sh
-python scripts/run_benchmark.py -b <kernel> -f <framework>        # one kernel
-python scripts/run_framework.py -f <framework>                    # all kernels, one framework
+optarena run --benchmark gemm --framework dace_cpu     # one kernel, one framework
+optarena run --benchmark hpc  --framework all          # a whole track, every framework
 ```
 
-Use a kernel's **short name** (the co-located manifest's `short_name`). Frameworks
-are the names above (`numpy`, `numba`, `dace_cpu`, `cc`, `llvm`, …).
+`--benchmark` takes the same selectors as `--kernels` (name / track / dwarf / `@lvl`);
+`--framework` is a registry name (`numpy`, `numba`, `dace_cpu`, `cc`, `llvm`, `fortran`,
+`jax`, `triton`, …) or `all`. `scripts/run_benchmark.py` / `run_framework.py` are thin
+shims for these.
 
 ### Presets
 
