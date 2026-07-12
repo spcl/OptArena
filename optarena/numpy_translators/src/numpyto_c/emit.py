@@ -450,6 +450,13 @@ class _CBodyEmitter(BaseEmitter):
                 return f"({v.real!r} + {v.imag!r} * _Complex_I)"
             raise NotImplementedError(f"literal {v!r}")
         if isinstance(node, ast.Name):
+            # A size-1 array (shape all ``1`` -- a ``(1,)`` scalar buffer) read bare in a value expression
+            # is its sole element: emit ``x[0]``, not the pointer ``x`` (``a[i] > x`` must be ``a[i] > x[0]``,
+            # not a ``double`` vs ``double *`` comparison). Genuine scalars carry an EMPTY shape here, so they
+            # stay bare; an explicit ``x[0]`` goes through visit_Subscript, never this branch.
+            shape = self.array_shapes.get(node.id)
+            if shape and all(str(s) == "1" for s in shape):
+                return f"{node.id}[0]"
             return node.id
         if isinstance(node, ast.UnaryOp):
             # ``~x`` on a BOOLEAN operand is numpy logical negation (mask
@@ -619,7 +626,9 @@ class _CBodyEmitter(BaseEmitter):
             if -len(elts) <= node.slice.value < len(elts):
                 return self.emit_expr(elts[node.slice.value])
         base_node, indices = self._unchain_subscript(node)
-        base = self.emit_expr(base_node)
+        # The base of a subscript is the array itself (we add the index below), so use the RAW name -- NOT
+        # emit_expr, which scalarizes a size-1 array Name to ``x[0]`` and would double-index to ``x[0][i]``.
+        base = base_node.id if isinstance(base_node, ast.Name) else self.emit_expr(base_node)
         # Flatten multi-D indexing using the array's shape symbols.
         # Row-major: index = ((i_0)*d_1 + i_1)*d_2 + i_2 + ...
         if len(indices) == 1 or not isinstance(base_node, ast.Name):

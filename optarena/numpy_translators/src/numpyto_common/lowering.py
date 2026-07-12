@@ -1644,8 +1644,12 @@ def _harvest_local_shapes(tree: ast.AST,
             if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.Compare,
                                 ast.BoolOp, ast.Subscript, ast.Call)) \
                     and target.id not in shape_table:
+                from numpyto_common.lib_nodes import extent_is_scalar
                 ext = _iter_extent_of(rhs, shape_table)
-                if ext is not None:
+                # An all-size-1 broadcast (``t = a[i] > x`` with ``x`` shape ``(1,)``) is a SCALAR local:
+                # numpyto reads size-1 arrays as ``x[0]``, so sizing ``t`` as ``T t[1]`` would desync its
+                # scalar declaration from the array-style writes the extent drives (see extent_is_scalar).
+                if ext is not None and not extent_is_scalar(ext):
                     shape_table[target.id] = tuple(
                         ast.unparse(e) for e in ext)
             continue
@@ -3373,10 +3377,11 @@ class _ResolveArrShape(ast.NodeTransformer):
                 tok = ast.unparse(rhs.args[2])
                 self.current[target] = (tok,)
                 return
-        # BinOp / UnaryOp / IfExp -- broadcast.
+        # BinOp / UnaryOp / IfExp -- broadcast. An all-size-1 result is a scalar (see extent_is_scalar).
+        from numpyto_common.lib_nodes import extent_is_scalar
         if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp)):
             ext = _iter_extent_of(rhs, self.current)
-            if ext is not None:
+            if ext is not None and not extent_is_scalar(ext):
                 self.current[target] = tuple(
                     ast.unparse(e) for e in ext)
             return
@@ -3384,7 +3389,7 @@ class _ResolveArrShape(ast.NodeTransformer):
         # array operand's broadcast extent.
         if isinstance(rhs, ast.Call):
             ext = _iter_extent_of(rhs, self.current)
-            if ext is not None:
+            if ext is not None and not extent_is_scalar(ext):
                 self.current[target] = tuple(
                     ast.unparse(e) for e in ext)
 
@@ -4908,9 +4913,10 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                 and not (isinstance(node.value, ast.Call)
                          and isinstance(node.value.func, ast.Name)
                          and node.value.func.id == "__optarena_zeros__")):
-            from numpyto_common.lib_nodes import _iter_extent_of
+            from numpyto_common.lib_nodes import _iter_extent_of, extent_is_scalar
             ext = _iter_extent_of(node.value, self.shape_table)
-            if ext is not None:
+            # All-size-1 broadcast -> a scalar local, not a ``T x[1]`` array (see extent_is_scalar).
+            if ext is not None and not extent_is_scalar(ext):
                 self.shape_table[target.id] = tuple(
                     ast.unparse(e) for e in ext)
         # ``C[:] = expr`` on a multi-D array means whole-array elementwise
@@ -5038,9 +5044,13 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         # misclassified as arrays.
         if (isinstance(target, ast.Name)
                 and isinstance(node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Compare, ast.BoolOp))):
-            from numpyto_common.lib_nodes import _iter_extent_of
+            from numpyto_common.lib_nodes import _iter_extent_of, extent_is_scalar
             ext = _iter_extent_of(node.value, self.shape_table)
-            if ext is not None:
+            # An all-size-1 broadcast (``t = (a[i] > x)`` with ``x`` shape ``(1,)``) is a SCALAR, not a
+            # ``T t[1]`` array: numpyto reads size-1 arrays element-wise as ``x[0]``, so registering ``t`` as
+            # an array here desyncs its scalar declaration (from ``t = 0`` / ``if t`` / ``out[0] = t``) from
+            # the array-style ``t[__w0] = ...`` writes the extent drives below (a mix that will not compile).
+            if ext is not None and not extent_is_scalar(ext):
                 rhs_widest = tuple(ast.unparse(e) for e in ext)
                 # Propagate inferred shape to the LHS so downstream
                 # uses pick it up; declare as a fresh local if new.

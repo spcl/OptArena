@@ -261,6 +261,15 @@ class _FortranBodyEmitter(BaseEmitter):
             name: list(shape) if shape else ["1"]
             for name, shape in zeros.items()
         }
+        #: Arrays whose shape is entirely size-1 (a ``(1,)`` scalar buffer). Read bare in a value
+        #: expression they must be scalarised to ``x(1)`` -- else ``a(i+1) > x`` is a rank-0 vs rank-1
+        #: mismatch (mirrors the C emitter's ``x[0]`` scalarisation).
+        self._size1_arrays: Set[str] = {
+            a.name
+            for a in kir.arrays if a.shape and all(str(s) == "1" for s in a.shape)
+        }
+        self._size1_arrays.update(
+            name for name, shape in self.local_arrays.items() if all(str(s) == "1" for s in shape))
         self._loop_iter_names: Set[str] = set()
         # ISO_C_BINDING real kind for float literals. Fortran is strict
         # about kind mixing (a ``1.0_c_double`` literal beside a
@@ -701,6 +710,11 @@ class _FortranBodyEmitter(BaseEmitter):
             if node.id == "NAN":
                 self._used_ieee = True
                 return f"ieee_value(0.0_{self._rk}, ieee_quiet_nan)"
+            # A size-1 array read bare in a value expression is its sole element ``x(1)`` (Fortran is
+            # 1-based), not the whole rank-1 array -- so ``a(i+1) > x`` is a scalar comparison, not a
+            # rank-0-vs-rank-1 mismatch. An explicit ``x[0]`` goes through _emit_subscript, not here.
+            if node.id in self._size1_arrays:
+                return f"{node.id}(1)"
             return node.id
         if isinstance(node, ast.Tuple):
             # ``(a, b, c)`` as an axis tuple / array constructor -- emit
@@ -1025,7 +1039,9 @@ class _FortranBodyEmitter(BaseEmitter):
             base_name = inner.id
             rank = len(raw_elts)
         else:
-            base = self.emit_expr(node.value)
+            # The base of a subscript is the array itself (indices added below), so use the RAW name -- NOT
+            # emit_expr, which scalarises a size-1 array Name to ``x(1)`` and would double-index to ``x(1)(i)``.
+            base = node.value.id if isinstance(node.value, ast.Name) else self.emit_expr(node.value)
             sl = node.slice
             raw_elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
             # Resolve the base array name so SIZE(arr, dim) works for

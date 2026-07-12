@@ -924,6 +924,16 @@ def _extent_is_one(node: ast.expr) -> bool:
         return False
 
 
+def extent_is_scalar(ext: Optional[Tuple[ast.expr, ...]]) -> bool:
+    """True when a broadcast extent is entirely size-1 (every axis a literal ``1``), so the value it
+    describes is a SCALAR in numpyto's model: a size-1 array is read/written element-wise as ``x[0]``, so a
+    LOCAL assigned an all-size-1 broadcast (e.g. ``t = (a[i] > x)`` with ``x`` shape ``(1,)``) is a scalar,
+    NOT a ``T t[1]`` array. Registering it as an array desyncs its declaration (scalar, from other scalar
+    uses like ``t = 0`` / ``if t``) from the array-style ``memset`` / ``t[__w0] = ...`` writes the extent
+    would drive -- a mix that does not compile. An empty tuple (rank-0) is already scalar."""
+    return ext is not None and all(_extent_is_one(e) for e in ext)
+
+
 def _is_integer_expr(node: ast.AST, local_dtypes: Dict[str, str],
                      array_names: Set[str] = frozenset()) -> bool:
     """Best-effort: does ``node`` evaluate to an integer? Recognises int
