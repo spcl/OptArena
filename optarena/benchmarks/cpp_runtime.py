@@ -199,22 +199,26 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str) -> Callable:
     from optarena.dtypes import ctype_for as _registry_ctype
     _int_ctype = _registry_ctype("int")  # canonical symbol type (int64)
 
-    def _ctype_arg(a):
+    # ``fcty`` is the C float width of the CHOSEN monomorphic symbol (c_float for
+    # the fp32 build, c_double for fp64). A floating scalar carries no dtype of its
+    # own, so it must be marshalled at the symbol's width -- passing a c_double to a
+    # ``float alpha`` param (fp32 kernel) mis-marshals it to garbage.
+    def _ctype_arg(a, fcty):
         if isinstance(a, np.ndarray):
             return ctypes.POINTER(_ctype_for(a.dtype))
         if isinstance(a, (int, np.integer)):
             return _int_ctype
         if isinstance(a, (float, np.floating)):
-            return ctypes.c_double
+            return fcty
         raise TypeError(f"unsupported arg type {type(a)}")
 
-    def _to_ctypes(arg):
+    def _to_ctypes(arg, fcty):
         if isinstance(arg, np.ndarray):
             return arg.ctypes.data_as(ctypes.POINTER(_ctype_for(arg.dtype)))
         if isinstance(arg, (int, np.integer)):
             return _int_ctype(int(arg))
         if isinstance(arg, (float, np.floating)):
-            return ctypes.c_double(float(arg))
+            return fcty(float(arg))
         raise TypeError(f"unsupported arg type {type(arg)}")
 
     def _ensure_loaded():
@@ -237,15 +241,16 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str) -> Callable:
         is_double = any(isinstance(a, np.ndarray)
                         and a.dtype == np.dtype(np.float64) for a in args)
         fptype = "fp64" if is_double else "fp32"
+        fcty = ctypes.c_double if is_double else ctypes.c_float
         sym = state["syms"].get(fptype)
         if sym is None:
             raise RuntimeError(f"{short} ({framework}): no symbol for {fptype}")
         if fptype not in state["bound"]:
-            argtypes = [_ctype_arg(a) for a in args]
+            argtypes = [_ctype_arg(a, fcty) for a in args]
             sym.argtypes = argtypes
             sym.restype = None
             state["bound"].add(fptype)
-        c_args = [_to_ctypes(a) for a in args]
+        c_args = [_to_ctypes(a, fcty) for a in args]
         sym(*c_args)
 
     return call
