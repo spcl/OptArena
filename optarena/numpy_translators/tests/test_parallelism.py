@@ -193,3 +193,28 @@ def test_emit_c_omp_scatter_is_refused():
                ["idx", "x", "out"], {"idx": "(N,)", "x": "(N,)", "out": "(N,)"}, {"idx": "int64"})
     with pytest.raises(UnsupportedParallelError):
         emit_c_omp(kir, fn_name="f")
+
+
+def test_emit_fortran_omp_elementwise_parallel_do():
+    from numpyto_fortran.emit import emit_fortran, emit_fortran_omp
+    kir = _kir("def f(x, y, out):\n    for i in range(N):\n        out[i] = y[i] + 2.0 * x[i]\n",
+               ["x", "y", "out"], {"x": "(N,)", "y": "(N,)", "out": "(N,)"})
+    f = emit_fortran_omp(kir, fn_name="f")
+    assert "!$omp parallel do" in f
+    assert "reduction(" not in f
+    assert "!$omp" not in emit_fortran(kir, fn_name="f")  # sequential emit is unchanged
+
+
+def test_emit_fortran_omp_sum_reduction_clause():
+    from numpyto_fortran.emit import emit_fortran_omp
+    kir = _kir("def f(x, out):\n    s = 0.0\n    for i in range(N):\n        s = s + x[i]\n    out[0] = s\n",
+               ["x", "out"], {"x": "(N,)", "out": "(N,)"})
+    assert "!$omp parallel do reduction(+:s)" in emit_fortran_omp(kir, fn_name="f")
+
+
+def test_emit_fortran_omp_scatter_is_refused():
+    from numpyto_fortran.emit import emit_fortran_omp
+    kir = _kir("def f(idx, x, out):\n    for i in range(N):\n        out[idx[i]] = out[idx[i]] + x[i]\n",
+               ["idx", "x", "out"], {"idx": "(N,)", "x": "(N,)", "out": "(N,)"}, {"idx": "int64"})
+    with pytest.raises(UnsupportedParallelError):
+        emit_fortran_omp(kir, fn_name="f")

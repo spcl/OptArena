@@ -24,7 +24,7 @@ import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from numpyto_c.ir import ArrayDesc, KernelIR
-from numpyto_common import dtypes, operators
+from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
 from numpyto_common.frontend import pure_int_arith
 
@@ -245,6 +245,13 @@ class _FortranBodyEmitter(BaseEmitter):
         #: When this body IS a helper subroutine: the out-param name its
         #: ``return`` writes into (``None`` for the kernel).
         self.return_mode: Optional[str] = None
+        #: Parallel emit variant (emit_fortran_omp): annotate each outermost
+        #: independent / reduction loop with ``!$omp parallel do``. Off for the
+        #: plain sequential emitter.
+        self.parallel: bool = False
+        #: Set while emitting the body of a loop already marked parallel, so
+        #: nested loops are NOT also tagged (no nested parallel regions).
+        self.parallel_active: bool = False
         #: name -> out-param name for each non-inlinable helper CALLED here, so a
         #: ``X = helper(args)`` assign lowers to ``call helper(args, X)``.
         self._helper_out: Dict[str, str] = {}
@@ -289,9 +296,29 @@ class _FortranBodyEmitter(BaseEmitter):
             step = self.emit_expr(args[2])
         else:
             raise NotImplementedError("range() needs 1-3 args")
+        # OpenMP parallel-scope decision (parallel variant only), mirroring the C
+        # emitter: tag the OUTERMOST eligible loop of a nest -- an independent map
+        # -> ``!$omp parallel do``; a single-scalar reduction -> add
+        # ``reduction(op:acc)``. A colliding scatter is refused up front
+        # (emit_fortran_omp), so a not-parallel-safe loop here is a carried
+        # dependence and stays serial. ``node`` is from the same tree the body
+        # emits, so the reduction accumulator name matches the emitted code.
+        omp_prefix = ""
+        if self.parallel and not self.parallel_active and not parallelism.is_timestep_loop(node):
+            red = parallelism.loop_reduction(node)
+            if red is not None:
+                op, acc = red
+                omp_prefix = f"{indent}!$omp parallel do reduction({op}:{acc})\n"
+            elif parallelism.loop_is_parallel_safe(node):
+                omp_prefix = f"{indent}!$omp parallel do\n"
+        entered_parallel = bool(omp_prefix)
+        if entered_parallel:
+            self.parallel_active = True
         self._loop_iter_names.add(var)
         body = self.emit_block(node.body, indent + "    ")
         self._loop_iter_names.discard(var)
+        if entered_parallel:
+            self.parallel_active = False
         # Fortran ``do`` is inclusive on both ends. For a positive
         # step the Python ``range(lo, hi)`` last value is ``hi - 1``;
         # for a negative step it is ``hi + 1``. (Symbolic step expressions
@@ -300,10 +327,10 @@ class _FortranBodyEmitter(BaseEmitter):
         adj = "+ 1" if negative_step else "- 1"
         upper = f"({hi}) {adj}"
         if step == "1":
-            return (f"{indent}do {var} = {lo}, {upper}\n"
+            return (f"{omp_prefix}{indent}do {var} = {lo}, {upper}\n"
                     f"{body}\n"
                     f"{indent}end do")
-        return (f"{indent}do {var} = {lo}, {upper}, {step}\n"
+        return (f"{omp_prefix}{indent}do {var} = {lo}, {upper}, {step}\n"
                 f"{body}\n"
                 f"{indent}end do")
 
@@ -1789,7 +1816,30 @@ class _FortranRenameTemps(ast.NodeTransformer):
         return node
 
 
-def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None) -> str:
+def _require_parallelizable(kir: KernelIR) -> None:
+    """Refuse a kernel the parallel variant cannot soundly emit: a colliding
+    scatter (would need an atomic) or no parallelizable loop at all. The caller
+    falls back to the sequential :func:`emit_fortran`, which is always valid."""
+    if parallelism.has_indirect_scatter(kir.tree):
+        raise parallelism.UnsupportedParallelError(
+            f"{kir.kernel_name}: data-dependent scatter write needs an atomic; no parallel variant")
+    if not parallelism.any_parallelizable_loop(kir.tree):
+        raise parallelism.UnsupportedParallelError(
+            f"{kir.kernel_name}: no iteration-independent or reduction loop to parallelize")
+
+
+def emit_fortran_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
+    """Fortran with OpenMP ``!$omp parallel do`` on each outermost independent /
+    reduction loop (a ``reduction(op:acc)`` clause for a single-scalar
+    accumulator). Same signature and symbol as :func:`emit_fortran`; compile with
+    ``-fopenmp`` -- single-core stays fair via ``OMP_NUM_THREADS=1``. Raises
+    :class:`~numpyto_common.parallelism.UnsupportedParallelError` for a kernel
+    with no sound parallel form (colliding scatter, or nothing to parallelize)."""
+    _require_parallelizable(kir)
+    return emit_fortran(kir, fn_name, parallel=True)
+
+
+def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = False) -> str:
     """Emit a self-contained Fortran subroutine with timing wrapper."""
     name = fn_name or f"{kir.kernel_name}_d_auto"
     # ABI parameter order (the order the binding JSON -- and thus every
@@ -1976,6 +2026,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     decls = sym_decls + sca_int_decls + arr_decls + sca_real_decls
 
     body_emitter = _FortranBodyEmitter(kir)
+    body_emitter.parallel = parallel
     # Non-inlinable helpers -> ``call helper(args, X)`` at each ``X =
     # helper(args)`` site. Keyed by the Fortran-safe helper name (the tree Names
     # were renamed above), value = return kind (unused; membership is what maps).
