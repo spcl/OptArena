@@ -118,10 +118,11 @@ class LibraryOptimizer(Agent):
                                                        lib,
                                                        extra_compile=extra_compile,
                                                        extra_link=extra_link)
-            for argv in cmds:
-                proc = subprocess.run(argv, cwd=str(root), capture_output=True, text=True)
-                if proc.returncode != 0:
-                    raise RuntimeError(f"ABI build failed: {' '.join(argv)}\n{proc.stderr}")
+            # One shared build loop (languages.run_build_commands) -- same capture /
+            # OSError / returncode handling as Sandbox.build and build_reference_lib.
+            failed, log = languages.run_build_commands(cmds, root)
+            if failed:
+                raise RuntimeError(f"ABI build failed:\n{log}")
             if not lib.exists():
                 raise RuntimeError("ABI build reported success but produced no .so")
             return lib

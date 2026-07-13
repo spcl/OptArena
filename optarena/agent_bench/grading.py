@@ -11,7 +11,6 @@ scoring.py composes these; nothing here calls back into it.
 import copy
 import importlib
 import pathlib
-import subprocess
 import time
 from dataclasses import replace
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -327,23 +326,14 @@ def build_reference_lib(root: pathlib.Path, spec: BenchSpec, task: Task, binding
     src.write_text(src_text)
     lib = root / f"lib{spec.short_name}.so"
     cmds = languages.build_shared_lib_commands(language, src, lib, mode=mode, compiler=compiler)
-    log: List[str] = []
-    for argv in cmds:
-        log.append("$ " + " ".join(argv))
-        try:
-            proc = subprocess.run(argv, cwd=str(root), capture_output=True, text=True)
-        except OSError as exc:  # compiler not installed (e.g. no clang/gfortran) -> build failure
-            log.append(f"{argv[0]}: {exc}")
-            return False, None, "\n".join(log)
-        if proc.stdout:
-            log.append(proc.stdout)
-        if proc.stderr:
-            log.append(proc.stderr)
-        if proc.returncode != 0:
-            return False, None, "\n".join(log)
+    # One shared build loop (languages.run_build_commands) -- same capture / OSError /
+    # returncode handling as Sandbox.build and the ABI optimizer build.
+    failed, log = languages.run_build_commands(cmds, root)
+    if failed:
+        return False, None, log
     if not lib.exists():
-        return False, None, "compile reported success but produced no .so\n" + "\n".join(log)
-    return True, lib, "\n".join(log)
+        return False, None, "compile reported success but produced no .so\n" + log
+    return True, lib, log
 
 
 def _grade_against(spec: BenchSpec, references: Dict[str, Dict], actual: Dict, rtol: float,

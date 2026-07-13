@@ -21,7 +21,6 @@ the scorer turns into a zero-score datum.
 import os
 import pathlib
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -127,26 +126,12 @@ class Sandbox:
     def _run_build_commands(self, cmds) -> Tuple[bool, str]:
         """Run the compile/link argv sequence, capturing a combined log.
 
-        Returns ``(failed, log)``: ``failed`` is True on the first command that
-        cannot be spawned (``OSError``) or exits nonzero; ``log`` is the joined
-        transcript either way. Callers do their own artifact-existence check and
+        Delegates to :func:`optarena.languages.run_build_commands` -- the ONE build
+        loop shared with grading.build_reference_lib and the ABI optimizer build.
+        Returns ``(failed, log)``; callers do their own artifact-existence check and
         success ``BuildResult``.
         """
-        log: List[str] = []
-        for argv in cmds:
-            log.append("$ " + " ".join(argv))
-            try:
-                proc = subprocess.run(argv, cwd=str(self.root), capture_output=True, text=True)
-            except OSError as e:  # compiler not installed (e.g. no gfortran/mpicc on a stock mac) -> scored failure
-                log.append(f"{argv[0]}: {e}")
-                return True, "\n".join(log)
-            if proc.stdout:
-                log.append(proc.stdout)
-            if proc.stderr:
-                log.append(proc.stderr)
-            if proc.returncode != 0:
-                return True, "\n".join(log)
-        return False, "\n".join(log)
+        return languages.run_build_commands(cmds, self.root)
 
     def build(self, submission: Submission, *, mode: Mode = Mode.SINGLE_CORE) -> BuildResult:
         """Compile (restricted) or copy in (any) the submission's ``.so``."""
