@@ -1,7 +1,7 @@
 # Global optarena configuration -- cross-cutting defaults so seeds / timeouts /
 # fuzz knobs are not scattered or hard-coded. Read by optarena/config.py.
 # Per-run CLI flags override these; so do $OPTARENA_<DOTTED_KEY> env vars
-# (e.g. OPTARENA_SEEDS_FUZZ=7, OPTARENA_TIMEOUTS_COMPILE_S=120).
+# (e.g. OPTARENA_SEEDS_FUZZ=7, OPTARENA_TIMEOUTS_KERNEL_S=120).
 # Subsumes the old tests/oracle_config.yaml.
 
 seeds:
