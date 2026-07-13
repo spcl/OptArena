@@ -4,7 +4,7 @@
 and the auto-generated native backends, validating each against NumPy.
 
 Frameworks exercised at the ``S`` preset:
-  * ``numpy``      -- the reference / oracle (must simply run);
+  * ``numpy``      -- the reference / oracle (must run);
   * ``dace_cpu``   -- DaCe CPU;
   * ``cc_auto``    -- NumpyToC-generated C99, compiled with **gcc**;
   * ``llvm_auto``  -- NumpyToC-generated C++, compiled with **clang / LLVM**;

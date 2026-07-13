@@ -82,7 +82,7 @@ def get_cpu_flops(num_cores):
         cpu_cores = psutil.cpu_count(logical=False)
         elements_per_vector_dp = simd_width/64
         elements_per_vector_sp = simd_width/32
-        fma_tp_dp = 1 # since we cannot know the fma throughput of the cpu without looking at the manual, we simply assume 1
+        fma_tp_dp = 1 # since we cannot know the fma throughput of the cpu without looking at the manual, we assume 1
         fma_tp_sp = 1
 
     cpu_cores = min(cpu_cores, num_cores)

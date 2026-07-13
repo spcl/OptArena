@@ -1,7 +1,7 @@
 # Contributing to OptArena
 
-The contributor guide lives in the **[README](README.md)** — it is the single,
-comprehensive document. Jump to:
+The contributor guide lives in the **[README](README.md)** — it is the single
+document. Jump to:
 
 - [**Add a benchmark**](README.md#contributing-add-a-benchmark) — the two files you
   write; the C/C++/Fortran/… baselines are generated for you.

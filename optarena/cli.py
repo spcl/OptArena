@@ -439,7 +439,7 @@ def cmd_export_hf(args) -> int:
     """Export the kernel suite as a HuggingFace Dataset (one row per sub-benchmark).
 
     A pure regenerator over the manifest tree -- nothing is cached in the repo, so
-    a newly added benchmark is reflected by simply re-running this. The rows are
+    a newly added benchmark is reflected by re-running this. The rows are
     built ONCE: the local file is always written (the inspection artifact), and
     ``--push`` publishes those SAME rows to the Hub (needs ``datasets`` + a token),
     so the artifact and the published dataset are guaranteed identical.

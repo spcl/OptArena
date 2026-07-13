@@ -160,7 +160,7 @@ No per-language or per-framework sub-installs. To drive the loop with a model
 backend, add one opt-in file on top (`requirements/agent-anthropic.txt`,
 `…-aider.txt`, `…-local.txt`).
 
-Inside a container the same `pip` line is used (Docker/Apptainer just run it in the
+Inside a container the same `pip` line is used (Docker/Apptainer run it in the
 image). Native toolchains (`gcc`/`g++`/`gfortran`/`nvcc`/`hipcc`) come from the
 system package manager -- see `optarena/envs/compilers.yaml`.
 

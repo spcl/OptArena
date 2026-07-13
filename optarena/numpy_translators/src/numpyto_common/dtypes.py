@@ -13,7 +13,7 @@ knowledge the emitters import natively; the harness reaches it through
 Extensibility: ``DTypeInfo`` carries explicit per-language fields (a new target
 language is one field here + populating the rows + a ``_gen_<lang>`` renderer).
 ``ctype`` is ``None`` where ctypes has no native equivalent (e.g. complex); such
-dtypes simply are not marshalled by the ctypes paths.
+dtypes are not marshalled by the ctypes paths.
 """
 import ctypes
 from dataclasses import dataclass

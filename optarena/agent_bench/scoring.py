@@ -296,7 +296,7 @@ def resolve_kernel_timeout(spec: BenchSpec) -> float:
     per-level default ``timeouts.kernel_s_by_level[spec.resolved_level]`` (a
     ``None`` level falls through) > the flat ``timeouts.kernel_s`` fallback. The
     manifest ``timeout_s`` is read only when the spec actually declares that field
-    (so it applies the moment the schema carries it, and is simply absent -- falls
+    (so it applies the moment the schema carries it, and is absent -- falls
     through -- until then). Config keys honour ``$OPTARENA_*`` env overrides.
     """
     override = config.get("timeouts.kernel_s_override", None)
