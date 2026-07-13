@@ -141,6 +141,41 @@ class VerifyResult:
     reason: str = ""
 
 
+def _determinism_check(spec, o1, o2, np_public, rtol, atol, bitwise=True):
+    """The ONE determinism formula shared by every verify site: ``o1`` REPRODUCES
+    (vs a second run ``o2``) AND ``o1`` grades correct vs the whole-domain NumPy
+    oracle ``np_public``. ``bitwise`` picks exact ``array_equal`` (a single-node run
+    is bit-reproducible) over the tolerant ``_grade`` (a distributed cross-rank
+    reduction is not bit-reproducible, so a bitwise gate would false-fail it). When
+    ``np_public`` is ``None`` (e.g. a C-only oracle) the oracle leg is skipped."""
+    if bitwise:
+        reproduces = all(np.array_equal(np.asarray(o1[k]), np.asarray(o2[k])) for k in spec.output_args)
+    else:
+        reproduces = _grade(spec, o1, o2, rtol, atol)[0]
+    if np_public is None:
+        return reproduces
+    return reproduces and _grade(spec, np_public, o1, rtol, atol)[0]
+
+
+def _verify_triad(spec, o1, o2, np_public, re_out, np_re, c_public, rtol, atol, bitwise=True):
+    """The determinism + fresh-seed re-verify + dual-oracle CHECK triad, shared by
+    :func:`independent_verify` and :func:`_verify_distributed` so the gate cannot
+    drift between them (:func:`score_cells` reuses the determinism leg via
+    :func:`_determinism_check` but amortizes it across cells).
+
+    * determinism: :func:`_determinism_check` (``o1`` reproduces + grades vs ``np_public``);
+    * fresh-seed re-verify: ``re_out`` grades correct vs ``np_re`` (a never-seen value seed);
+    * dual-oracle: ``o1`` grades correct vs the C reference ``c_public`` when supplied,
+      else recorded not-applied.
+
+    Returns ``(determinism_ok, reverify_ok, dual_ok, dual_applied)``."""
+    determinism_ok = _determinism_check(spec, o1, o2, np_public, rtol, atol, bitwise)
+    reverify_ok = _grade(spec, np_re, re_out, rtol, atol)[0]
+    if c_public is not None:
+        return determinism_ok, reverify_ok, _grade(spec, c_public, o1, rtol, atol)[0], True
+    return determinism_ok, reverify_ok, True, False
+
+
 def independent_verify(submission: Submission,
                        task: Task,
                        score_result: "Score",
@@ -227,10 +262,6 @@ def independent_verify(submission: Submission,
                                       timeout=timeout,
                                       memory_gb=memory_gb,
                                       workspace_bytes=submission.workspace_bytes)
-            identical = all(np.array_equal(np.asarray(o1[k]), np.asarray(o2[k])) for k in spec.output_args)
-            pub_ok, _, _ = _grade(spec, np_public, o1, rtol, atol)
-            determinism_ok = identical and pub_ok
-
             ro, _, _ = _call_isolated(built.lib,
                                       binding,
                                       redata,
@@ -239,17 +270,14 @@ def independent_verify(submission: Submission,
                                       timeout=timeout,
                                       memory_gb=memory_gb,
                                       workspace_bytes=submission.workspace_bytes)
-            reverify_ok, _, _ = _grade(spec, np_re, ro, rtol, atol)
-
+            c_pub = None
             if dual_oracle:
                 try:
                     c_pub, _, _, _ = _run_c_reference(spec, task, binding, data, [], repeat, timeout, memory_gb)
-                    dual_oracle_applied = True
-                    dual_oracle_ok, _, _ = _grade(spec, c_pub, o1, rtol, atol)
                 except RuntimeError:
-                    dual_oracle_ok = True  # C reference unavailable -> best-effort
-            else:
-                dual_oracle_ok = True
+                    c_pub = None  # C reference unavailable -> dual-oracle best-effort (recorded not-applied)
+            determinism_ok, reverify_ok, dual_oracle_ok, dual_oracle_applied = _verify_triad(
+                spec, o1, o2, np_public, ro, np_re, c_pub, rtol, atol, bitwise=True)
     except RuntimeError as exc:  # native crash / timeout during re-verify
         return VerifyResult(False, determinism_ok, reverify_ok, dual_oracle_ok, dual_oracle_applied, suspect,
                             f"harden: {exc}")
@@ -670,8 +698,11 @@ def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, bin
             # whole-domain NumPy oracle (np_public vs o1), then the fresh-seed re-verify -- each the
             # same rtol/atol allclose _grade applies on the single-node path.
             o1, o2 = _run(data), _run(data)
-            determinism_ok = _grade(spec, o1, o2, rtol, atol)[0] and _grade(spec, np_public, o1, rtol, atol)[0]
-            reverify_ok = _grade(spec, np_re, _run(redata), rtol, atol)[0]
+            # bitwise=False: a cross-rank float reduction is not bit-reproducible, so
+            # determinism uses the tolerant _grade (via _verify_triad); dual-oracle N/A
+            # (the reference is already the whole-domain NumPy oracle).
+            determinism_ok, reverify_ok, _, _ = _verify_triad(spec, o1, o2, np_public, _run(redata), np_re, None, rtol,
+                                                              atol, bitwise=False)
     except (RuntimeError, ValueError) as exc:  # native crash / timeout, or a pack_infile dtype error
         return VerifyResult(False, False, False, True, False, suspect, f"harden: {exc}")
 
@@ -1223,8 +1254,11 @@ def score_cells(submission: Submission,
                 if verify and correct:
                     if determinism_ok is None:
                         again, _, _ = _run(built.lib, submission.language, data, 1)
-                        determinism_ok = all(
-                            np.array_equal(np.asarray(actual[n]), np.asarray(again[n])) for n in spec.output_args)
+                        # Same determinism formula as independent_verify (via _determinism_check):
+                        # reproduces AND grades vs the NumPy oracle for this cell (the oracle leg is
+                        # skipped when numpy is not this cell's reference, e.g. oracle="c").
+                        determinism_ok = _determinism_check(spec, actual, again, expected.get("numpy"), rtol, atol,
+                                                            bitwise=True)
                     redata = _data_seeded(task.kernel,
                                           FUZZED_PRESET,
                                           datatype,
