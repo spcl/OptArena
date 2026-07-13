@@ -8,6 +8,7 @@ import pathlib
 import time
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
+from optarena import config
 from optarena.infrastructure import Benchmark
 from optarena.precision import Precision
 
@@ -549,29 +550,40 @@ class Framework(object):
                 impl: Any,
                 runner: Callable[[], Any],
                 repeat: int,
-                before_each: Optional[Callable[[], None]] = None) -> Dict[str, Optional[List[float]]]:
-        """Run ``runner`` ``repeat`` times, returning both timing series.
+                before_each: Optional[Callable[[], None]] = None,
+                warmup: Optional[int] = None) -> Dict[str, Optional[List[float]]]:
+        """Run ``runner`` ``warmup + repeat`` times, DISCARD the first ``warmup``, and
+        return both timing series over the kept (warm) samples.
 
         :param impl: Framework-native handle passed through to the
             timing hooks (e.g. :class:`TimedCompiledSDFG`).
         :param runner: No-arg callable that performs one kernel call.
-        :param repeat: Number of measurements to collect.
+        :param repeat: Number of (kept) measurements to collect.
         :param before_each: Optional setup that runs *outside* the
             timed bracket before every call (typically a fresh-copy of
             mutable input arrays).
+        :param warmup: Untimed-then-discarded warmup reps. ``None`` (the default)
+            reads ``measurement.warmup`` -- the SAME warmup policy the judge's
+            :func:`optarena.agent_bench.timing.sampled_reps` applies -- so a
+            framework-comparison run and the judge no longer drift on cold
+            first-touch (page faults / cold caches / allocator warmup).
         :returns: ``{"python": [...], "native": [...] | None}``. The
             ``native`` entry is ``None`` whenever any single sample's
             :attr:`TimingResult.native` is missing.
         """
+        if warmup is None:
+            warmup = max(0, int(config.get("measurement.warmup", 1)))
         timer = self.create_timer(impl)
         try:
             samples: List[TimingResult] = []
-            for _ in range(repeat):
+            for i in range(warmup + repeat):
                 if before_each is not None:
                     before_each()
                 self.start_timer(timer)
                 runner()
-                samples.append(self.stop_timer(timer))
+                sample = self.stop_timer(timer)
+                if i >= warmup:  # discard the warmup reps -- keep only warm samples
+                    samples.append(sample)
         finally:
             self.free_timer(timer)
         python_series = [s.python for s in samples]

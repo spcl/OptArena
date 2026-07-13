@@ -972,17 +972,21 @@ def score_scaling(submission: Submission,
             t1: Optional[int] = None
             note: Optional[str] = None
             try:
-                samples, aout = [], None
-                for _ in range(max(1, repeat)):
-                    aout, a_ns, _ = _call_isolated(abuilt.lib,
-                                                   binding,
-                                                   cand_data,
-                                                   single_node_anchor.language,
-                                                   device=False,
-                                                   timeout=a_timeout,
-                                                   memory_gb=a_memory,
-                                                   workspace_bytes=single_node_anchor.workspace_bytes)
-                    samples.append(int(a_ns))
+                def _anchor_once(_warming):
+                    out, a_ns, _ = _call_isolated(abuilt.lib,
+                                                  binding,
+                                                  cand_data,
+                                                  single_node_anchor.language,
+                                                  device=False,
+                                                  timeout=a_timeout,
+                                                  memory_gb=a_memory,
+                                                  workspace_bytes=single_node_anchor.workspace_bytes)
+                    return out, int(a_ns)
+
+                # Warm the scaling anchor the SAME way the submission + baselines are warmed
+                # (timing.sampled_reps -- the one warmup-discard policy) so its serial reference
+                # time is not cold-first-touch biased.
+                aout, samples = timing.sampled_reps(_anchor_once, repeat, timing.warmup_count())
                 a_correct, _, a_detail = _grade(spec, oracle, aout, rtol, atol)
                 t1 = min(samples) if a_correct else None
                 note = None if a_correct else f"anchor incorrect at this size ({a_detail})"
