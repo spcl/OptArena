@@ -5,7 +5,7 @@ with ``$OPTARENA_<DOTTED_KEY>`` environment overrides:
 
     from optarena import config
     config.get("seeds.fuzz")            # -> 42 (or $OPTARENA_SEEDS_FUZZ)
-    config.get("timeouts.compile_s")    # -> 75 (or $OPTARENA_TIMEOUTS_COMPILE_S)
+    config.get("timeouts.kernel_s")     # -> 300 (or $OPTARENA_TIMEOUTS_KERNEL_S)
 
 Subsumes the old ``tests/oracle_config.yaml``. Per-run CLI flags should be
 layered on top of these defaults by the caller.

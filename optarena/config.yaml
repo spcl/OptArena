@@ -182,7 +182,6 @@ record:
                                   # native one unknowingly. Containers set OPTARENA_RECORD_EXECUTION.
 
 timeouts:
-  compile_s: 75
   kernel_s: 300            # final fallback: per-kernel agent-run wall-clock budget (seconds)
   # Per-KernelBench-level defaults (BenchSpec.resolved_level 1/2/3). A kernel whose
   # level is one of these takes the matching budget unless a narrower override wins.
