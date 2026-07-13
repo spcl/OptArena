@@ -17,8 +17,8 @@ def _apply_autotune_subset_once():
     budget. Triton kernels in optarena ship with itertools.product sweeps that
     explode to 32-60 configs; running the full sweep on every S-preset run dwarfs
     the per-call work, so the default ``small`` budget caps it. The cap comes
-    from the ONE shared knob (:class:`optarena.autotune.TuningBudget`, driven by
-    ``$OPTARENA_TUNE_BUDGET``); the legacy ``OPTARENA_TRITON_AUTOTUNE_SIZE=full`` /
+    from the ONE shared knob (:class:`optarena.optimize.OptimizeBudget`, driven by
+    ``$OPTARENA_OPTIMIZE_BUDGET``); the legacy ``OPTARENA_TRITON_AUTOTUNE_SIZE=full`` /
     ``OPTARENA_TRITON_AUTOTUNE_N`` still override it.
 
     The implementation monkey-patches triton.runtime.autotuner.Autotuner so
@@ -28,8 +28,8 @@ def _apply_autotune_subset_once():
     global _AUTOTUNE_SUBSET_APPLIED
     if _AUTOTUNE_SUBSET_APPLIED:
         return
-    from optarena.autotune import SCALES, TuningBudget
-    cap = TuningBudget.from_env().triton_config_cap()
+    from optarena.optimize import SCALES, OptimizeBudget
+    cap = OptimizeBudget.from_env().triton_config_cap()
     if cap >= SCALES["full"][1]:  # 'full' budget -> run the whole sweep
         _AUTOTUNE_SUBSET_APPLIED = True
         return
@@ -52,12 +52,12 @@ def _apply_autotune_subset_once():
 class TritonFramework(Framework):
     """A class for reading and processing framework information.
 
-    An :class:`optarena.autotune.AutoTuner`: each kernel's ``@triton.autotune``
-    config sweep is the search, capped to :meth:`tuning_budget`'s ``configs``
+    An :class:`optarena.optimize.Optimizer`: each kernel's ``@triton.autotune``
+    config sweep is the search, capped to :meth:`optimize_budget`'s ``configs``
     (see :func:`_apply_autotune_subset_once`).
     """
 
-    is_autotuner = True
+    is_optimizer = True
 
     def __init__(self, fname: str):
         """ Reads framework information.

@@ -54,10 +54,10 @@ _MPI_REF_SUFFIX = {"c": "_mpi.c", "cpp": "_mpi.c", "python": "_mpi.py"}
 
 
 class Agent(ABC):
-    """Base agent -- an :class:`optarena.autotune.AutoTuner` whose search is code
-    generation: ``solve(task, budget) -> Submission`` is the agent's
-    ``tune(program, budget)`` (task in + budget -> optimized artifact), scored by
-    the same correctness + perf machinery as TVM / Triton / Pluto."""
+    """Base agent -- an :class:`optarena.optimize.Optimizer` whose optimization is
+    code generation: ``solve(task, budget) -> Submission`` is the agent's
+    ``optimize(program, budget)`` (task in + budget -> optimized artifact), scored
+    by the same correctness + perf machinery as TVM / Triton / Pluto."""
 
     name: str = "agent"
 
@@ -65,8 +65,8 @@ class Agent(ABC):
     def solve(self, task: Task, prompt: str = "", budget: "Optional[object]" = None) -> Submission:
         """Return the agent's implementation for ``task``.
 
-        ``budget`` is the unified search budget -- a
-        :class:`optarena.autotune.TuningBudget` (use :func:`budget_tokens` to read
+        ``budget`` is the unified optimize budget -- a
+        :class:`optarena.optimize.OptimizeBudget` (use :func:`budget_tokens` to read
         the agent's token ceiling from it) or a bare ``int`` token count;
         ``None`` uses the agent's default. ``prompt`` is the assembled task
         prompt (a reference-echoing stub ignores it)."""
@@ -97,11 +97,11 @@ class Agent(ABC):
 
 def budget_tokens(budget: "object", default: int) -> int:
     """Resolve an agent token ceiling from the unified budget: a
-    :class:`~optarena.autotune.TuningBudget` (its ``cost`` token/$ ceiling, else
+    :class:`~optarena.optimize.OptimizeBudget` (its ``cost`` token/$ ceiling, else
     ``default``), a bare positive ``int``, or ``default`` otherwise. Keeps the
-    agent on the SAME budget knob as the other auto-tuners."""
-    from optarena.autotune import TuningBudget
-    if isinstance(budget, TuningBudget):
+    agent on the SAME budget knob as the other optimizers."""
+    from optarena.optimize import OptimizeBudget
+    if isinstance(budget, OptimizeBudget):
         return int(budget.cost) if budget.cost else default
     if isinstance(budget, int) and budget > 0:
         return budget

@@ -425,38 +425,40 @@ class Framework(object):
     # wrapper that brackets the pure function (see optarena/bindings).
     # -----------------------------------------------------------------------
 
-    #: Whether this framework SEARCHES for a faster artifact (TVM MetaSchedule,
-    #: Triton autotune, an Agent) -- i.e. it is an :class:`optarena.autotune.\
-    #: AutoTuner`. A plain framework leaves this False and inherits the identity
-    #: tune. Lets the harness / leaderboard identify (and budget) the tuners.
-    is_autotuner: bool = False
+    #: Whether this framework OPTIMIZES the kernel into a faster artifact -- by
+    #: compiling (JAX AoT, DaCe), searching (TVM MetaSchedule, Triton autotune),
+    #: or an Agent loop -- i.e. it is an :class:`optarena.optimize.Optimizer`. A
+    #: plain framework leaves this False and inherits the identity optimize. Lets
+    #: the harness / leaderboard identify (and budget) the optimizers.
+    is_optimizer: bool = False
 
-    def tuning_budget(self):
-        """The :class:`~optarena.autotune.TuningBudget` this framework may spend,
-        or ``None`` when it does not search. Auto-tuners resolve it from the one
-        shared source (``$OPTARENA_TUNE_BUDGET``); a tuner overrides this only to
-        cap itself differently."""
-        if not self.is_autotuner:
+    def optimize_budget(self):
+        """The :class:`~optarena.optimize.OptimizeBudget` this framework may spend,
+        or ``None`` when it does not search. Optimizers resolve it from the one
+        shared source (``$OPTARENA_OPTIMIZE_BUDGET``); an optimizer overrides this
+        only to cap itself differently."""
+        if not self.is_optimizer:
             return None
-        from optarena.autotune import TuningBudget
-        return TuningBudget.from_env()
+        from optarena.optimize import OptimizeBudget
+        return OptimizeBudget.from_env()
 
-    def autotune(self, program: Any) -> Any:
+    def optimize(self, program: Any) -> Any:
         """Optimize ``program`` ONCE before the timed repeat loop and return the
-        tuned handle (default: identity -- no autotuning). This is the
-        ``AutoTuner.tune`` entry expressed on the framework (see
-        :mod:`optarena.autotune`): every optimizer that searches -- TVM
-        MetaSchedule, Triton autotune, Polly/Pluto (a one-point flag preset), an
-        AI ``Agent`` -- is a peer under one contract, spending
-        :meth:`tuning_budget`.
+        optimized handle (default: identity -- no optimization). This is the
+        ``Optimizer.optimize`` entry expressed on the framework (see
+        :mod:`optarena.optimize`): every backend that turns a kernel into a faster
+        artifact -- a compile (JAX AoT, DaCe), a search (TVM MetaSchedule, Triton
+        autotune, Polly/Pluto flag preset), or an AI ``Agent`` loop -- is a peer
+        under one contract, spending :meth:`optimize_budget`.
 
         The harness calls it once (in ``Test._benchmark``) BEFORE the runner +
-        timer are built, so the tuned program is what gets run and measured while
-        tuning cost stays outside the timed bracket. Frameworks whose tuning is
-        embedded in the compiled artifact (TVM ``tune_tir`` / Triton
-        ``@autotune`` inside the kernel) read the SAME budget via
-        :meth:`tuning_budget`; the contract stays: tune in, optimized program
-        out."""
+        timer are built, so the optimized program is what gets run and measured
+        while the optimize cost stays outside the timed bracket. The returned
+        object is directly callable (an AoT-compiled executable, a compiled SDFG,
+        a C-ABI wrapper); ``run`` just invokes it. Frameworks whose optimization is
+        embedded in the compiled artifact (TVM ``tune_tir`` / Triton ``@autotune``
+        inside the kernel) read the SAME budget via :meth:`optimize_budget`; the
+        contract stays: kernel in, optimized program out."""
         return program
 
     def create_timer(self, program: Any) -> "Timer":

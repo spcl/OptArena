@@ -36,13 +36,13 @@ METASCHEDULE_TRIALS_FULL = 1024
 def metaschedule_trials() -> int:
     """How many tuning trials to give ``tune_tir`` per task.
 
-    Delegates to the unified search budget (:class:`optarena.autotune.\
-TuningBudget`) so TVM and Triton share ONE knob (``$OPTARENA_TUNE_BUDGET``);
+    Delegates to the unified optimize budget (:class:`optarena.optimize.\
+OptimizeBudget`) so TVM and Triton share ONE knob (``$OPTARENA_OPTIMIZE_BUDGET``);
     the legacy ``$OPTARENA_TVM_METASCHEDULE_TRIALS`` is still honoured by the
     budget for back-compat and is read on every call (so a test can change it
     mid-process)."""
-    from optarena.autotune import TuningBudget
-    return TuningBudget.from_env().tvm_trials()
+    from optarena.optimize import OptimizeBudget
+    return OptimizeBudget.from_env().tvm_trials()
 
 
 class TVMCPUFramework(Framework):
@@ -50,12 +50,12 @@ class TVMCPUFramework(Framework):
     target). Mirrors :class:`TritonFramework` in shape: a thin set of
     overrides on top of the base :class:`Framework`.
 
-    An :class:`optarena.autotune.AutoTuner`: ``tune_tir`` (MetaSchedule) searches
-    a schedule within :meth:`tuning_budget`'s ``trials`` (see
+    An :class:`optarena.optimize.Optimizer`: ``tune_tir`` (MetaSchedule) searches
+    a schedule within :meth:`optimize_budget`'s ``trials`` (see
     :func:`metaschedule_trials`).
     """
 
-    is_autotuner = True
+    is_optimizer = True
 
     def __init__(self, fname: str):
         super().__init__(fname)
