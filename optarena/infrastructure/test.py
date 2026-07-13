@@ -130,19 +130,7 @@ class Test(object):
             traceback.print_exception(e)
             self._last_failure = "runtime_error"
             ret = None
-        out = list(ret) if isinstance(ret, (tuple, list)) else ([ret] if ret is not None else [])
-        if "output_args" in self.bench.info.keys():
-            num_return_args = len(out)
-            num_output_args = len(self.bench.info["output_args"])
-            # If the kernel returned exactly its full set of outputs, those
-            # returns ARE the outputs -- a functional framework (e.g. jax,
-            # whose arrays are immutable) hands back a fresh "transient"
-            # instead of mutating in place. Otherwise read back the mutated
-            # in-place array outputs.
-            if num_output_args and num_return_args == num_output_args:
-                pass
-            else:
-                out += plan.inout_values()
+        out = util.resolve_outputs(ret, plan.inout_values(), self.bench.info.get("output_args", []))
         return out, timelist, native_times
 
     def run(self,

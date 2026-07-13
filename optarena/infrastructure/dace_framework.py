@@ -423,13 +423,7 @@ class DaceFramework(Framework):
         plan.before_each()
         plan.run()
         ret = plan.result
-        out = list(ret) if isinstance(ret, (tuple, list)) else ([ret] if ret is not None else [])
-        if "output_args" in bench.info:
-            num_return_args = len(out)
-            num_output_args = len(bench.info["output_args"])
-            if not (num_output_args and num_return_args == num_output_args):
-                out += plan.inout_values()
-        return out
+        return util.resolve_outputs(ret, plan.inout_values(), bench.info.get("output_args", []))
 
     # ----- Timing override -------------------------------------------------
 

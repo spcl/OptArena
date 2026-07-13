@@ -26,7 +26,7 @@ from optarena.agent_bench.sandbox import Sandbox
 from optarena.agent_bench.task import Task
 from optarena.bindings.contract import Binding
 from optarena.flags import Mode
-from optarena.infrastructure.utilities import compare_arrays
+from optarena.infrastructure.utilities import compare_arrays, resolve_outputs
 from optarena.spec import BenchSpec
 
 
@@ -139,18 +139,16 @@ def bind_kernel_outputs(result, call_args: List, input_args: Sequence[str],
     reference and a python-delivery submission, so the two can never disagree on
     what a return value means.
 
-    * functional (``result is not None``): a single output takes the whole result;
-      multiple outputs bind ``output_args`` to the returned sequence in order -- a
-      tuple OR a list, matching the reference.
-    * in-place (``result is None``): each output is read back from the mutated
-      positional argument of the same name.
+    Now delegates to the shared count-match ``resolve_outputs`` (the same rule the
+    harness ``Test._execute`` and ``DaceFramework.collect_outputs`` use): if the
+    kernel returned exactly its full output set those returns ARE the outputs (a
+    functional framework hands back fresh transients), otherwise the outputs are the
+    in-place-mutated buffers read back from the positional args of the same name.
     """
-    if result is not None:
-        if len(output_args) == 1:
-            return {output_args[0]: result}
-        return dict(zip(output_args, result))
     by_name = dict(zip(input_args, call_args))
-    return {o: by_name[o] for o in output_args}
+    inplace = [by_name[o] for o in output_args if o in by_name]
+    values = resolve_outputs(result, inplace, output_args)
+    return dict(zip(output_args, values))
 
 
 def _numpy_reference(spec: BenchSpec, data: Dict) -> Dict[str, np.ndarray]:
