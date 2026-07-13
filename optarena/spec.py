@@ -735,6 +735,13 @@ class BenchSpec:
         # Validate the sparse config if any layout was declared. Deferred
         # import avoids a cycle (validate_sparse imports from spec).
         if sparse_layouts:
+            # A sparse kernel must carry configurations: the new-model expansion in
+            # ``resolved()`` keys off ``configurations``, so layouts with none would fall
+            # through to the empty legacy branch and silently register ZERO sub-benchmarks
+            # (the kernel vanishes from the corpus with no error). Fail loudly instead.
+            if not configurations:
+                raise ValueError(f"{source}: 'sparse_layouts' requires a non-empty 'configurations' block "
+                                 f"(layouts without configurations register no sub-benchmarks)")
             from optarena.validate_sparse import validate_sparse_config
             validate_sparse_config(sparse_layouts, configurations, distributions, array_args, source=source)
 

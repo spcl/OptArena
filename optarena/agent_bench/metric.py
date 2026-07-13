@@ -164,7 +164,7 @@ class ScalingPoint:
     single_node_ns: int  # T_i(1): runtime of the best correct single-node submission (the anchor)
     ranked_ns: int  # T_i(P): measured runtime at P nodes
     achieved_speedup: float  # sigma_i(P) = T_i(1) / T_i(P)
-    ideal_speedup: float  # sigma*_i(P): P (strong) or P**k_i (weak)
+    ideal_speedup: float  # sigma*_i(P): P for both modes (weak total work grows by P, not P**k)
     efficiency: float  # eta_i(P) = sigma_i(P) / sigma*_i(P)
     mode: str  # "strong" | "weak"
 
@@ -232,17 +232,18 @@ class SuiteScore:
 def ideal_speedup(mode: str, ranks: int, work_exponent: int = 1) -> float:
     """The ideal speed-up ``sigma*_i(P)`` at ``P = ranks`` nodes (paper sec:distributed).
 
-    Strong scaling fixes the problem, so ``P`` nodes should give a ``P``-fold speed-up
-    (``sigma* = P``). Weak scaling grows the scaling dimension with ``P``, so a kernel with work
-    factor ``k_i = work_exponent`` sees its work grow by ``P**k_i`` and the ideal speed-up is
-    ``sigma* = P**k_i`` (doubling nodes at ``k_i=3`` grows work ``2**3=8x``, so ideal is ``8x``,
-    not ``2x``). ``work_exponent`` is ignored for strong. An unknown mode is a ``ValueError`` (a
-    config error, never a silent wrong ideal)."""
+    Ideal is ``sigma* = P`` for BOTH modes. Strong scaling fixes the problem, so ``P`` nodes should
+    give a ``P``-fold speed-up. Weak scaling grows the domain so per-rank work stays constant:
+    :func:`mpi_sizing.weak` multiplies each decomposition axis by ``R**(1/k)`` PRECISELY so total
+    work grows by exactly ``P`` (not ``P**k``) whatever the work exponent ``k``, and the single-rank
+    anchor is measured on that ``P``-times-larger problem, so the ideal weak throughput against that
+    anchor is also ``P``. The modes differ only in the anchor :func:`scaling_point` pairs against (a
+    fixed single-node time for strong, the per-P grown-problem time for weak), never in the ideal --
+    so ``work_exponent`` (kept for signature/back-compat) does not enter the ideal. An unknown mode
+    is a ``ValueError`` (a config error, never a silent wrong ideal)."""
     p = max(1, int(ranks))
-    if mode == "strong":
+    if mode in ("strong", "weak"):
         return float(p)
-    if mode == "weak":
-        return float(p)**max(1, int(work_exponent))
     raise ValueError(f"mpi scaling mode must be 'strong' or 'weak'; got {mode!r}")
 
 
@@ -285,8 +286,8 @@ def scaling_score(kernel: str,
     per-node-count runtimes ``measured_ns = {P: T_i(P)}`` (paper sec:distributed).
 
     Each point's anchor is ``anchor_ns[P]`` when present (weak scaling times ``T_i(1)`` per P, since
-    each P solves a ``P**k_i``-larger problem), else the scalar ``single_node_ns`` (strong scaling
-    shares one fixed-size anchor). A P whose measured time OR whose anchor is non-positive (a failed
+    each P solves a ``P``-larger problem -- per-rank work is held constant, so total work grows by P,
+    not ``P**k``), else the scalar ``single_node_ns`` (strong scaling shares one fixed-size anchor). A P whose measured time OR whose anchor is non-positive (a failed
     ranked run / missing anchor) is skipped. Returns ``None`` when no point survives -- a multi-node
     score is undefined without at least one anchored, measured node count."""
 

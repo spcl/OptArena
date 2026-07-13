@@ -40,9 +40,13 @@ def uniform(shape, precision: Precision, spec):
 
     low = float((spec or {}).get("low", -1000.0))
     high = float((spec or {}).get("high", 1000.0))
-    cap = safe_max(precision)
-    low = max(low, -cap)
-    high = min(high, cap)
 
     raw = rng.uniform(low, high, size=shape)
+    # Absolute backstop: clip the SAMPLED values (not the bounds) to the precision's
+    # safe range so nothing overflows to inf on cast. Clamping the bounds instead can
+    # invert them -- a requested range lying entirely above the cap gives low>high, a
+    # reversed interval, out-of-range draws, and inf after the cast. Mirrors
+    # gaussian.py / scipy_dists.py, which clip the output.
+    cap = safe_max(precision)
+    np.clip(raw, -cap, cap, out=raw)
     return raw.astype(numpy_dtype(precision))

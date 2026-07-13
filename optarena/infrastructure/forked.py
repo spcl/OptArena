@@ -110,13 +110,21 @@ def run_forked(fn: Callable,
     p.start()
     last_progress = None
     deadline = (time.monotonic() + timeout) if timeout is not None else None
-    # Block efficiently when there is nothing to watch; otherwise poll so progress can
-    # be drained and the deadline enforced.
-    poll = 0.1 if (deadline is not None or progress_q is not None) else None
+    # Poll at a fixed interval so the RESULT queue is drained WHILE the child is still
+    # alive. A child that puts a payload larger than the OS pipe buffer (~64 KB -- e.g.
+    # an L/XL preset's output arrays) blocks in its queue-feeder thread until the parent
+    # reads it, so it never exits: joining-then-reading would deadlock (forever with
+    # timeout=None, or surface as a false TIMEOUT otherwise). Draining here frees the
+    # feeder. A blocking ``q.get(timeout=poll)`` wakes the instant the child puts, so it
+    # doubles as the wait and adds no latency to a fast success.
+    poll = 0.1
+    result_item = None  # (status, payload) once the child's single result is received
     while p.is_alive():
         if progress_q is not None:
             last_progress = _drain(progress_q, last_progress)
         if deadline is not None and time.monotonic() >= deadline:
+            if result_item is not None:
+                break  # child actually finished (payload already drained) -- not a timeout
             p.terminate()  # SIGTERM
             p.join(5.0)
             if p.is_alive():  # a child that ignores/blocks SIGTERM would hang the
@@ -128,7 +136,13 @@ def run_forked(fn: Callable,
             sys.stdout.write(msg + "\n")
             sys.stdout.flush()
             return RunResult(ok=False, signal="TIMEOUT", error=msg, result=last_progress)
-        p.join(poll)
+        if result_item is None:
+            try:
+                result_item = q.get(timeout=poll)
+            except queue.Empty:
+                pass
+        else:
+            p.join(poll)
     if progress_q is not None:
         last_progress = _drain(progress_q, last_progress)
     ec = p.exitcode
@@ -141,10 +155,13 @@ def run_forked(fn: Callable,
         sys.stdout.write(msg + "\n")
         sys.stdout.flush()
         return RunResult(ok=False, exit_code=ec, signal=sig, error=msg, result=last_progress)
-    try:
-        status, payload = q.get(timeout=_DRAIN_S)
-    except queue.Empty:
-        return RunResult(ok=False, exit_code=ec, error=f"{tag}child exited {ec} with no result", result=last_progress)
+    if result_item is None:  # not drained in-loop -- covers the clean-exit race window
+        try:
+            result_item = q.get(timeout=_DRAIN_S)
+        except queue.Empty:
+            return RunResult(ok=False, exit_code=ec, error=f"{tag}child exited {ec} with no result",
+                             result=last_progress)
+    status, payload = result_item
     if status == "ok":
         return RunResult(ok=True, exit_code=ec, result=payload)
     return RunResult(ok=False, exit_code=ec, error=payload, result=last_progress)

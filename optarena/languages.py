@@ -103,7 +103,9 @@ def _resolve_baseline(block: dict, mode: Mode) -> str:
         raise KeyError(f"baseline_ref {ref!r} is not a constant in optarena.flags")
     baseline = flag_vars[ref]
     autopar_ref = block.get("autopar_ref")
-    autopar = flag_vars.get(autopar_ref) if autopar_ref else None
+    if autopar_ref is not None and autopar_ref not in flag_vars:
+        raise KeyError(f"autopar_ref {autopar_ref!r} is not a constant in optarena.flags")
+    autopar = flag_vars[autopar_ref] if autopar_ref else None
     return flags.compose_autopar(baseline, autopar, mode)
 
 

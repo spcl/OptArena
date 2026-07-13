@@ -152,7 +152,11 @@ def resolve_provider(config: WebSearchConfig) -> Provider:
         return config.provider
     forced = os.environ.get("OPTARENA_WEBSEARCH_PROVIDER")
     if forced:
-        return Provider(forced.strip().lower())
+        try:
+            return Provider(forced.strip().lower())
+        except ValueError:
+            raise WebSearchError(f"unknown web-search provider {forced!r} in "
+                                 f"$OPTARENA_WEBSEARCH_PROVIDER; known: {[p.value for p in Provider]}")
     for provider in available_providers():
         return provider
     raise WebSearchError("no web-search provider configured; set one of the API keys: " + _env_hint())

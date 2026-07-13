@@ -43,7 +43,10 @@ def _resolve_frameworks(arg: str) -> List[str]:
 
 
 def _resolve_precisions(arg: str, spec: BenchSpec) -> List[Precision]:
-    """Intersect the request with the kernel's declared precisions."""
+    """Resolve ``--precision``. ``all`` expands to the kernel's declared precisions; an
+    explicit request (e.g. ``fp16``) is taken as given -- it OVERRIDES the declared set,
+    not intersects it (the framework-level precision-skip in ``_run_cell`` still gates
+    what actually runs)."""
     if arg == "all":
         requested = [Precision.from_str(p) for p in spec.precisions]
     else:
@@ -444,7 +447,9 @@ def cmd_serve(args) -> int:
         oracle=args.oracle or base.oracle,
         baseline=args.baseline or base.baseline,
         input_mode=args.input_mode or base.input_mode,
-        preset=args.preset or base.preset,
+        # resolve_preset maps 'fuzzed:seed' -> base 'fuzzed' AND applies the seeds.fuzz
+        # override; passing args.preset raw (as before) dropped the pinned seed silently.
+        preset=resolve_preset(args.preset) if args.preset else base.preset,
         datatype=base.datatype,
         repeat=args.repeat if args.repeat is not None else base.repeat,
     )

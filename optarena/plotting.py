@@ -70,12 +70,17 @@ def my_runtime_abbr(x):
     return str(my_round(x, 2)) + " ms"
 
 
-def bootstrap_ci(data, statfunction=np.median, alpha=0.05, n_samples=300):
-    """inspired by https://github.com/cgevans/scikits-bootstrap"""
+def bootstrap_ci(data, statfunction=np.median, alpha=0.05, n_samples=300, seed=0):
+    """inspired by https://github.com/cgevans/scikits-bootstrap.
+
+    Resamples with a SEEDED local RNG so the published CI is reproducible: the same
+    ``optarena.db`` yields the same per-cell superscript on every run. The old global
+    ``np.random`` stream made an identical figure vary run-to-run."""
+    rng = np.random.default_rng(seed)
 
     def bootstrap_ids(data, n_samples):
         for _ in range(n_samples):
-            yield np.random.randint(data.shape[0], size=(data.shape[0], ))
+            yield rng.integers(data.shape[0], size=(data.shape[0], ))
 
     alphas = np.array([alpha / 2, 1 - alpha / 2])
     nvals = np.round((n_samples - 1) * alphas).astype(int)

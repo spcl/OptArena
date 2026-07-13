@@ -185,9 +185,10 @@ class Test(object):
                 "Inconsistent datatypes detected in benchmark data: mixture of float32 and float64 values.")
         if len(dtypes) == 1:
             detected_dtype = dtypes.pop()
-            for k, v in bdata.items():
-                if type(v) is float:
-                    bdata[k] = detected_dtype(v)
+            # Coerce into a FRESH dict: ``bdata`` may be a cached object owned by
+            # ``get_data``, so mutating it in place would corrupt the cache (and thus
+            # every later caller that reuses the same Benchmark).
+            bdata = {k: (detected_dtype(v) if type(v) is float else v) for k, v in bdata.items()}
 
         # Run NumPy for validation
         if validate and self.frmwrk.fname != "numpy" and self.numpy:

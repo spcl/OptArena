@@ -577,6 +577,10 @@ def score(submission: Submission,
     # The scalar (primary) speedup is reduced by the CONFIGURED timing backend over
     # the raw per-repeat samples: min_of_k (default) == native min / baseline min;
     # mannwhitney_delta credits a significance-gated pessimistic minimum gain.
+    # Fail loudly when the configured timing backend needs more repeats than we ran, rather than
+    # silently crediting an underpowered distributional test (min_of_k never raises; matches the
+    # guard score_task_fuzzed already applies).
+    timing.validate_repeat(repeat)
     primary_samples = baseline_samples.get(primary, [])
     if native_samples and primary_samples:
         reduced = timing.reduce(native_samples, primary_samples)
