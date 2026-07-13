@@ -77,6 +77,43 @@ def test_integer_gather_reduction_not_masked():
     assert ok, res
 
 
+# --- masked reductions as an EXPLICIT LOOP -------------------------------- #
+#
+# The vectorised ``np.sum(a[m])`` above is the source form; a DaCe loop-nest
+# extractor (nest-forge) lowers the SAME masked reduction to an explicit
+# ``for i: v = a[i]; if v > K: acc += v`` -- a per-element STAGED READ into a
+# value scalar ``v`` that is REASSIGNED every iteration, plus a guarded
+# accumulate. That scalar is BOTH a by-value dummy argument AND written in the
+# body, which Fortran forbids on an ``intent(in)`` dummy -- so before the
+# intent(in) relaxation this whole family failed to COMPILE for Fortran (C / C++
+# have no intent, so they were unaffected). These lock the loop form across
+# every backend. ``K``/``v`` are float value scalars (never int-truncated).
+
+_M = np.linspace(-1.0, 2.0, 8)
+
+
+def test_masked_sum_explicit_loop_staged_scalar():
+    """``v = a[i]; if v > K: acc += v`` -- the nest-extracted masked SUM. ``v`` is
+    a reassigned value scalar (Fortran must drop its ``intent(in)``)."""
+    body = " acc = 0.0\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   acc = acc + v\n out[0] = acc"
+    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1, )}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
+    assert ok, res
+
+
+def test_masked_max_explicit_loop_staged_scalar():
+    """Nest-extracted masked MAX: seed from a sentinel, keep the largest ``v > K``."""
+    body = " m = -1.0e30\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   if v > m:\n    m = v\n out[0] = m"
+    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1, )}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
+    assert ok, res
+
+
+def test_masked_count_explicit_loop_staged_scalar():
+    """Nest-extracted masked COUNT: integer accumulator over ``v > K``."""
+    body = " c = 0\n for i in range(len(a)):\n  v = a[i]\n  if v > K:\n   c = c + 1\n out[0] = c"
+    ok, res = _run(body, {"a": _M, "K": 0.5, "v": 0.0}, {"out": (1, )}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
+    assert ok, res
+
+
 # --- any / all / count_nonzero -------------------------------------------- #
 
 

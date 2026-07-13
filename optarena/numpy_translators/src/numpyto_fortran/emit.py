@@ -103,7 +103,7 @@ def _array_decl(arr: ArrayDesc) -> str:
     return f"{base}, {intent} :: {arr.name}"
 
 
-def _scalar_decl(name: str, dtype: str, is_output: bool) -> str:
+def _scalar_decl(name: str, dtype: str, is_output: bool, assigned: bool = False) -> str:
     base = _fortran_type(dtype)
     # Input scalars are passed BY VALUE (the ``value`` attribute) so the C-ABI
     # matches C / C++ -- one uniform scalar convention across every
@@ -111,6 +111,14 @@ def _scalar_decl(name: str, dtype: str, is_output: bool) -> str:
     # scalar (rare; kernels are C-style) stays by reference.
     if is_output:
         return f"{base}, intent(inout) :: {name}"
+    # A value scalar the body REASSIGNS -- e.g. a masked-reduction nest whose
+    # per-element staged read ``a_index = a[i]`` reuses the scalar dummy as a
+    # loop local -- must drop ``intent(in)``: Fortran forbids an intent(in) dummy
+    # on the LHS. The ``value`` attribute makes it a local copy, so dropping the
+    # intent keeps the recompute legal without touching the caller or the ABI
+    # (still by value). Mirrors :func:`_symbol_decl`.
+    if assigned:
+        return f"{base}, value :: {name}"
     return f"{base}, value, intent(in) :: {name}"
 
 
@@ -2035,7 +2043,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
             sym_decls.append(_symbol_decl(arg, assigned=arg in assigned_names))
         elif arg in sca_by_name:
             sca = sca_by_name[arg]
-            d = _scalar_decl(arg, sca.dtype, sca.is_output)
+            d = _scalar_decl(arg, sca.dtype, sca.is_output, assigned=arg in assigned_names)
             (sca_int_decls if sca.dtype in ("int64", "int32", "int") else sca_real_decls).append(d)
         elif arg in arr_by_name:
             arr_decls.append(_array_decl(arr_by_name[arg]))
@@ -2717,17 +2725,27 @@ def _emit_fortran_helper(hkir: KernelIR) -> str:
         ret_name = _fortran_safe(hkir.return_kind)
         ret_decl = None
         param_names = [_fortran_safe(p) for p in hkir.input_args]
+    # Names the helper body reassigns need their ``intent(in)`` relaxed (a value
+    # dummy on the LHS) -- same rule as the top-level kernel. Collect from the
+    # already-safe-renamed helper tree so the names line up with ``sca_by``.
+    hassigned: set = set()
+    for n in ast.walk(hkir.tree):
+        if isinstance(n, ast.Assign):
+            hassigned.update(t.id for t in n.targets if isinstance(t, ast.Name))
+        elif isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
+            hassigned.add(n.target.id)
     # Symbols / int scalars declared before the arrays that use them as bounds.
     sym_decls: List[str] = []
     sca_int_decls: List[str] = []
     arr_decls: List[str] = []
     sca_real_decls: List[str] = []
     for orig in hkir.input_args:
+        safe = _fortran_safe(orig)
         if orig in sym_by:
-            sym_decls.append(_symbol_decl(_fortran_safe(orig)))
+            sym_decls.append(_symbol_decl(safe, assigned=safe in hassigned))
         elif orig in sca_by:
             sca = sca_by[orig]
-            d = _scalar_decl(_fortran_safe(orig), sca.dtype, sca.is_output)
+            d = _scalar_decl(safe, sca.dtype, sca.is_output, assigned=safe in hassigned)
             (sca_int_decls if sca.dtype in ("int64", "int32", "int") else sca_real_decls).append(d)
         elif orig in arr_by:
             a = arr_by[orig]

@@ -114,6 +114,63 @@ def test_staged_body_assigned_scalar_declared_double_all_langs():
     assert "integer(c_int64_t), value :: v" not in f90, f90
 
 
+def test_staged_scalar_fortran_drops_intent_in_when_reassigned():
+    """A value scalar the body REASSIGNS (``v = a[i]``, the staged read a nest
+    extractor leaks) must NOT be ``intent(in)`` in Fortran: an intent(in) dummy on
+    the LHS is a hard compile error. The ``value`` attribute keeps it a local copy
+    so the per-element restage is legal and the ABI is unchanged."""
+    _d, _c, _cpp, f90 = _emit(_STAGED_SRC, "g", "v")
+    assert "real(c_double), value :: v" in f90, f90
+    assert "intent(in) :: v" not in f90, f90
+
+
+def test_staged_scalar_fortran_compiles_and_runs():
+    """The regression that the dtype checks above MISS: ``real(c_double)`` v was
+    right, but it was emitted ``value, intent(in)`` and gfortran rejected the
+    ``v = a[i]`` assignment (``Dummy argument 'v' with INTENT(IN) in variable
+    definition context``). Compile + run the emitted Fortran and check the masked
+    sum matches numpy end to end."""
+    import shutil
+    import subprocess
+
+    if shutil.which("gfortran") is None:
+        import pytest
+        pytest.skip("no gfortran")
+    d, _c, _cpp, f90 = _emit(_STAGED_SRC, "g", "v")
+    (d / "g.f90").write_text(f90)
+    so = d / "libg.so"
+    cmd = ["gfortran", "-O2", "-fPIC", "-shared", "-ffp-contract=off", str(d / "g.f90"), "-o", str(so)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr  # the intent(in) relaxation makes this compile
+
+    rng = np.random.default_rng(0)
+    a = rng.random(4096)  # in [0, 1)
+    expected = float(a[a > 0.5].sum())
+    out = np.zeros(1)
+    # Bind by the emitted bind(C) signature order (arrays/syms/scalars per the
+    # canonical emit); v is the reassigned value double, N the int64 size.
+    sig = [ln for ln in f90.splitlines() if 'bind(C, name="g")' in ln]
+    assert sig, f90  # subroutine is exported extern-C as `g`
+    lib = ctypes.CDLL(str(so))
+    fn = lib["g"]
+    # Parameter order from the subroutine header (may span a continuation line).
+    hdr = f90.split("subroutine g(", 1)[1].split(") bind", 1)[0].replace("&", " ").replace("\n", " ")
+    names = [p.strip() for p in hdr.split(",") if p.strip()]
+    argmap = {
+        "a": a.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        "out": out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        "v": ctypes.c_double(0.0),
+        "N": ctypes.c_int64(len(a)),
+    }
+    fn.argtypes = [
+        ctypes.POINTER(ctypes.c_double) if n in ("a", "out") else (ctypes.c_double if n == "v" else ctypes.c_int64)
+        for n in names
+    ]
+    fn.restype = None
+    fn(*[argmap[n] for n in names])
+    assert abs(out[0] - expected) < 1e-9, f"got {out[0]}, expected masked sum {expected}"
+
+
 def _shutil_which(name):
     import shutil
     return shutil.which(name)
