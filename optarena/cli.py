@@ -66,14 +66,20 @@ def _run_cell(short_name: str, framework_name: str, precision: Precision, varian
     """
     # Defer the heavy imports until execution to keep ``--help`` fast.
     from optarena.infrastructure import Benchmark, Test, generate_framework
+    from optarena.infrastructure.framework import FRAMEWORK_META
+    # Precision-skip BEFORE building the adapter: a framework advertises the
+    # precisions it can execute in its FRAMEWORK_META descriptor (the same source
+    # ``Framework.supports`` reads), so a request outside that set is a ``skip``
+    # regardless of whether the adapter would load -- never conflated with a load
+    # ``error``. An unknown framework name is left to ``generate_framework`` to
+    # report as a graceful load error (not a KeyError here).
+    meta = FRAMEWORK_META.get(framework_name)
+    if meta is not None and precision not in meta["precisions"]:
+        return dict(status="skip", reason=f"precision {precision.value} not supported")
     try:
         legacy_fw = generate_framework(framework_name)
     except Exception as exc:
         return dict(status="error", reason=f"framework load failed: {exc}")
-    # Precision-skip: the framework advertises the precisions it can execute
-    # (SUPPORTED_PRECISIONS); a request outside that set is a skip, not a failure.
-    if not legacy_fw.supports(precision):
-        return dict(status="skip", reason=f"precision {precision.value} not supported")
     try:
         np_fw = generate_framework("numpy")
     except Exception as exc:
@@ -698,7 +704,7 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--baseline",
                     default=None,
                     choices=list(BASELINE_OPTIONS),
-                    help="speedup denominator (default from config service.baseline)")
+                    help="speedup denominator (default from config measurement.baseline)")
     sv.add_argument("--input-mode",
                     default=None,
                     choices=list(INPUT_MODES),
