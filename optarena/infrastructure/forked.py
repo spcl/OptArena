@@ -78,6 +78,7 @@ def run_forked(fn: Callable,
                label: str = "",
                timeout: Optional[float] = None,
                stream_progress: bool = False,
+               mp_context: Optional[str] = None,
                **kwargs) -> RunResult:
     """Run ``fn(*args, **kwargs)`` in a forked child.
 
@@ -85,6 +86,10 @@ def run_forked(fn: Callable,
     signal (segfault), an exception (traceback), or a ``timeout`` overrun; otherwise
     ``ok=True`` with the (picklable) return value. ``timeout`` is a per-call wall-clock
     budget in seconds (``None`` waits forever); ``label`` tags the stdout log lines.
+
+    ``mp_context`` forces the multiprocessing start method (e.g. ``"spawn"`` for a
+    device call whose CUDA context does not survive ``fork``); when unset the OS default
+    (:func:`osinfo.mp_context`, honouring a config/env override) is used.
 
     With ``stream_progress=True`` the child receives a ``progress`` multiprocessing
     queue (as a keyword arg) it can ``.put()`` best-so-far snapshots on; the last one
@@ -94,7 +99,8 @@ def run_forked(fn: Callable,
     # fork on Linux/WSL2 (cheap -- the child inherits the parent's inputs); spawn on
     # macOS, where forking after numpy/BLAS/Accelerate threads can abort the child
     # (osinfo.mp_context resolves the OS default, honouring a config/env override).
-    ctx = multiprocessing.get_context(osinfo.mp_context())
+    # A caller may override the start method via mp_context (e.g. device -> spawn).
+    ctx = multiprocessing.get_context(mp_context if mp_context is not None else osinfo.mp_context())
     q = ctx.Queue()
     progress_q = ctx.Queue() if stream_progress else None
     if progress_q is not None:
@@ -111,10 +117,10 @@ def run_forked(fn: Callable,
         if progress_q is not None:
             last_progress = _drain(progress_q, last_progress)
         if deadline is not None and time.monotonic() >= deadline:
-            p.terminate()          # SIGTERM
+            p.terminate()  # SIGTERM
             p.join(5.0)
-            if p.is_alive():       # a child that ignores/blocks SIGTERM would hang the
-                p.kill()           # parent on an unbounded join -- escalate to SIGKILL
+            if p.is_alive():  # a child that ignores/blocks SIGTERM would hang the
+                p.kill()  # parent on an unbounded join -- escalate to SIGKILL
                 p.join()
             if progress_q is not None:
                 last_progress = _drain(progress_q, last_progress)

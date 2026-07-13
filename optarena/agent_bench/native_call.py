@@ -13,8 +13,6 @@ import copy
 import functools
 import importlib.util
 import math
-import multiprocessing as mp
-import queue
 import sys
 import threading
 import time
@@ -28,6 +26,7 @@ from optarena import osinfo
 from optarena.bindings.contract import Binding, WORKSPACE_DTYPE
 from optarena.dtypes import c_type
 from optarena.fuzz import _safe_eval
+from optarena.infrastructure.forked import run_forked
 
 #: Scratch-workspace buffers are aligned to this many bytes (ABI §11) so a kernel
 #: may assume an aligned base for vector loads/stores.
@@ -365,11 +364,19 @@ def _native_call_worker(device,
                         lang,
                         memory_bytes,
                         workspace_bytes,
-                        q,
+                        q=None,
                         py_meta=None,
                         device_id=None):
-    """Child-process entry: run the native call and put the result on ``q``. A
-    SIGSEGV here kills only this child (non-zero exitcode), never the parent.
+    """Child-process entry: run the native call and RETURN its payload
+    ``(outputs, ns, peak_bytes, increment_bytes)`` -- the single picklable object
+    :func:`optarena.infrastructure.forked.run_forked` carries in ``RunResult.result``.
+    A failure is RAISED so ``run_forked`` captures the traceback (surfaced as a scored
+    error). A SIGSEGV here kills only this child (non-zero exitcode), never the parent.
+
+    ``q`` is a legacy delivery channel: when a queue is passed the same payload is
+    ``q.put(("ok", outputs, ns, peak_bytes, increment_bytes))`` (or ``("err", repr, 0, 0,
+    0))`` on failure) instead of returned/raised, so the worker can be driven directly
+    in-process (the memory-metric test). ``run_forked`` leaves ``q`` unset.
 
     ``memory_bytes`` (host kernels only) is the kernel's allowance ON TOP of the
     harness baseline: ``RLIMIT_AS`` is set to ``current_vmsize + memory_bytes``,
@@ -380,8 +387,8 @@ def _native_call_worker(device,
     Peak resident memory is captured around the run: ``ru_maxrss`` at child entry
     (the inherited Python+harness high-water mark) and again after the kernel returns,
     both OUTSIDE the timed bracket (which lives inside the ``_call_*`` helpers), so the
-    capture never changes ``native_ns``. The child reports both the raw peak and the
-    kernel-attributable increment (peak minus entry) on ``q`` next to ``outputs``/``ns``."""
+    capture never changes ``native_ns``. The payload reports both the raw peak and the
+    kernel-attributable increment (peak minus entry) next to ``outputs``/``ns``."""
     import resource
     entry_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # inherited footprint (raw ru_maxrss)
     try:
@@ -401,9 +408,16 @@ def _native_call_worker(device,
         peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # post-kernel high-water mark
         peak_bytes = int(peak_rss) * _RSS_TO_BYTES  # ru_maxrss is KB on Linux, bytes on macOS
         increment_bytes = max(0, int(peak_rss) - int(entry_rss)) * _RSS_TO_BYTES  # kernel-attributable
-        q.put(("ok", outputs, ns, peak_bytes, increment_bytes))
+        payload = (outputs, ns, peak_bytes, increment_bytes)
+        if q is not None:
+            q.put(("ok", *payload))
+            return None
+        return payload
     except BaseException as exc:  # noqa: BLE001 -- surfaced to the parent as a scored error
-        q.put(("err", repr(exc), 0, 0, 0))
+        if q is not None:
+            q.put(("err", repr(exc), 0, 0, 0))
+            return None
+        raise
 
 
 def _call_isolated(lib_path,
@@ -436,48 +450,35 @@ def _call_isolated(lib_path,
     # Memory cap is host-only: RLIMIT_AS would trip CUDA's large virtual
     # reservations on the device path.
     memory_bytes = int(memory_gb * (1024**3)) if (memory_gb and not use_device) else 0
-    # Host default is OS-derived (osinfo.mp_context): "fork" on Linux (cheap -- inputs
-    # inherited; right for the single-threaded CLI sweep), "spawn" on macOS (fork after
-    # numpy/BLAS/Accelerate threads can abort the child). The THREADED judge service
-    # overrides runtime.mp_context to "forkserver" (config.set_override), since fork()
-    # from a multi-threaded process can deadlock on a lock held by another thread.
-    # device uses spawn (a CUDA context does not survive fork).
-    ctx_name = "spawn" if use_device else osinfo.mp_context()
-    ctx = mp.get_context(ctx_name)
-    q = ctx.Queue()
     # The judge's per-thread GPU pin (assigned_device) applies only when the caller
     # did not pass an explicit device_id; None keeps the default single-device path.
     dev_id = device_id if device_id is not None else assigned_device()
-    proc = ctx.Process(target=_native_call_worker,
-                       args=(use_device, lib_path, binding, data, lang, memory_bytes, workspace_bytes, q, py_meta,
-                             dev_id))
-    proc.start()
-    try:
-        start = time.perf_counter()
-        result = None
-        while True:
-            try:
-                result = q.get(timeout=0.05)
-                break
-            except queue.Empty:
-                if not proc.is_alive():
-                    break  # child exited without a result -> crash
-                if time.perf_counter() - start > timeout:
-                    raise RuntimeError(f"native call exceeded {timeout:g}s and was killed")
-        if result is None:
-            sig = f", signal {-proc.exitcode}" if (proc.exitcode or 0) < 0 else ""
-            raise RuntimeError(f"native call crashed (exit {proc.exitcode}{sig})")
-        status, payload, ns, peak_bytes, increment_bytes = result
-        if status == "err":
-            raise RuntimeError(payload)
-        return payload, ns, MemoryUsage(peak_bytes=peak_bytes, increment_bytes=increment_bytes)
-    finally:
-        # Always reap the child + release the Queue's pipe FDs and feeder thread,
-        # even on timeout/crash -- otherwise a long sweep (or a submission that
-        # deliberately times out) leaks descriptors until GC. cancel_join_thread
-        # avoids blocking on a child that was killed mid-put.
-        if proc.is_alive():
-            proc.terminate()
-        proc.join(5)
-        q.cancel_join_thread()
-        q.close()
+    # Host path keeps run_forked's OS-derived start method (osinfo.mp_context): "fork"
+    # on Linux (cheap -- inputs inherited; right for the single-threaded CLI sweep),
+    # "spawn" on macOS, "forkserver" under the THREADED judge service (config override,
+    # since fork() from a multi-threaded process can deadlock). The device path forces
+    # "spawn": a CUDA context does not survive fork.
+    mp_context = "spawn" if use_device else None
+    # run_forked owns the fork + wall-clock timeout + SIGTERM/SIGKILL escalation + reap;
+    # the worker RETURNS its payload (or raises), which run_forked carries in .result.
+    run = run_forked(_native_call_worker,
+                     use_device,
+                     lib_path,
+                     binding,
+                     data,
+                     lang,
+                     memory_bytes,
+                     workspace_bytes,
+                     py_meta=py_meta,
+                     device_id=dev_id,
+                     timeout=timeout,
+                     mp_context=mp_context)
+    if not run.ok:
+        if run.signal == "TIMEOUT":
+            raise RuntimeError(f"native call exceeded {timeout:g}s and was killed")
+        if run.signal or (run.exit_code or 0) != 0:  # fatal signal / non-zero exit -> crash
+            sig = f", signal {run.signal}" if run.signal else ""
+            raise RuntimeError(f"native call crashed (exit {run.exit_code}{sig})")
+        raise RuntimeError(run.error)  # in-child exception (traceback captured by run_forked)
+    outputs, ns, peak_bytes, increment_bytes = run.result
+    return outputs, ns, MemoryUsage(peak_bytes=peak_bytes, increment_bytes=increment_bytes)
