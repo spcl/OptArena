@@ -735,6 +735,8 @@ This README is the single guide; these files go deeper on specific topics.
 
 | Doc | What it covers |
 |---|---|
+| [`docs/WRITING_AN_AGENT.md`](docs/WRITING_AN_AGENT.md) | **Start here to write an agent/optimizer** -- the native Python API, an `Agent` subclass, or a container agent. |
+| [`docs/AGENTS_AND_TOOL_ACCESS.md`](docs/AGENTS_AND_TOOL_ACCESS.md) | How agent harnesses (Harbor/Terminal-Bench, AlgoTune) expect agents, and how OptArena's tool access maps onto them. |
 | [`docs/canonical_numpy_form.md`](docs/canonical_numpy_form.md) | Writing a NumPy reference that lowers cleanly through the NumPy→C translator. |
 | [`docs/tvm_authoring.md`](docs/tvm_authoring.md) | Hand-writing a TVM implementation (TOPI ops + mandatory autotuning). |
 | [`docs/local_coding_agents.md`](docs/local_coding_agents.md) | Running the loop with zero-cost local models (Ollama) -- harness, VS Code, CLI. |
@@ -754,7 +756,9 @@ recommended path for collaborators:
 - **Agent integration**: the judge + prompt + scoring are in place; the end-to-end
   driver (e.g. mini-swe-agent) is being wired up.
 - **Library / internet policy for agents** (linking external libs, fetching deps) --
-  the security + reproducibility design is open (see the TODO under *Scoring*).
+  the security + reproducibility design is open (see the TODO under *Scoring*). A
+  provider-agnostic **web-search** tool exists (`optarena.websearch`, keyed by env var);
+  which providers/egress are permitted per run is still being defined.
 
 ---
 

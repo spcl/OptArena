@@ -4,6 +4,9 @@ An agent (or any auto-tuner) is handed a kernel and must return a faster, still-
 implementation. The NumPy reference is the ground truth; the agent is scored by the same
 machinery as any tuner — a correctness gate plus speed versus a baseline.
 
+**Writing one?** Start with [docs/WRITING_AN_AGENT.md](../../docs/WRITING_AN_AGENT.md) — the
+native Python API (`optarena.init(...).score(...)`), an `Agent` subclass, or a container agent.
+
 ## The loop
 
 ```
@@ -14,9 +17,11 @@ Task ──▶ build_prompt ──▶ Agent.solve ──▶ Submission ──▶
 - **Task** (`task.py`) — one `(kernel, source_mode, language, precision, residency)` cell.
   `expand_tasks(...)` is the cross-product, filtered by each kernel's declared languages.
 - **Agent** (`agent.py`) — `solve(task, prompt, budget) -> Submission`. Backends:
-  `StubAgent` (echoes the reference, deterministic CI), `ClaudeAgent` (Anthropic SDK),
-  `LocalHFAgent` (fully local, in-process Transformers — e.g. Qwen-Coder). The model call
-  is injectable, so the loop is testable without any network.
+  `StubAgent` (echoes the reference, deterministic CI), `ScriptedAgent` (replays a fixed list
+  of moves — script a whole session with no model), `ClaudeAgent` (Anthropic SDK),
+  `OllamaAgent` (local server, zero cost), `LocalHFAgent` (fully local, in-process
+  Transformers — e.g. Qwen-Coder). The model call is injectable, so the loop is testable
+  without any network.
 - **Optimizers** (`optimizers.py`) — deterministic, non-model agents that drive the loop end
   to end without a model: `NoOpOptimizer` (the identity agent — submits the reference
   unchanged; any kernel/language, no external library) and `BlasReductionOptimizer` (a real
@@ -25,7 +30,10 @@ Task ──▶ build_prompt ──▶ Agent.solve ──▶ Submission ──▶
 - **Tools client** (`tools.py`) — `JudgeClient`, the client an agent uses to reach the judge
   over HTTP: `task` / `baseline` (read the spec + the time to beat) and the two scoring
   endpoints `verify` (correctness) and `score` (speedup), or `evaluate` for both from one
-  build. `JUDGE_URL` selects the judge (the container topology sets `http://judge:8800`).
+  build. `JUDGE_URL` selects the judge (the container topology sets `http://judge:8800`). For
+  an in-process equivalent (no judge running), use the native bindings `optarena.api`
+  (`init` / `verify` / `score` / `submit`). Agents can also web-search via `optarena.websearch`
+  (provider-agnostic, keyed by env var).
 - **Submission** (`envelope.py`) — the agent's reply: `{language, source | library, build,
   workspace_bytes?}`. `workspace_bytes` (optional, ABI §11) requests untimed scratch — a byte
   count or an expression over the size symbols (e.g. `"8*NI*NJ + 256"`); omitted ⇒ `workspace` is
