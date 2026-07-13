@@ -8,7 +8,7 @@ shape + dtype for every array and the int type for symbols).
 
 import ast
 import copy
-from typing import List
+from typing import Dict, List
 
 from numpyto_c.ir import ArrayDesc, KernelIR
 
@@ -168,6 +168,44 @@ class _NanAwareMinMaxSign(ast.NodeTransformer):
         return node
 
 
+class _EllipsisToSlice(ast.NodeTransformer):
+    """Pythran rejects ``...`` in a subscript (``Ellipsis are not supported``).
+    Every other backend accepts it; only pythran needs the rewrite:
+
+    * ``x[...]``      -> ``x[:]``           (the whole array; fv3's ``delpc[...] = 0.0``)
+    * ``x[..., i]``   -> ``x[:, :, i]``     (the ellipsis stands for the otherwise-
+      unindexed leading axes, expanded with ``x``'s rank)
+
+    A tuple ellipsis on a base whose rank is unknown (a body-local transient not
+    in the kir array table) is left untouched -- pythran would still reject it,
+    but no kernel currently emits that form."""
+
+    def __init__(self, ranks: Dict[str, int]):
+        self.ranks = ranks
+
+    @staticmethod
+    def _is_ellipsis(e: ast.AST) -> bool:
+        return isinstance(e, ast.Constant) and e.value is Ellipsis
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        sl = node.slice
+        if self._is_ellipsis(sl):
+            node.slice = ast.Slice()  # x[...] -> x[:]
+        elif isinstance(sl, ast.Tuple) and any(self._is_ellipsis(e) for e in sl.elts):
+            rank = self.ranks.get(node.value.id) if isinstance(node.value, ast.Name) else None
+            if rank is not None:
+                fill = rank - sum(1 for e in sl.elts if not self._is_ellipsis(e))
+                elts: List[ast.AST] = []
+                for e in sl.elts:
+                    if self._is_ellipsis(e):
+                        elts.extend(ast.Slice() for _ in range(max(fill, 0)))
+                    else:
+                        elts.append(e)
+                node.slice = ast.Tuple(elts=elts, ctx=ast.Load())
+        return node
+
+
 def _clean_for_pythran(source: str, kir: KernelIR) -> str:
     """Make a verbatim kernel module pythran-compilable: DROP imports pythran
     cannot resolve (``optarena.infrastructure.framework``, ``scipy.*`` -- the
@@ -194,6 +232,7 @@ def _clean_for_pythran(source: str, kir: KernelIR) -> str:
     local_funcs = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
     tree = _PythranMaterialize(local_funcs).visit(tree)
     tree = _NanAwareMinMaxSign().visit(tree)
+    tree = _EllipsisToSlice({a.name: len(a.shape) for a in kir.arrays}).visit(tree)
     _rename_reserved_params(tree, kir.kernel_name)
     ast.fix_missing_locations(tree)
     src = ast.unparse(tree)
