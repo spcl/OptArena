@@ -2,25 +2,35 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """DaCe framework adapter.
 
-Encapsulates the four standard SDFG pipelines OptArena exercises and a
-self-timing override that reads the SDFG's instrumentation report when
-the user opts in.
+DaCe is an :class:`optarena.optimize.Optimizer`: it OPTIMIZES a kernel by
+lowering it through several SDFG pipelines, compiling each, and returning the
+fastest *correct* one as a directly-callable compiled SDFG. That work happens in
+:meth:`DaceFramework.optimize` (run ONCE, outside the timed bracket);
+:meth:`DaceFramework.implementations` only hands back the pre-optimize handle
+(the parsed ``@dace.program``).
 
 Pipelines
 ---------
 
-Four pipelines applied serially on top of one parsed SDFG. Each is a
-small dataclass entry in :data:`DACE_PIPELINES` so that adding a fifth
-(e.g. ``"polly_par"``) is one entry, not 60 lines of copy-paste:
+Three end-state pipelines are produced from one parsed SDFG and scored against
+each other; the fastest verified one wins:
 
-* ``strict``    -- ``apply_strict_transformations``
-* ``fusion``    -- strict + ``MapFusion``-repeated + strict-again
-* ``parallel``  -- fusion + LoopToMap + MapCollapse + simplify
-* ``auto_opt``  -- strict + ``auto_optimize`` (full pipeline)
+* ``canonicalize`` -- ``apply_strict_transformations`` (canonical form)
+* ``parallel``     -- canonicalize + ``MapFusion`` + LoopToMap/MapCollapse
+* ``autoopt``      -- canonicalize + ``auto_optimize`` (full pipeline)
 
-A pipeline can declare a ``parent`` field naming a preceding pipeline
-to deepcopy from; the resulting tree (strict -> fusion -> parallel +
-strict -> auto_opt) matches the historic behaviour.
+Each is a small dataclass entry in :data:`DACE_PIPELINES` (``parallel`` deepcopies
+from an intermediate ``fusion`` step so the parent chain matches the historic
+behaviour). :data:`SCORED_VARIANTS` names the three that are compiled + scored.
+
+optimize
+--------
+
+:meth:`DaceFramework.optimize` builds the three variants, computes the NumPy
+reference for the concrete ``bdata``, then for each variant :meth:`verify`\\s it
+(bit-close vs the reference, via the harness validator) and :meth:`score`\\s it
+(median kernel time, via the framework's own :meth:`measure`). Only verified
+variants are eligible; the fastest is returned as a :class:`TimedCompiledSDFG`.
 
 Timing
 ------
@@ -41,13 +51,28 @@ import copy
 import importlib
 import time
 import traceback
+import warnings
+
+import numpy as np
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import importlib.metadata
 
+# DaCe is a hard dependency of this adapter, imported at MODULE level (like the
+# other real frameworks) so a broken/absent DaCe surfaces as a real import error
+# here -- never a silent per-call "skip this framework".
+import dace
+import dace.dtypes as dace_dtypes
+import dace.transformation.auto.auto_optimize as dace_auto_opt
+from dace.sdfg import propagation
+from dace.transformation.dataflow import MapCollapse, MapFusion
+from dace.transformation.interstate import LoopToMap
+
 from optarena.infrastructure import Benchmark, Framework
+from optarena.infrastructure import utilities as util
 from optarena.infrastructure.framework import TimingResult, Timer
+from optarena.infrastructure.test import tolerances_for
 
 dc_float = None
 dc_complex_float = None
@@ -88,7 +113,6 @@ def _pipeline_fusion(sdfg: Any, ctx: Dict[str, Any]) -> None:
 
 def _pipeline_parallel(sdfg: Any, ctx: Dict[str, Any]) -> None:
     """Phase 3 -- LoopToMap / MapCollapse fixpoint + MapFusion cleanup."""
-    from dace.sdfg import propagation
     dace = ctx["dace"]
     LoopToMap = ctx["LoopToMap"]
     MapCollapse = ctx["MapCollapse"]
@@ -116,11 +140,21 @@ def _pipeline_auto_opt(sdfg: Any, ctx: Dict[str, Any]) -> None:
 
 
 DACE_PIPELINES: Tuple[SdfgPipeline, ...] = (
-    SdfgPipeline("strict", parent=None, transform=_pipeline_strict),
-    SdfgPipeline("fusion", parent="strict", transform=_pipeline_fusion),
+    SdfgPipeline("canonicalize", parent=None, transform=_pipeline_strict),
+    SdfgPipeline("fusion", parent="canonicalize", transform=_pipeline_fusion),
     SdfgPipeline("parallel", parent="fusion", transform=_pipeline_parallel),
-    SdfgPipeline("auto_opt", parent="strict", transform=_pipeline_auto_opt),
+    SdfgPipeline("autoopt", parent="canonicalize", transform=_pipeline_auto_opt),
 )
+
+#: The three end-state pipelines optimize() compiles, verifies and scores. The
+#: ``fusion`` step in :data:`DACE_PIPELINES` is only an intermediate that
+#: ``parallel`` deepcopies from -- it is not scored on its own.
+SCORED_VARIANTS: Tuple[str, ...] = ("canonicalize", "parallel", "autoopt")
+
+#: Repeats used by :meth:`DaceFramework.score` -- a short in-optimize timing loop
+#: (kernel-only when the instrumentation report is available), enough to take a
+#: stable median without dominating the untimed optimize phase.
+SCORE_REPEAT: int = 5
 
 # ---------------------------------------------------------------------------
 # Compiled-SDFG wrapper -- exposes ``.sdfg`` for timing hooks.
@@ -161,13 +195,20 @@ class DaceFramework(Framework):
     def __init__(self, fname: str, save_strict: bool = False, load_strict: bool = False):
         self.save_strict = save_strict
         self.load_strict = load_strict
-        import warnings
         warnings.filterwarnings("ignore")
         super().__init__(fname)
         # Timing-hook state: instrumentation snapshot captured once per
         # impl in ``setup_timing`` and consumed in ``teardown_timing``.
         self._native_samples: Optional[List[float]] = None
         self._native_cursor: int = 0
+        # Datatype string the harness selected via ``set_datatype`` -- read by
+        # ``verify`` to pick the matching validation tolerance band. ``None`` ->
+        # fp64 tolerances (the default request).
+        self.datatype: Optional[str] = None
+
+    #: DaCe compiles/searches for the fastest SDFG in :meth:`optimize`, so it is
+    #: an :class:`optarena.optimize.Optimizer`; the leaderboard budgets/labels it.
+    is_optimizer = True
 
     def version(self) -> str:
         return importlib.metadata.version("dace")
@@ -200,17 +241,13 @@ class DaceFramework(Framework):
         return vars(module)[bench.info["func_name"]]
 
     def _build_context(self) -> Dict[str, Any]:
-        """Bundle the imports the pipelines refer to into one dict."""
-        import dace
-        import dace.dtypes as dtypes
-        from dace.transformation.dataflow import MapCollapse, MapFusion
-        from dace.transformation.interstate import LoopToMap
-        import dace.transformation.auto.auto_optimize as opt
-        device = dtypes.DeviceType.GPU if self.info["arch"] == "gpu" else dtypes.DeviceType.CPU
+        """Bundle the module-level DaCe handles the pipelines refer to into one
+        dict (no in-function imports -- everything is imported at module load)."""
+        device = dace_dtypes.DeviceType.GPU if self.info["arch"] == "gpu" else dace_dtypes.DeviceType.CPU
         return dict(dace=dace,
-                    opt=opt,
+                    opt=dace_auto_opt,
                     device=device,
-                    dtypes=dtypes,
+                    dtypes=dace_dtypes,
                     LoopToMap=LoopToMap,
                     MapCollapse=MapCollapse,
                     MapFusion=MapFusion)
@@ -241,7 +278,7 @@ class DaceFramework(Framework):
         opt = ctx["opt"]
         MapFusion = ctx["MapFusion"]
         device = ctx["device"]
-        if sdfg._name in ("strict", "fusion", "parallel"):
+        if sdfg._name in ("canonicalize", "fusion", "parallel"):
             opt.apply_gpu_storage(sdfg)
             sdfg.apply_gpu_transformations()
             sdfg.simplify()
@@ -249,32 +286,149 @@ class DaceFramework(Framework):
         opt.set_fast_implementations(sdfg, device)
 
     def implementations(self, bench: Benchmark) -> Sequence[Tuple[Callable, str]]:
-        """Return the list of compiled implementations to time."""
-        try:
-            ct_impl = self._import_kernel(bench)
-            ctx = self._build_context()
-        except Exception as exc:
-            print(f"Failed to load DaCe implementation: {exc}")
-            raise
+        """Yield the PRE-optimize handle -- the parsed ``@dace.program``.
 
+        The pipelines + compile ARE the optimize phase and live in
+        :meth:`optimize` (run once, outside the timed bracket). Here we only
+        import the kernel so the harness has a callable to hand to ``optimize``.
+        """
+        ct_impl = self._import_kernel(bench)
+        return [(ct_impl, "dace")]
+
+    # ----- Optimize phase: build 3 pipelines, verify + score, pick fastest ----
+
+    def optimize(self, program: Any, bench: Benchmark, bdata: Dict[str, Any]) -> Any:
+        """Optimize ``program`` by producing the three pipelines, VERIFYING each
+        against the NumPy reference and SCORING each, then returning the fastest
+        correct one as a compiled :class:`TimedCompiledSDFG`.
+
+        Called once per impl, before the timed bracket, so the whole
+        build/verify/score cost stays outside the measurement. When no variant
+        verifies (or none compiles) the framework degrades gracefully -- it
+        returns any compiled variant, or the untouched ``program`` -- so the
+        harness's own validation still records the honest result.
+        """
+        ctx = self._build_context()
         if self.info["arch"] == "gpu":
-            dace = ctx["dace"]
             if dace.Config.get('library', 'blas', 'default_implementation') != "pure":
                 dace.Config.set('library', 'blas', 'default_implementation', value='cuBLAS')
 
-        sdfgs = self._build_sdfgs(ct_impl, ctx)
+        sdfgs = self._build_sdfgs(program, ctx)
+        compiled = self.compile_variants(sdfgs, ctx)
+        if not compiled:
+            print("DaCe optimize: no variant compiled; returning the unoptimized program")
+            return program
+
+        reference = self.reference_outputs(bench, bdata)
+        return self.select_fastest(compiled, reference, bench, bdata)
+
+    def compile_variants(self, sdfgs: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, "TimedCompiledSDFG"]:
+        """Compile the three scored pipelines (:data:`SCORED_VARIANTS`) into
+        callable :class:`TimedCompiledSDFG`\\s. ``fusion`` is only ``parallel``'s
+        intermediate and is not compiled here. A variant that fails to compile is
+        logged and dropped."""
         opt = ctx["opt"]
-        out: List[Tuple[Callable, str]] = []
-        for name, sdfg in sdfgs.items():
+        compiled: Dict[str, "TimedCompiledSDFG"] = {}
+        for name in SCORED_VARIANTS:
+            sdfg = sdfgs.get(name)
+            if sdfg is None:
+                continue
             try:
-                if name != "auto_opt":
+                if name != "autoopt":
                     opt.set_fast_implementations(sdfg, ctx["device"])
                 self._prepare_gpu(sdfg, ctx)
                 dc_exec = sdfg.compile()
-                out.append((TimedCompiledSDFG(dc_exec, sdfg, name), name))
+                compiled[name] = TimedCompiledSDFG(dc_exec, sdfg, name)
             except Exception as exc:
-                print(f"Failed to compile DaCe {self.info['arch']} {name}: {exc}")
+                print(f"DaCe optimize: failed to compile {self.info['arch']} {name}: {exc}")
                 traceback.print_exc()
+        return compiled
+
+    def select_fastest(self, compiled: Dict[str, "TimedCompiledSDFG"], reference: Optional[List[Any]], bench: Benchmark,
+                       bdata: Dict[str, Any]) -> Any:
+        """Verify + score each compiled variant and return the fastest correct
+        one. A variant is eligible only if it :meth:`verify`\\s (when a reference
+        is available) and :meth:`score`\\s without error; among the eligible the
+        lowest score wins. Falls back to any compiled variant if none verifies."""
+        best_name: Optional[str] = None
+        best: Optional["TimedCompiledSDFG"] = None
+        best_score: Optional[float] = None
+        for name, variant in compiled.items():
+            if reference is not None and not self.verify(variant, reference, bench, bdata):
+                print(f"DaCe optimize: variant {name!r} failed verification; skipping")
+                continue
+            try:
+                score = self.score(variant, bench, bdata)
+            except Exception as exc:
+                print(f"DaCe optimize: variant {name!r} scoring failed: {exc}")
+                continue
+            print(f"DaCe optimize: variant {name!r} score={score:.4f}ms")
+            if best_score is None or score < best_score:
+                best_name, best, best_score = name, variant, score
+        if best is not None:
+            print(f"DaCe optimize: selected {best_name!r} ({best_score:.4f}ms) of {tuple(compiled)}")
+            return best
+        fallback_name, fallback = next(iter(compiled.items()))
+        print(f"DaCe optimize: no variant verified; falling back to {fallback_name!r}")
+        return fallback
+
+    def verify(self, variant: "TimedCompiledSDFG", reference: List[Any], bench: Benchmark, bdata: Dict[str,
+                                                                                                       Any]) -> bool:
+        """Run ``variant`` on ``bdata`` and check its output against the NumPy
+        ``reference`` through the SAME validator the harness uses
+        (:func:`optarena.infrastructure.utilities.validate`, datatype-scaled
+        tolerances + per-benchmark ``rtol``/``atol`` overrides). A run that
+        raises counts as not-correct."""
+        try:
+            out = self.collect_outputs(self, variant, bench, bdata)
+        except Exception as exc:
+            print(f"DaCe optimize: variant {variant.name!r} raised during verify: {exc}")
+            return False
+        copy_back = self.copy_back_func()
+        out = [copy_back(a) for a in out]
+        rtol_default, atol_default = tolerances_for(self.datatype)
+        rtol = bench.info.get("rtol", rtol_default)
+        atol = bench.info.get("atol", atol_default)
+        label = f"{self.info['full_name']} - {variant.name}"
+        return util.validate(reference, out, label, rtol=rtol, atol=atol)
+
+    def score(self, variant: "TimedCompiledSDFG", bench: Benchmark, bdata: Dict[str, Any]) -> float:
+        """Time ``variant`` with the framework's own :meth:`measure` (a short
+        :data:`SCORE_REPEAT`-sample loop) and return the median in ms -- the
+        kernel-only instrumentation time when available, else host wall-clock."""
+        plan = self.build_call(bench, variant, bdata)
+        samples = self.measure(impl=variant, runner=plan.run, repeat=SCORE_REPEAT, before_each=plan.before_each)
+        series = samples["native"] if samples["native"] else samples["python"]
+        return sorted(series)[len(series) // 2]
+
+    def reference_outputs(self, bench: Benchmark, bdata: Dict[str, Any]) -> Optional[List[Any]]:
+        """Compute the NumPy reference outputs for ``bdata`` (the same handle +
+        call path the harness validates against). Returns ``None`` if the numpy
+        reference cannot be produced -- optimize then scores runnable variants
+        without a correctness gate and lets the harness validate the winner."""
+        try:
+            numpy_fw = Framework("numpy")
+            np_impl, _ = numpy_fw.implementations(bench)[0]
+            return self.collect_outputs(numpy_fw, np_impl, bench, bdata)
+        except Exception as exc:
+            print(f"DaCe optimize: numpy reference unavailable ({exc}); verification skipped")
+            return None
+
+    def collect_outputs(self, frmwrk: Framework, impl: Callable, bench: Benchmark, bdata: Dict[str, Any]) -> List[Any]:
+        """Run ``impl`` once (fresh input copies) and collect its outputs the way
+        :meth:`optarena.infrastructure.test.Test._execute` does: returned values
+        when the kernel hands back its full output set, else the in-place mutated
+        output buffers."""
+        plan = frmwrk.build_call(bench, impl, bdata)
+        plan.before_each()
+        plan.run()
+        ret = plan.result
+        out = list(ret) if isinstance(ret, (tuple, list)) else ([ret] if ret is not None else [])
+        if "output_args" in bench.info:
+            num_return_args = len(out)
+            num_output_args = len(bench.info["output_args"])
+            if not (num_output_args and num_return_args == num_output_args):
+                out += plan.inout_values()
         return out
 
     # ----- Timing override -------------------------------------------------
@@ -287,7 +441,6 @@ class DaceFramework(Framework):
         timer = Timer(program)
         if isinstance(program, TimedCompiledSDFG):
             try:
-                import dace
                 program.sdfg.instrument = dace.InstrumentationType.Timer
             except Exception:
                 pass
@@ -327,7 +480,6 @@ class DaceFramework(Framework):
         program = timer.program
         if isinstance(program, TimedCompiledSDFG):
             try:
-                import dace
                 program.sdfg.instrument = dace.InstrumentationType.No_Instrumentation
             except Exception:
                 pass
@@ -344,10 +496,45 @@ class DaceFramework(Framework):
         kwargs = {a: resolved[a] for a in bench.info["input_args"]}
         for p in self.params(bench, impl):
             kwargs[p] = bdata[p]
+        kwargs.update(self.shape_symbols(impl, bench, resolved, kwargs))
         return [], kwargs
+
+    def shape_symbols(self, impl: Callable, bench: Benchmark, resolved: Dict[str, Any],
+                      bound: Dict[str, Any]) -> Dict[str, int]:
+        """Bind every free SDFG symbol that the manifest params did not supply, by
+        matching each array argument's SYMBOLIC shape against its concrete shape.
+
+        A *compiled* SDFG (unlike a called ``@dc.program``, which infers symbols
+        from the arguments) requires ALL free symbols as explicit keywords. The
+        manifest's ``parameters`` only carries the SCALED size symbols, so a
+        physics-fixed array dimension -- seissol's ``nb`` / ``NQ``, constant across
+        presets and absent from the manifest -- is otherwise never passed and the
+        call fails with ``Missing program argument "NQ"``. Read the symbolic shape
+        off ``impl.sdfg.arrays`` and zip it against the real array's ``.shape`` to
+        recover each such symbol (only bare-symbol dimensions; a compound dim like
+        ``M + 1`` is skipped -- its own symbol is bound from a plain dimension)."""
+        if not isinstance(impl, TimedCompiledSDFG):
+            return {}
+        sdfg = impl.sdfg
+        missing = {str(s) for s in sdfg.free_symbols} - set(bound)
+        if not missing:
+            return {}
+        extra: Dict[str, int] = {}
+        for name in bench.info["input_args"]:
+            arr = resolved.get(name)
+            desc = sdfg.arrays.get(name)
+            if not isinstance(arr, np.ndarray) or desc is None:
+                continue
+            for sym, dim in zip(desc.shape, arr.shape):
+                s = str(sym)
+                if s in missing and s not in extra:
+                    extra[s] = int(dim)
+        return extra
 
     def set_datatype(self, datatype):
         super().set_datatype(datatype)
+        # Remember the request so ``verify`` uses the matching tolerance band.
+        self.datatype = datatype
         global dc_float, dc_complex_float
         from dace import float16, float32, float64, complex64, complex128
         from optarena.precision import Precision, precision_from_datatype
