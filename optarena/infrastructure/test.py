@@ -83,7 +83,7 @@ class Test(object):
             # Optimizer seam (no-op by default): optimize ONCE before the runner +
             # timer are built, so the optimized program is what gets run AND
             # measured, and the optimize cost stays outside the timed bracket.
-            impl = frmwrk.optimize(impl)
+            impl = frmwrk.optimize(impl, self.bench, bdata)
             plan = frmwrk.build_call(self.bench, impl, bdata)
         except Exception as e:
             print("Failed to load the {} implementation.".format(report_str))

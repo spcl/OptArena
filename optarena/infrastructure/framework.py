@@ -442,7 +442,7 @@ class Framework(object):
         from optarena.optimize import OptimizeBudget
         return OptimizeBudget.from_env()
 
-    def optimize(self, program: Any) -> Any:
+    def optimize(self, program: Any, bench: Benchmark, bdata: Dict[str, Any]) -> Any:
         """Optimize ``program`` ONCE before the timed repeat loop and return the
         optimized handle (default: identity -- no optimization). This is the
         ``Optimizer.optimize`` entry expressed on the framework (see
@@ -458,7 +458,12 @@ class Framework(object):
         a C-ABI wrapper); ``run`` just invokes it. Frameworks whose optimization is
         embedded in the compiled artifact (TVM ``tune_tir`` / Triton ``@autotune``
         inside the kernel) read the SAME budget via :meth:`optimize_budget`; the
-        contract stays: kernel in, optimized program out."""
+        contract stays: kernel in, optimized program out.
+
+        ``bench`` + ``bdata`` (the concrete example inputs from
+        :meth:`Benchmark.get_data`, keyed by arg name) let a compiling optimizer
+        lower against real shapes / dtypes -- e.g. JAX AoT
+        ``jax.jit(fn).lower(*example_args).compile()``. The default ignores them."""
         return program
 
     def create_timer(self, program: Any) -> "Timer":
