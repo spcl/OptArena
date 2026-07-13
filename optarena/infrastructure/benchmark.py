@@ -187,6 +187,15 @@ class Benchmark(object):
             #    (or it takes ``**kwargs``) are passed. So both the new
             #    standardised ``initialize(*p, *, datatype, rng, dist)`` and a
             #    legacy free-form ``initialize(N, datatype=...)`` work unchanged.
+            # Make declared init scalars available BEFORE building the init inputs.
+            # A legacy ``initialize`` may take a scalar as an INPUT (fv3_dycore's
+            # ``hord`` / ``grid_type`` -- config-selected in ``init.scalars``, not
+            # in the size ``parameters``), and the kernel's own input_args may
+            # reference a scalar ``initialize`` does not return (crc16's ``poly``).
+            # ``setdefault`` so a preset/param value already in ``data`` wins; an
+            # init RETURN value (output_args) still overrides it below.
+            for sname, sval in (info_init.get("scalars") or {}).items():
+                data.setdefault(sname, sval)
             init_inputs = [data[a] for a in info_init["input_args"]]
             # Seed the legacy global RNG (kernels that call np.random.* directly)
             # AND hand standardised fns an explicit seeded Generator. ``seed`` and
@@ -217,13 +226,6 @@ class Benchmark(object):
             else:
                 for name, value in zip(out_names, result):
                     data[name] = value
-            # Inject non-array init scalars (e.g. crc16's ``poly``) that the
-            # kernel's input_args reference but ``initialize`` does not return.
-            # The declarative path applies these via auto_initialize; the
-            # legacy path historically skipped them, leaving such scalars
-            # undefined at the kernel call site.
-            for sname, sval in (info_init.get("scalars") or {}).items():
-                data.setdefault(sname, sval)
 
         self.bdata[cache_key] = data
         return self.bdata[cache_key]
