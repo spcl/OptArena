@@ -280,14 +280,26 @@ jobs:
           python-version: '3.12'
       - uses: ./.github/actions/setup
 
-      - name: Setup -- Apptainer (unprivileged, to $HOME)
+      - name: Setup -- Apptainer (sudoless install script)
         run: |
-          # rpm2cpio + cpio: prerequisites of Apptainer's unprivileged installer. uidmap
-          # provides newuidmap/newgidmap that --fakeroot needs to map the runner's subuid range.
+          # Install apptainer WITHOUT root, via its unprivileged install script -- the same rootless
+          # path our HPC targets (no sudo) use -- exercised through our shipped
+          # `optarena-install-apptainer` wrapper (optarena/containers.py). rpm2cpio + cpio: the
+          # installer unpacks an rpm. uidmap: newuidmap/newgidmap that --fakeroot uses to map this
+          # user's subuid range.
           sudo apt-get install -y rpm2cpio cpio uidmap
-          curl -s https://raw.githubusercontent.com/apptainer/apptainer/main/tools/install-unprivileged.sh \
-            | bash -s - "$HOME/apptainer"
+          optarena-install-apptainer "$HOME/apptainer"
           echo "$HOME/apptainer/bin" >> "$GITHUB_PATH"
+          # Sudoless apptainer needs unprivileged user namespaces for BOTH --fakeroot build and
+          # plain exec. Where the host already permits them -- local dev, HPC, a permissive runner --
+          # nothing below runs sudo. Only a *clamped* runner (ubuntu-24.04's AppArmor default) needs
+          # the one-time host knob, so probe first and flip it solely when blocked.
+          if unshare --user --map-root-user true 2>/dev/null; then
+            echo "unprivileged userns already permitted -- no host change, fully sudoless"
+          else
+            echo "unprivileged userns blocked on this runner -- enabling for the job VM (provisioning only)"
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran, pythran] @ S
         if: ${{ !cancelled() }}
@@ -296,12 +308,11 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
 
-      - name: Phase 6a -- build + smoke-test the cpu agent-bench image (unprivileged fakeroot)
-        # Non-fatal: unprivileged apptainer --fakeroot build needs userns/mount privileges the
-        # runner can deny ("mount namespace requires privileges") -- an env issue, not our code.
-        # The e2e sweep above is the real gate. TODO: setuid/native apptainer to gate again.
+      - name: Phase 6a -- build + smoke-test the cpu agent-bench image (sudoless fakeroot, gating)
+        # GATES now. Rootless `--fakeroot` build -- unprivileged userns (permitted by the host; the
+        # setup step enables it only if a runner clamps it) maps this user to root inside the def's
+        # %post, no sudo -- the same path our HPC targets use. Gates so a broken image reds the build.
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: |
           apptainer build --fakeroot optarena-cpu.sif containers/cpu.def
           # The cpu image must import its numeric deps and carry the CPU-only torch build: a
@@ -312,10 +323,10 @@ jobs:
           # SOURCE-built (build-hptt.sh, the fragile step -- guard header + .so), the rest are apt.
           apptainer exec optarena-cpu.sif sh -c 'set -e; test -e /usr/local/include/hptt.h; test -e /usr/local/lib/libhptt.so; for l in libhwy libsleef libhwloc liblapacke; do ldconfig -p | grep -q "$l" || { echo "missing $l"; exit 1; }; done; echo "cpu image native libs OK: hptt (src) + hwy + sleef + hwloc + lapacke"; for b in perf numactl heaptrack likwid-topology papi_avail strace pprof objdump; do command -v $b >/dev/null 2>&1 || { echo "missing $b"; exit 1; }; done; echo "cpu image perf tools OK: perf numactl heaptrack likwid papi strace pprof objdump";'
 
-      - name: Phase 6b -- container functionality (sudoless two-container launch)
-        # Non-fatal: depends on the 6a image + the same userns privileges (see above).
+      - name: Phase 6b -- container functionality (sudoless two-container launch, gating)
+        # GATES now. The launch is sudoless -- unprivileged userns supplies the container isolation,
+        # no sudo -- so a broken judge<->agent path reds the build instead of being swallowed.
         if: ${{ !cancelled() }}
-        continue-on-error: true
         env:
           OPTARENA_JUDGE_SIF: ${{ github.workspace }}/optarena-cpu.sif
         run: |
