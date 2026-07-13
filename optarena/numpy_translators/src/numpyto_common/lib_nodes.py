@@ -6683,9 +6683,12 @@ class _CallHoister(ast.NodeTransformer):
         node.args = [mm.visit(a) for a in node.args]
         self.pre_stmts.extend(mm.pre_stmts)
         # Hoist a non-Name first arg of an array reduction (sum / max /
-        # min / mean / prod / std) into a fresh temp. ``np.mean(a * b)``
-        # -> ``__cb<n> = a * b; np.mean(__cb<n>)`` so the reduction
-        # expander sees a Name operand. The shape-preserving index ops
+        # min / mean / prod / std / argmax / argmin) into a fresh temp.
+        # ``np.mean(a * b)`` -> ``__cb<n> = a * b; np.mean(__cb<n>)`` so
+        # the reduction expander sees a Name operand -- likewise
+        # ``idx = np.argmax(np.abs(v))`` spills ``np.abs(v)`` to ``__cb<n>``
+        # before the arg-reduction scaffold (which requires a Name operand)
+        # runs. The shape-preserving index ops
         # (``roll`` / ``flip`` / ``transpose`` / ``reshape``) join the set
         # so a nested ``np.roll(psi_frag[f], m, axis)`` -- the periodic
         # finite-difference stencil applied to a slice (ls3df _hpsi) --
@@ -6696,7 +6699,8 @@ class _CallHoister(ast.NodeTransformer):
         key = self._key_of(node)
         if (key in ({("np", k) for k in {"sum", "max", "min", "mean", "prod",
                                          "std", "var", "median", "any", "all",
-                                         "count_nonzero", "repeat", "transpose",
+                                         "count_nonzero", "argmax", "argmin",
+                                         "repeat", "transpose",
                                          "reshape", "triu", "tril", "flip", "roll",
                                          "copy"}}
                     | {("np", "fft.fftn"), ("np", "fft.ifftn"),

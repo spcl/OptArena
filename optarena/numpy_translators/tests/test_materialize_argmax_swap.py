@@ -111,6 +111,38 @@ def test_computed_index_call_in_subscript():
 
 
 # --------------------------------------------------------------------------- #
+# (b') argmax / argmin OVER a computed operand: idx = np.argmax(np.abs(v))     #
+# --------------------------------------------------------------------------- #
+# The sibling of (b): there the argmax is a subscript INDEX (hoisted by
+# _ComputedIndexCallHoister); here it is the assignment RHS whose OPERAND is a
+# non-Name expression. The reduction-operand hoist must spill ``np.abs(v)`` into a
+# fresh ``__cb`` temp before the arg-reduction scaffold (which needs a Name operand)
+# runs -- argmax / argmin were previously excluded from that hoist set, so this
+# raised ``call to np.argmax not supported`` at emit.
+
+
+def test_argreduction_over_computed_operand():
+    _require_native()
+    v = np.array([0.3, -2.5, 1.1, -0.7, 4.2, -3.9], dtype=np.float64)
+    st_max = run_op(
+        "import numpy as np\n"
+        "def f(v, out):\n"
+        "    out[0] = np.argmax(np.abs(v))\n",
+        "f", {"v": v}, {"out": (1, )}, {"N": 6},
+        shapes={"v": "(N,)", "out": "(1,)"}, dtypes={"out": "int64"},
+        rtol=0, atol=0, backends=_NATIVE)
+    _assert_native_ok(st_max, "idx = argmax(abs(v))")
+    st_min = run_op(
+        "import numpy as np\n"
+        "def f(v, out):\n"
+        "    out[0] = np.argmin(v * v)\n",
+        "f", {"v": v}, {"out": (1, )}, {"N": 6},
+        shapes={"v": "(N,)", "out": "(1,)"}, dtypes={"out": "int64"},
+        rtol=0, atol=0, backends=_NATIVE)
+    _assert_native_ok(st_min, "idx = argmin(v * v)")
+
+
+# --------------------------------------------------------------------------- #
 # (c) simultaneous whole-array rebind in a loop: x, y = y, x + y (Fibonacci)   #
 # --------------------------------------------------------------------------- #
 # The chebyshev kernel USES the rebound arrays in-place (``X, Y, sigma = Y,
