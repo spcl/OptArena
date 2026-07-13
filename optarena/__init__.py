@@ -15,7 +15,8 @@ these names is first touched::
 #: Names forwarded to :mod:`optarena.api` on first access (PEP 562). Kept explicit
 #: so submodule attributes (``optarena.config`` / ``optarena.spec`` / ...) resolve
 #: normally and only these fall through to the lazy loader.
-_API_EXPORTS = ("init", "verify", "score", "submit", "Kernel", "RunConfig", "RunMode", "Oracle", "Baseline")
+_API_EXPORTS = ("init", "verify", "score", "submit", "Kernel", "RunConfig", "RunMode", "Oracle", "Baseline",
+                "InputMode")
 
 __all__ = list(_API_EXPORTS)
 

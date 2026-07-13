@@ -44,6 +44,23 @@ from optarena.flags import Mode
 from optarena.spec import BenchSpec
 
 
+def _resolve_tolerances(rtol: Optional[float], atol: Optional[float], datatype: str) -> Tuple[float, float]:
+    """Fill an unset (``None``) ``rtol`` / ``atol`` from the datatype's precision band.
+
+    The single source is :func:`optarena.infrastructure.test.tolerances_for` (the
+    same precision-aware table the framework-validation path uses), so a coarse
+    format (fp32/fp16/...) grades looser than fp64 automatically instead of taking
+    fp64's tight floor. A value that is already set is an explicit override and is
+    kept verbatim. Imported lazily: the resolver runs only on the grade path, which
+    already loads the infrastructure package, so ``import optarena`` stays cheap.
+    """
+    if rtol is not None and atol is not None:
+        return float(rtol), float(atol)
+    from optarena.infrastructure.test import tolerances_for
+    r, a = tolerances_for(datatype)
+    return (r if rtol is None else float(rtol)), (a if atol is None else float(atol))
+
+
 @dataclass(frozen=True)
 class Score:
     """The graded outcome of one submission.
@@ -136,16 +153,18 @@ def independent_verify(submission: Submission,
                        suspect_above: float = 1000.0,
                        fuzz_iteration: Optional[int] = None,
                        params_override: Optional[Dict] = None,
-                       rtol: float = 1.0e-6,
-                       atol: float = 1.0e-9) -> VerifyResult:
+                       rtol: Optional[float] = None,
+                       atol: Optional[float] = None) -> VerifyResult:
     """Re-verify ``submission`` from scratch before its result is persisted.
 
     A FRESH :class:`Sandbox` rebuild + clean re-runs (single-core), independent
     of the scoring run: determinism, a never-seen seed, and agreement with the C
     reference. Returns a :class:`VerifyResult`; ``ok`` is the AND of the hard
     gates (determinism + fresh-seed + dual-oracle). The agent is never trusted --
-    every output is graded against the judge's own NumPy/C references.
+    every output is graded against the judge's own NumPy/C references. ``rtol`` /
+    ``atol`` default to the datatype's precision band (:func:`_resolve_tolerances`).
     """
+    rtol, atol = _resolve_tolerances(rtol, atol, datatype)
     spec = BenchSpec.load(task.kernel)
     binding = binding_from_spec(spec)
     device = task.residency == "device"
@@ -338,8 +357,8 @@ def resolve_kernel_timeout(spec: BenchSpec) -> float:
 def score(submission: Submission,
           task: Task,
           *,
-          rtol: float = 1.0e-6,
-          atol: float = 1.0e-9,
+          rtol: Optional[float] = None,
+          atol: Optional[float] = None,
           preset: str = "S",
           datatype: str = "float64",
           repeat: int = 5,
@@ -368,6 +387,10 @@ def score(submission: Submission,
     cases are correctness-only (run once each).
     """
     from optarena.agent_bench import hidden_tests
+
+    # Unset tolerances resolve to the datatype's precision band (single source), so both the
+    # single-node and distributed paths below grade fp32 looser than fp64 automatically.
+    rtol, atol = _resolve_tolerances(rtol, atol, datatype)
 
     # Distributed (MPI) submissions take the multi-node path: a harness-owned scatter/gather
     # around the agent-chosen distribution, graded on the gathered whole-domain output. The
@@ -585,10 +608,14 @@ def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, bin
     decomposition is caught (an ungrown re-verify would miss it). The runner passes the same
     ``preset`` to score() and independent_verify(), so score and re-verify use one problem size.
 
-    Determinism uses ``np.allclose``, NOT the single-node ``np.array_equal`` -- a cross-rank float
-    reduction is not bit-reproducible (order depends on the rank count / schedule), so a bitwise
-    gate would false-fail a correct distributed kernel. The C dual-oracle does not apply (the
-    reference is already the whole-domain NumPy oracle), so it is recorded as not-applied."""
+    Every per-output comparison goes through the ONE numeric comparator :func:`_grade` (the same
+    rtol/atol allclose the single-node scorer grades with) -- both the correctness checks (vs the
+    whole-domain NumPy oracle) and the cross-rank determinism check. Determinism here is tolerant,
+    NOT the single-node bitwise ``np.array_equal``: a cross-rank float reduction is not
+    bit-reproducible (order depends on the rank count / schedule), so a bitwise gate would
+    false-fail a correct distributed kernel -- but it is the identical formula, hence the identical
+    comparator. The C dual-oracle does not apply (the reference is already the whole-domain NumPy
+    oracle), so it is recorded as not-applied."""
     ranks = int(config.get("mpi.ranks", 4))
     launcher = list(config.get("mpi.launcher", ["mpiexec.mpich", "-n"]))
     mode = str(config.get("mpi.mode", "strong"))
@@ -615,10 +642,6 @@ def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, bin
     np_public = _numpy_reference(spec, data)
     np_re = _numpy_reference(spec, redata)
 
-    def _match(expected: Dict, actual: Dict) -> bool:
-        return all(
-            np.allclose(np.asarray(actual[k]), np.asarray(expected[k]), rtol=rtol, atol=atol) for k in spec.output_args)
-
     try:
         with Sandbox(task, binding) as sb:
             built = sb.build_mpi(submission, descriptor)
@@ -639,9 +662,12 @@ def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, bin
                                        workspace_bytes=submission.workspace_bytes)
                 return outs
 
+            # ONE comparator: cross-rank determinism (o1 vs o2, tolerant) AND correctness vs the
+            # whole-domain NumPy oracle (np_public vs o1), then the fresh-seed re-verify -- each the
+            # same rtol/atol allclose _grade applies on the single-node path.
             o1, o2 = _run(data), _run(data)
-            determinism_ok = _match(o1, o2) and _match(np_public, o1)
-            reverify_ok = _match(np_re, _run(redata))
+            determinism_ok = _grade(spec, o1, o2, rtol, atol)[0] and _grade(spec, np_public, o1, rtol, atol)[0]
+            reverify_ok = _grade(spec, np_re, _run(redata), rtol, atol)[0]
     except (RuntimeError, ValueError) as exc:  # native crash / timeout, or a pack_infile dtype error
         return VerifyResult(False, False, False, True, False, suspect, f"harden: {exc}")
 
@@ -724,8 +750,8 @@ def score_distributed(submission: Submission,
                       *,
                       preset: str = "XL",
                       datatype: str = "float64",
-                      rtol: float = 1.0e-6,
-                      atol: float = 1.0e-9,
+                      rtol: Optional[float] = None,
+                      atol: Optional[float] = None,
                       repeat: int = 5) -> Score:
     """Score a distributed (multi-node MPI) submission -- the ``residency=="distributed"`` path.
 
@@ -736,6 +762,7 @@ def score_distributed(submission: Submission,
     ``mpi.mode``: ``strong`` keeps it fixed (speed-up over the 1-node reference); ``weak`` grows
     the decomposition axis by ``R**(1/work_exponent)`` (weak-scaling efficiency). A build / run /
     launch failure is a scored ``Score(correct=False)``, never a runner death."""
+    rtol, atol = _resolve_tolerances(rtol, atol, datatype)
     spec = BenchSpec.load(task.kernel)
     binding = binding_from_spec(spec)
     ranks = int(config.get("mpi.ranks", 4))
@@ -853,8 +880,8 @@ def score_scaling(submission: Submission,
                   node_counts: Tuple[int, ...],
                   preset: str = "XL",
                   datatype: str = "float64",
-                  rtol: float = 1.0e-6,
-                  atol: float = 1.0e-9,
+                  rtol: Optional[float] = None,
+                  atol: Optional[float] = None,
                   repeat: int = 5) -> ScalingRuns:
     """Sweep a distributed submission over node counts ``P`` to build its scaling curve.
 
@@ -865,6 +892,7 @@ def score_scaling(submission: Submission,
     with a note -- never scored as a bogus point. Returns the raw ``{P: ns}`` maps;
     :func:`metric.scaling_score` turns them into sigma/eta. No anchor => empty runs (a multi-node
     score is undefined without a correct single-node solution; the anchor is NEVER fabricated)."""
+    rtol, atol = _resolve_tolerances(rtol, atol, datatype)
     spec = BenchSpec.load(task.kernel)
     binding = binding_from_spec(spec)
     cfg = _mpi_launch_cfg()
@@ -991,8 +1019,8 @@ def score_cells(submission: Submission,
                 verify: bool = True,
                 reverify_seed: int = 777,
                 suspect_above: float = 1000.0,
-                rtol: float = 1.0e-6,
-                atol: float = 1.0e-9) -> List[CellScore]:
+                rtol: Optional[float] = None,
+                atol: Optional[float] = None) -> List[CellScore]:
     """Evaluate many ``(config, shape)`` cells on a SINGLE build.
 
     The configs x shapes perf protocol times every config crossed with a small set
@@ -1007,6 +1035,7 @@ def score_cells(submission: Submission,
     plus a per-cell fresh-seed re-verify and dual-oracle agreement); a ``timed`` cell
     is additionally measured ``repeat`` times and reduced to a credited speed-up by
     the configured timing backend. Returns one :class:`CellScore` per input cell."""
+    rtol, atol = _resolve_tolerances(rtol, atol, datatype)
     spec = BenchSpec.load(task.kernel)
     baseline = resolve_baseline(baseline, spec)  # track sentinel / None -> concrete kind (+ validation)
     binding = binding_from_spec(spec)

@@ -19,8 +19,8 @@ Two run modes, chosen by the config dataclass (never a bare string):
   and numeric libraries pip made available. Zero setup; the whole harness runs here.
 * :attr:`RunMode.CONTAINER` -- forward to a running judge service at ``judge_url``
   (or ``$JUDGE_URL``); the same call, graded server-side. Correctness/baseline policy
-  is then the SERVER's (its :class:`~optarena.agent_bench.service.ServiceConfig`); only
-  the kernel + preset cross the wire.
+  is then the SERVER's (its own :class:`RunConfig`, aliased ``ServiceConfig`` on the
+  service side); only the kernel + preset cross the wire.
 
 ``verify`` / ``score`` / ``submit`` mirror the container endpoint NAMES (check
 correctness, read the speedup, finalize); each runs one grade and returns the full
@@ -69,25 +69,52 @@ class Baseline(str, Enum):
     TRACK = "track"
 
 
+class InputMode(str, Enum):
+    """What the judge's ``POST /oracle`` accepts (server-side policy).
+
+    ``source`` = the agent submits code, the judge compiles it ("llvm as a port");
+    ``library`` = a prebuilt ``.so``; ``either`` = both. Inert on the client path.
+    """
+    SOURCE = "source"
+    LIBRARY = "library"
+    EITHER = "either"
+
+
 @dataclass(frozen=True)
 class RunConfig:
-    """How to grade -- the config for the native / container judge bindings.
+    """How to grade -- the ONE config for BOTH the client bindings and the judge service.
 
-    ``mode`` / ``oracle`` / ``baseline`` are str-enums, so a plain string
-    (``"native"``, ``"c"``) is accepted and coerced (validated) at construction.
+    ``mode`` / ``oracle`` / ``baseline`` / ``input_mode`` are str-enums, so a plain
+    string (``"native"``, ``"c"``, ``"source"``) is accepted and coerced (validated)
+    at construction; the config is dataclass-typed everywhere downstream, never a
+    loose string. The union of the two former surfaces:
+
+    * grading policy shared by both -- ``oracle`` / ``baseline`` / ``preset`` /
+      ``datatype`` / ``repeat``;
+    * server-only -- ``input_mode`` (what ``POST /oracle`` accepts). The client
+      ignores it;
+    * client-only -- ``mode`` (native vs a running judge), ``judge_url`` (container
+      target), ``rtol`` / ``atol`` (per-call tolerance overrides; ``None`` = the
+      precision-aware default from the datatype), ``hidden`` (also grade held-out
+      inputs). The server ignores these -- its policy is its own config.
+
+    ``rtol`` / ``atol`` default to ``None``: the scorer fills them from the
+    datatype's precision band (``infrastructure.test.tolerances_for``) so fp32
+    grades looser than fp64 automatically. A set value is an explicit override.
     In :attr:`RunMode.CONTAINER` the correctness/baseline/repeat policy is the
     running judge's, not these fields -- only ``preset`` (and ``judge_url``) apply.
     """
-    mode: RunMode = RunMode.NATIVE
+    mode: RunMode = RunMode.NATIVE  # client-only: grade in-process vs against a judge
     oracle: Oracle = Oracle.NUMPY
     baseline: Baseline = Baseline.TRACK  # resolves per kernel track (foundation -> c-autopar, ml/hpc -> numpy)
+    input_mode: InputMode = InputMode.SOURCE  # server-only: what POST /oracle accepts
     preset: str = "S"
     datatype: str = "float64"
     repeat: int = 5
-    judge_url: Optional[str] = None  # container mode target; None -> $JUDGE_URL / localhost
-    rtol: float = 1.0e-6
-    atol: float = 1.0e-9
-    hidden: bool = True  # native mode: also grade held-out inputs (the overfit gate)
+    judge_url: Optional[str] = None  # client-only: container mode target; None -> $JUDGE_URL / localhost
+    rtol: Optional[float] = None  # client-only: None -> tolerances_for(datatype) at grade time
+    atol: Optional[float] = None
+    hidden: bool = True  # client-only: also grade held-out inputs (the overfit gate)
 
     def __post_init__(self):
         # Coerce strings -> enums (raises ValueError on an unknown value) so the
@@ -95,6 +122,7 @@ class RunConfig:
         object.__setattr__(self, "mode", RunMode(self.mode))
         object.__setattr__(self, "oracle", Oracle(self.oracle))
         object.__setattr__(self, "baseline", Baseline(self.baseline))
+        object.__setattr__(self, "input_mode", InputMode(self.input_mode))
         if int(self.repeat) < 1:
             raise ValueError(f"repeat must be >= 1, got {self.repeat!r}")
         object.__setattr__(self, "repeat", int(self.repeat))

@@ -52,12 +52,9 @@ fuzz:
 # either.
 service:
   oracle: numpy            # correctness reference: numpy | c | both
-  baseline: track          # speedup denominator. track (default) = the per-track default
-                           #   (foundation -> c-autopar, ml/hpc -> numpy); numpy; c (sequential C,
-                           #   the serial start); both; c-autopar | cpp-autopar | fortran-autopar
-                           #   (the compiled reference built MULTI_CORE with auto-parallelization --
-                           #   clang+Polly for c/cpp, gfortran+GCC-autopar for fortran). A compiled
-                           #   baseline falls back to numpy per-kernel when it cannot be emitted/built.
+  # NOTE: the speedup denominator (baseline) is NOT here -- it is the SHARED `measurement.baseline`
+  # key below (one source of truth read by both the judge and the Harbor grader, so the two
+  # measurement paths cannot drift).
   input_mode: source       # POST /oracle accepts: source | library | either
   preset: fuzzed           # data-size preset the judge scores at
   datatype: float64

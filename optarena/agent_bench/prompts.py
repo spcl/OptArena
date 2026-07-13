@@ -51,8 +51,12 @@ class PromptConfig:
     optimization_guidance: bool = True  # include the how-to-optimize section
     language_track: bool = False  # emphasize optimizing idiomatically in the forced language
     native: bool = False  # native (no-container) framing: the agent runs on the host, no /app container
-    rtol: float = 1.0e-6  # correctness tolerance shown to the agent (fp64 reference target)
-    atol: float = 1.0e-9
+    # Correctness tolerances SHOWN to the agent. None (the default) = the precision-aware band the
+    # scorer actually grades with (tolerances_for(datatype), resolved in build_context off the task's
+    # precision); a set value is a display override. No hardcoded literal -- the single source is E4's
+    # TOLERANCES table.
+    rtol: Optional[float] = None
+    atol: Optional[float] = None
 
     @classmethod
     def from_config(cls, **overrides) -> "PromptConfig":
@@ -355,6 +359,13 @@ def build_context(task: Task,
     from optarena.agent_bench.grading import resolve_baseline
     baseline = resolve_baseline(baseline, spec)
     binding = binding_from_spec(spec)
+    # Display tolerances: the precision-aware band the scorer grades this task's precision with
+    # (the single TOLERANCES source), unless PromptConfig overrides them. tolerances_for reads
+    # through the precision registry, so the enum spelling (task.precision.value) is accepted.
+    from optarena.infrastructure.test import tolerances_for
+    _dr, _da = tolerances_for(task.precision.value)
+    disp_rtol = _dr if prompt_config.rtol is None else prompt_config.rtol
+    disp_atol = _da if prompt_config.atol is None else prompt_config.atol
     ref_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     reference = strip_comments(ref_py.read_text(), "python") if ref_py.exists() else ""
     # An original ported source (e.g. gemm_original.f90) offered as a convenience next to
@@ -472,10 +483,12 @@ def build_context(task: Task,
         "resources": resources,
         "compilers_line": _fmt(resources["compilers"]),
         "libraries_line": _fmt(resources["libraries"]),
-        # Guidance tolerances shown to the agent; the scorer validates with the
-        # harness's precision-aware table (test.py). fp64 reference target.
-        "rtol": prompt_config.rtol,
-        "atol": prompt_config.atol,
+        # Guidance tolerances shown to the agent: the SAME precision-aware band the scorer
+        # validates with (tolerances_for(datatype), the single source in E4), resolved off this
+        # task's precision so the prompt states the tolerance the grade will actually use. A
+        # PromptConfig.rtol/atol override (not None) wins as a display value.
+        "rtol": disp_rtol,
+        "atol": disp_atol,
         # How the TIMED performance shapes are sampled (public: the sampled shapes +
         # seed; hidden: just the range). See :func:`perf_sampling`.
         "perf_sampling": perf_sampling(spec),
