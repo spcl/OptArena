@@ -83,7 +83,7 @@ dataset = tasks, scoring = held-out tests).
 | `parameters` | `BenchSpec.parameters` (JSON) | preset sizes incl. `fuzzed` ranges/sets |
 | `datatypes` | spec | allowed precisions |
 | `source_mode` | `restricted` (adapter default) | source vs prebuilt `.so` |
-| `baseline` | judge policy | what `speedup` is measured against (numpy / emitted-C ref) |
+| `baseline` | judge policy | what `speedup` is measured against; per-track default (`track` sentinel → foundation `c-autopar`, ml/hpc `numpy`), or an explicit `numpy` / `c` / `both` / `*-autopar` override (see §4.5) |
 | `commit`, `warnings` | export run | provenance pin; per-row export warnings (`[]` when clean) |
 
 **Never in the dataset:** hidden tests, reference *outputs*, timing, **or the fuzz
@@ -269,10 +269,30 @@ warmup model yet) and composes cleanly with the deferred roofline normalization
 - **Cost axis** — total tokens + speedup-per-Mtoken (and `$` with a price table),
   plus the per-call (tokens, score) trajectory.
 
-### 4.5 Baseline = sequential C; roofline deferred
-The speedup denominator is the **sequential-C reference** (the consistent fully
-serial starting point), numpy fallback for kernels that don't emit to C — the
-implemented default (`metric.py`, `baseline="c"`). Raw speedup is not *difficulty-fair* (1.1× is
+### 4.5 Baseline = per-track + per-language autopar; roofline deferred
+The speedup denominator is **per-track**, resolved from `BenchSpec.track` when the
+user does not override `--baseline` / the config / the API (`grading.TRACK_DEFAULT_BASELINE`,
+resolved by `grading.resolve_baseline`):
+
+| Track | Default baseline | Rationale |
+|---|---|---|
+| `foundation` | `c-autopar` | a single-op vectorization puzzle's fair "time to beat" is an **auto-parallelized** compiled reference, not a serial one |
+| `ml` | `numpy` | the numpy/BLAS reference is already the fast, vectorized ground truth |
+| `hpc` | `numpy` | same — the numpy reference is the authoritative, fast spec |
+
+The baseline **kinds** are `numpy`, `c` (sequential C reference), `both`, and the
+three **`*-autopar`** kinds — `c-autopar` / `cpp-autopar` / `fortran-autopar` — the
+compiled reference in that language, built `Mode.MULTI_CORE` with auto-parallelization
+flags (clang/clang++ + **LLVM Polly** `-polly -polly-parallel` for c/cpp; **gfortran**
+`-ftree-parallelize-loops` for fortran). All flags flow through the `flags.py` matrix
+(`flags.compose_autopar` + `languages.py`), so nothing string-literals `-O3`. The
+user-facing default everywhere (config `service.baseline` / `measurement.baseline`,
+the CLI `--baseline`, the API `Baseline.TRACK`) is the `track` sentinel, resolved per
+kernel; an explicit concrete kind **overrides** the track default. A compiled baseline
+falls back to `numpy` per-kernel when the reference cannot be emitted / built (recorded
+honestly in `TaskScore.baseline`).
+
+Raw speedup is not *difficulty-fair* (1.1× is
 near-roofline on a memory-bound kernel, poor on a compute-bound one); the fair
 refinement is **roofline-normalized speedup** (`achieved / achievable`), but it
 needs HPL/STREAM + FLOP/byte rooflines and a cache model, generalizes poorly across

@@ -38,7 +38,8 @@ from urllib.parse import parse_qs, urlparse
 
 from optarena import config
 from optarena.agent_bench.envelope import Submission
-from optarena.agent_bench.scoring import BASELINE_CHOICES, ORACLE_CHOICES, measure_baselines, score
+from optarena.agent_bench.grading import BASELINE_OPTIONS
+from optarena.agent_bench.scoring import ORACLE_CHOICES, measure_baselines, score
 from optarena.agent_bench.task import Task
 
 INPUT_MODES = ("source", "library", "either")
@@ -52,7 +53,8 @@ class ServiceConfig:
     :func:`from_config`, then overridable per-process by the CLI.
     """
     oracle: str = "numpy"
-    baseline: str = "c"  # speedup denominator: sequential C (numpy fallback per-kernel)
+    baseline: str = "track"  # speedup denominator; ``track`` resolves per kernel (foundation ->
+    #                          c-autopar, ml/hpc -> numpy); c = sequential C (numpy fallback per-kernel)
     input_mode: str = "source"  # source | library | either
     preset: str = "S"
     datatype: str = "float64"
@@ -61,8 +63,8 @@ class ServiceConfig:
     def __post_init__(self):
         if self.oracle not in ORACLE_CHOICES:
             raise ValueError(f"oracle must be one of {ORACLE_CHOICES}; got {self.oracle!r}")
-        if self.baseline not in BASELINE_CHOICES:
-            raise ValueError(f"baseline must be one of {BASELINE_CHOICES}; got {self.baseline!r}")
+        if self.baseline not in BASELINE_OPTIONS:
+            raise ValueError(f"baseline must be one of {BASELINE_OPTIONS}; got {self.baseline!r}")
         if self.input_mode not in INPUT_MODES:
             raise ValueError(f"input_mode must be one of {INPUT_MODES}; got {self.input_mode!r}")
 
@@ -71,7 +73,7 @@ def from_config() -> ServiceConfig:
     """Build a :class:`ServiceConfig` from the ``service:`` config block."""
     return ServiceConfig(
         oracle=str(config.get("service.oracle", "numpy")),
-        baseline=str(config.get("service.baseline", "c")),
+        baseline=str(config.get("service.baseline", "track")),
         input_mode=str(config.get("service.input_mode", "source")),
         preset=str(config.get("service.preset", "S")),
         datatype=str(config.get("service.datatype", "float64")),
@@ -103,7 +105,7 @@ def _task_spec(kernel: str, language: str, cfg: ServiceConfig) -> dict:
         "oracle":
         cfg.oracle,
         "baseline":
-        cfg.baseline,
+        ctx["baseline"],  # the resolved concrete kind (the ``track`` selector is mapped per kernel)
         "input_mode":
         cfg.input_mode,
         "abi_doc":

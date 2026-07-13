@@ -33,7 +33,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 from optarena import config, fuzz
 from optarena.agent_bench import timing
-from optarena.agent_bench.grading import c_reference_available
+from optarena.agent_bench.grading import baseline_compiled, c_reference_available, resolve_baseline
 from optarena.agent_bench.scoring import independent_verify, score_cells, score_distributed, score_scaling
 from optarena.agent_bench.task import Task
 from optarena.agent_bench.envelope import Submission
@@ -41,10 +41,16 @@ from optarena.spec import BenchSpec
 
 _UNCLASSIFIED = "unclassified"
 
-#: Default speedup denominator: the SEQUENTIAL C reference (the consistent "all
-#: implementations start from a fully serial C" baseline). Falls back per-task to
-#: numpy when a kernel cannot be emitted to C (recursive / argmax / not yet
-#: translatable) -- recorded honestly in ``TaskScore.baseline``.
+#: Neutral fallback speedup denominator for a DIRECT ``score_task_fuzzed`` call with
+#: no baseline: the SEQUENTIAL C reference (the consistent "all implementations start
+#: from a fully serial C" baseline), numpy fallback per-task when a kernel cannot be
+#: emitted to C. The scorer is nonetheless track-AWARE: :func:`score_task_fuzzed`
+#: resolves whatever baseline it is handed through
+#: :func:`~optarena.agent_bench.grading.resolve_baseline`, so the user-facing default
+#: -- the ``track`` sentinel every deployed entry point sends (config
+#: ``measurement.baseline`` / ``service.baseline``, the CLI, the API) -- becomes the
+#: per-track default (foundation -> ``c-autopar``, ml / hpc -> ``numpy``). Recorded
+#: honestly in ``TaskScore.baseline``.
 _DEFAULT_BASELINE = "c"
 
 
@@ -494,19 +500,23 @@ def score_task_fuzzed(submission: Submission,
     configs, constraints = fz.get("configs"), fz.get("constraints")
     params = spec.parameters
     mode = perf_mode if perf_mode is not None else fuzz.perf_mode()
-    # Honour the C request, but pre-probe so a non-emittable kernel asks for numpy
-    # directly (avoids a doomed C build); the actual baseline is read back per cell.
-    requested = "numpy" if (baseline == "c" and not c_reference_available(task)) else baseline
+    # Resolve the baseline against the kernel's track (the ``track`` sentinel / ``None`` -> the
+    # per-track default; a concrete kind is an explicit override). foundation -> ``c-autopar``,
+    # ml / hpc -> ``numpy``.
+    baseline = resolve_baseline(baseline, spec)
+    # Honour the request, but pre-probe so a kernel that cannot emit a COMPILED reference asks for
+    # numpy directly (avoids a doomed build); the actual baseline is read back per cell.
+    requested = "numpy" if (baseline_compiled(baseline) is not None and not c_reference_available(task)) else baseline
     # Correctness (Stage 1) grades against the chosen ``oracle`` -- numpy by default,
     # the authoritative ground truth (and the FAST reference for vectorized / BLAS-backed
     # kernels like gemm, where the naive C reference would be far slower). The (large)
     # TIMED cells (Stage 2) instead grade against the COMPILED C reference: at the large
     # timed sizes the pure-Python numpy reference is pathologically slow for Python-loop
-    # kernels (TSVC), and the C reference is the timed baseline (built + run for timing
-    # anyway), so grading the submission against those same outputs is a correctness guard
-    # at the timed size that costs ZERO extra reference evaluations. When C is not the
-    # baseline (a non-emittable kernel falls back to numpy), the timed oracle stays numpy.
-    timed_oracle = "c" if requested == "c" else "numpy"
+    # kernels (TSVC), and score_cells builds the single-core C reference for any COMPILED
+    # baseline (``c`` or a ``*-autopar`` kind) anyway, so grading the submission against those
+    # same outputs is a correctness guard at the timed size that costs ZERO extra reference
+    # builds. When the baseline is numpy (or fell back to it), the timed oracle stays numpy.
+    timed_oracle = "c" if baseline_compiled(requested) is not None else "numpy"
 
     # --- Stage 1: correctness gate over configs x (edge u fuzzed) ---
     corr = score_cells(submission,

@@ -52,8 +52,12 @@ fuzz:
 # either.
 service:
   oracle: numpy            # correctness reference: numpy | c | both
-  baseline: c              # speedup denominator: c (sequential C, the serial start) | numpy | both;
-                           # c falls back to numpy per-kernel when C cannot be emitted
+  baseline: track          # speedup denominator. track (default) = the per-track default
+                           #   (foundation -> c-autopar, ml/hpc -> numpy); numpy; c (sequential C,
+                           #   the serial start); both; c-autopar | cpp-autopar | fortran-autopar
+                           #   (the compiled reference built MULTI_CORE with auto-parallelization --
+                           #   clang+Polly for c/cpp, gfortran+GCC-autopar for fortran). A compiled
+                           #   baseline falls back to numpy per-kernel when it cannot be emitted/built.
   input_mode: source       # POST /oracle accepts: source | library | either
   preset: fuzzed           # data-size preset the judge scores at
   datatype: float64
@@ -65,7 +69,10 @@ service:
 # timing core (scoring.py / metric.py, owned separately) should read the SAME keys
 # so the two measurement paths cannot drift.
 measurement:
-  baseline: c              # speedup denominator (mirrors service.baseline): sequential C, numpy fallback
+  baseline: track          # speedup denominator (mirrors service.baseline). track = the per-track
+                           #   default (foundation -> c-autopar, ml/hpc -> numpy); numpy | c | both |
+                           #   c-autopar | cpp-autopar | fortran-autopar. A compiled baseline falls
+                           #   back to numpy per-kernel when it cannot be emitted/built.
   repeat: 100              # timed reps kept per measurement (>= 20; 100 for a stable mean)
   warmup: 1                # untimed warmup reps run + discarded before the timed reps, on the
                            # submission AND every baseline (fair), so cold caches / first-touch

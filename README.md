@@ -21,7 +21,8 @@ pip install -r requirements/cpu.txt && pip install -e .
 export ANTHROPIC_API_KEY=sk-...          # the agent calls Claude
 
 # 1) one kernel: Claude writes C, the harness compiles + validates + times it and
-#    scores the speedup over the C baseline (--native = in-process, no container):
+#    scores the speedup over the per-track baseline (default: foundation → auto-parallelized
+#    C, ml/hpc → numpy; override with --baseline; --native = in-process, no container):
 optarena agent claude --kernels gemm --native
 
 # 2) a whole HPC sub-track at level 2 (the structured-grids dwarf), default prompt:
@@ -326,7 +327,7 @@ driven:
 | Setting | Values | Effect |
 |---|---|---|
 | `oracle` | `numpy` \| `c` \| `both` | which reference correctness is checked against |
-| `baseline` | `numpy` \| `c` \| `both` | the speedup denominator |
+| `baseline` | `track` (default) \| `numpy` \| `c` \| `both` \| `c-autopar` \| `cpp-autopar` \| `fortran-autopar` | the speedup denominator. **`track`** resolves per kernel track (foundation → `c-autopar`, ml/hpc → `numpy`); `c` = sequential C reference; a **`*-autopar`** kind = the compiled reference built multi-core with auto-parallelization (clang+Polly for c/cpp, gfortran autopar for fortran). A compiled baseline falls back to `numpy` per-kernel when it cannot be emitted/built. |
 | `input_mode` | `source` \| `library` \| `either` | **`source`**: agent sends code, judge compiles it (agent never picks flags). **`library`**: agent sends a prebuilt `.so` (ABI-only) -- it owns compilation and must export the canonical C symbol. |
 | `preset` | `S`/`M`/`L`/`XL` | the size the judge scores at |
 

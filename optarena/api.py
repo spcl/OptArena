@@ -53,10 +53,20 @@ class Oracle(str, Enum):
 
 
 class Baseline(str, Enum):
-    """The speedup denominator (what the submission is timed against)."""
+    """The speedup denominator (what the submission is timed against).
+
+    ``numpy`` / ``c`` / ``both`` and the three per-language auto-parallelizing
+    compiled references (``*-autopar``: the reference built ``Mode.MULTI_CORE`` with
+    Polly for c/cpp, GCC autopar for fortran). ``track`` (the default) resolves per
+    kernel track: foundation -> ``c-autopar``, ml / hpc -> ``numpy``.
+    """
     NUMPY = "numpy"
     C = "c"
     BOTH = "both"
+    C_AUTOPAR = "c-autopar"
+    CPP_AUTOPAR = "cpp-autopar"
+    FORTRAN_AUTOPAR = "fortran-autopar"
+    TRACK = "track"
 
 
 @dataclass(frozen=True)
@@ -70,7 +80,7 @@ class RunConfig:
     """
     mode: RunMode = RunMode.NATIVE
     oracle: Oracle = Oracle.NUMPY
-    baseline: Baseline = Baseline.C
+    baseline: Baseline = Baseline.TRACK  # resolves per kernel track (foundation -> c-autopar, ml/hpc -> numpy)
     preset: str = "S"
     datatype: str = "float64"
     repeat: int = 5

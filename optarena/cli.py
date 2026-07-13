@@ -183,13 +183,17 @@ def _agent_registry() -> Dict[str, Any]:
     # the Agent.solve(task) contract. LLM: stub (deterministic CI baseline), claude
     # (Anthropic SDK), local (in-process Qwen-Coder), ollama (local server). Non-AI:
     # noop / blas-reduction / tvm / triton (optarena.agent_bench.optimizers).
-    from optarena.agent_bench.agent import ClaudeAgent, LocalHFAgent, OllamaAgent, StubAgent
+    from optarena.agent_bench.agent import ClaudeAgent, LocalHFAgent, OllamaAgent, OpenAIAgent, StubAgent
     from optarena.agent_bench.optimizers import optimizer_registry
     return {
         "stub": StubAgent,
         "claude": ClaudeAgent,
         "local": LocalHFAgent,
         "ollama": OllamaAgent,
+        # OpenAI-compatible /v1 endpoint (self-hosted vLLM / the OpenAI API); the
+        # CSCS path. ``vllm`` is an alias -- same class, VLLM_BASE_URL-driven.
+        "openai": OpenAIAgent,
+        "vllm": OpenAIAgent,
         **optimizer_registry()
     }
 
@@ -600,16 +604,18 @@ def build_parser() -> argparse.ArgumentParser:
                    type=int,
                    default=5,
                    help="timed reps per task; best (min) kept for the speedup (default 5)")
-    from optarena.agent_bench.scoring import BASELINE_CHOICES, ORACLE_CHOICES
+    from optarena.agent_bench.grading import BASELINE_OPTIONS
+    from optarena.agent_bench.scoring import ORACLE_CHOICES
     from optarena.agent_bench.service import INPUT_MODES
     a.add_argument("--oracle",
                    default="numpy",
                    choices=list(ORACLE_CHOICES),
                    help="correctness reference (default numpy; c = compiled C reference; both)")
     a.add_argument("--baseline",
-                   default="c",
-                   choices=list(BASELINE_CHOICES),
-                   help="speedup denominator (default c = sequential C reference, numpy fallback; numpy; both)")
+                   default="track",
+                   choices=list(BASELINE_OPTIONS),
+                   help="speedup denominator (default track = the per-track default: foundation->c-autopar, "
+                   "ml/hpc->numpy; c = sequential C; *-autopar = the multi-core auto-parallelized reference; both)")
     a.add_argument("--repair-rounds",
                    type=int,
                    default=1,
@@ -685,7 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="correctness reference (default from config service.oracle)")
     sv.add_argument("--baseline",
                     default=None,
-                    choices=list(BASELINE_CHOICES),
+                    choices=list(BASELINE_OPTIONS),
                     help="speedup denominator (default from config service.baseline)")
     sv.add_argument("--input-mode",
                     default=None,

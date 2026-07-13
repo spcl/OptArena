@@ -309,11 +309,25 @@ def perf_sampling(spec) -> dict:
     return out
 
 
-#: Human phrasing of the oracle/baseline knobs for the prompt.
+#: Human phrasing of the oracle/baseline knobs for the prompt. The ``*-autopar``
+#: baselines are the compiled reference built MULTI_CORE with auto-parallelization
+#: (clang/clang++ + LLVM Polly for c/cpp; gfortran auto-parallelization for fortran).
 _REF_PHRASE = {
-    "numpy": "the NumPy reference",
-    "c": "the compiled C reference (NumpyToX-generated from the NumPy reference)",
-    "both": "BOTH the NumPy reference and the compiled C reference",
+    "numpy":
+    "the NumPy reference",
+    "c":
+    "the compiled C reference (NumpyToX-generated from the NumPy reference)",
+    "both":
+    "BOTH the NumPy reference and the compiled C reference",
+    "c-autopar":
+    "the auto-parallelized compiled C reference (NumpyToX-generated, built multi-core "
+    "with clang + LLVM Polly)",
+    "cpp-autopar":
+    "the auto-parallelized compiled C++ reference (NumpyToX-generated, built multi-core "
+    "with clang++ + LLVM Polly)",
+    "fortran-autopar":
+    "the auto-parallelized compiled Fortran reference (NumpyToX-generated, built "
+    "multi-core with gfortran auto-parallelization)",
 }
 
 
@@ -335,6 +349,11 @@ def build_context(task: Task,
     if prompt_config is None:
         prompt_config = PromptConfig.from_config()
     spec = BenchSpec.load(task.kernel)
+    # Resolve the baseline against the kernel's track (the ``track`` sentinel / ``None`` -> the
+    # per-track default: foundation -> c-autopar, ml/hpc -> numpy), so the prompt names the CONCRETE
+    # reference the submission is timed against, not the "track" selector.
+    from optarena.agent_bench.grading import resolve_baseline
+    baseline = resolve_baseline(baseline, spec)
     binding = binding_from_spec(spec)
     ref_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     reference = strip_comments(ref_py.read_text(), "python") if ref_py.exists() else ""
