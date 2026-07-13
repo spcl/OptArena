@@ -375,9 +375,12 @@ def xsbench_kernel(
     nuclide_grid: np.ndarray,
     mats: np.ndarray,
 ) -> np.ndarray:
-    """Run the unionized-grid XSBench lookup kernel."""
+    """Run the unionized-grid XSBench lookup kernel (functional wrapper: allocates
+    the output buffer and returns it -- the harness entry ``xsbench`` writes it
+    in-place)."""
 
-    return xsbench(
+    out = np.zeros((int(p_energy_samples.shape[0]), NUM_XS_CHANNELS), dtype=np.float64)
+    xsbench(
         p_energy_samples,
         mat_samples,
         num_nucs,
@@ -386,7 +389,9 @@ def xsbench_kernel(
         index_grid,
         nuclide_grid,
         mats,
+        out,
     )
+    return out
 
 
 def generate_random_xsbench_inputs(
@@ -479,7 +484,7 @@ def initialize(
     """Manifest-compatible XSBench input generator."""
 
     _ = datatype
-    return generate_random_xsbench_inputs(
+    inputs = generate_random_xsbench_inputs(
         n_samples=n_samples,
         n_isotopes=n_isotopes,
         n_gridpoints=n_gridpoints,
@@ -487,6 +492,10 @@ def initialize(
         max_num_nucs=max_num_nucs,
         seed=seed,
     )
+    # The output cross-section buffer is a passed-in output arg (agentbench ABI):
+    # allocate it zeroed here so the harness has a buffer for the in-place kernel.
+    out = np.zeros((n_samples, NUM_XS_CHANNELS), dtype=np.float64)
+    return (*inputs, out)
 
 
 def xsbench(
@@ -498,11 +507,13 @@ def xsbench(
     index_grid,
     nuclide_grid,
     mats,
+    out,
 ):
-    """Manifest-compatible XSBench benchmark entry point."""
+    """Manifest-compatible XSBench benchmark entry point. Writes the per-sample
+    macroscopic cross sections into the pre-allocated ``out`` buffer in place (the
+    agentbench ABI passes outputs as buffers, never a functional return)."""
 
     n_samples = int(p_energy_samples.shape[0])
-    out = np.zeros((n_samples, NUM_XS_CHANNELS), dtype=np.float64)
 
     for s in range(n_samples):
         p_energy = float(p_energy_samples[s])
@@ -518,8 +529,6 @@ def xsbench(
             nuclide_grid,
             mats,
         )
-
-    return out
 
 
 __all__ = [

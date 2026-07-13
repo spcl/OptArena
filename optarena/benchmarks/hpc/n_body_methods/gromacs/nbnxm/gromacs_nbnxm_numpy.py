@@ -460,6 +460,10 @@ def initialize(
         table_size=table_size,
         include_exclusions=bool(include_exclusions),
     )
+    # The force / virial outputs are passed-in buffers (agentbench ABI): allocate them
+    # zeroed here so the harness has buffers for the in-place kernel.
+    f = np.zeros((x.shape[0], 3), dtype=np.float64)
+    fshift = np.zeros_like(shift_vec, dtype=np.float64)
     return (
         x,
         q,
@@ -475,6 +479,8 @@ def initialize(
         shift_vec,
         coulomb_table_f,
         tab_coul_scale,
+        f,
+        fshift,
     )
 
 
@@ -538,10 +544,16 @@ def gromacs(
     rcut,
     tab_coul_scale,
     min_distance_squared,
+    f,
+    fshift,
 ):
-    """Manifest-compatible GROMACS benchmark entry point."""
+    """Manifest-compatible GROMACS benchmark entry point. Writes the per-atom forces
+    (``f``) and per-shift virial (``fshift``) into the pre-allocated output buffers in
+    place (agentbench ABI: outputs are passed-in buffers, not a functional return).
+    The force computation itself is unchanged -- only the top-level return is copied
+    into the caller's buffers."""
 
-    return _nbnxm_4x4_qstab_lj_force_arrays(
+    f_res, fshift_res = _nbnxm_4x4_qstab_lj_force_arrays(
         x,
         q,
         atom_type,
@@ -560,6 +572,8 @@ def gromacs(
         tab_coul_scale,
         min_distance_squared,
     )
+    f[:] = f_res
+    fshift[:] = fshift_res
 
 
 def _nbnxm_4x4_qstab_lj_force_arrays(

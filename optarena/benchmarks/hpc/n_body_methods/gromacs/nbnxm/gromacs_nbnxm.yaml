@@ -62,6 +62,8 @@ init:
     cj_excl: (n_cj,)
     shift_vec: (n_shifts, 3)
     coulomb_table_f: (table_size + 1,)
+    f: (4 * n_clusters, 3)
+    fshift: (n_shifts, 3)
   dtypes:
     x: float64
     q: float64
@@ -76,6 +78,8 @@ init:
     cj_excl: uint16
     shift_vec: float64
     coulomb_table_f: float64
+    f: float64
+    fshift: float64
   input_args:
   - n_clusters
   - num_types
@@ -99,6 +103,8 @@ init:
   - shift_vec
   - coulomb_table_f
   - tab_coul_scale
+  - f
+  - fshift
   func_name: initialize
 array_args:
 - x
@@ -114,6 +120,8 @@ array_args:
 - cj_excl
 - shift_vec
 - coulomb_table_f
+- f
+- fshift
 output_args:
 - f
 - fshift

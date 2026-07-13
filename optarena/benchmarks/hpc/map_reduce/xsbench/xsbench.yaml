@@ -42,6 +42,7 @@ init:
     index_grid: (n_isotopes * n_gridpoints, n_isotopes)
     nuclide_grid: (n_isotopes, n_gridpoints, 6)
     mats: (n_materials, max_num_nucs)
+    out: (n_samples, 5)
   dtypes:
     p_energy_samples: float64
     mat_samples: int32
@@ -51,6 +52,7 @@ init:
     index_grid: int32
     nuclide_grid: float64
     mats: int32
+    out: float64
   input_args:
   - n_samples
   - n_isotopes
@@ -67,6 +69,7 @@ init:
   - index_grid
   - nuclide_grid
   - mats
+  - out
   func_name: initialize
 array_args:
 - p_energy_samples
@@ -77,6 +80,7 @@ array_args:
 - index_grid
 - nuclide_grid
 - mats
+- out
 output_args:
 - out
 taxonomy:
