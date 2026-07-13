@@ -40,10 +40,7 @@ setup(
     package_data={
         'optarena': [
             'config.yaml',
-            'schemas/*.yaml',
-            'taxonomy/*.yaml',
             'envs/*.yaml',
-            'hardware_info/theoretical/*.yaml',
         ],
     },
     entry_points={

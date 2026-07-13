@@ -1,4 +1,4 @@
-# OptArena benchmark manifest for rayleigh_ritz_rotation -- see README.md; schema optarena/schemas/bench_spec.schema.yaml.
+# OptArena benchmark manifest for rayleigh_ritz_rotation -- see README.md
 name: Rayleigh-Ritz subspace projection and rotation
 short_name: rayleigh_ritz_rotation
 kind: microkernel

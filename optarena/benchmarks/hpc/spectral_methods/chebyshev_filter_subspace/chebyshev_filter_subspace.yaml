@@ -1,4 +1,4 @@
-# OptArena benchmark manifest for chebyshev_filter_subspace -- see README.md; schema optarena/schemas/bench_spec.schema.yaml.
+# OptArena benchmark manifest for chebyshev_filter_subspace -- see README.md
 name: Chebyshev-filtered subspace iteration (CheFSI)
 short_name: chebyshev_filter_subspace
 func_name: kernel

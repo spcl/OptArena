@@ -1,4 +1,4 @@
-# OptArena benchmark manifest for ls3df_scf -- see README.md; schema optarena/schemas/bench_spec.schema.yaml.
+# OptArena benchmark manifest for ls3df_scf -- see README.md
 name: LS3DF fragment-DFT self-consistent field (divide-conquer-patch microapp)
 short_name: ls3df_scf
 func_name: kernel

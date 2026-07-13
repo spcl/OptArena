@@ -15,7 +15,6 @@
 # 6 GB of fp64 I+Q working set at order 7; the shared kDivM/star are one copy).
 # Order 9 uses the REAL star sparsity but a SYNTHETIC kDivM sparsity (SeisSol ships
 # no order-9 matrix XML) -- see seissol_tensor_contraction.py / REFERENCES.md.
-# Schema: optarena/schemas/bench_spec.schema.yaml
 name: SeisSol ADER-DG volume tensor contraction
 short_name: seissol_tensor_contraction
 kind: microkernel

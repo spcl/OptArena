@@ -8,7 +8,6 @@
 # tests/lulesh/lulesh_comp_kernels.f90 (~50 subroutines) and its driver
 # lulesh.f90 (mesh build + Sedov ICs + time loop). The authoritative LLNL/AWE
 # source is GPL-3.0-or-later (see baseline/NOTICE.md). Schema:
-# optarena/schemas/bench_spec.schema.json
 #
 # Size parameters:
 #   numElem -- number of hexahedral elements = edgeElems**3 (a PERFECT CUBE

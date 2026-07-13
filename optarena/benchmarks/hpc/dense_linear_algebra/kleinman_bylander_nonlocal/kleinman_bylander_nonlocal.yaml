@@ -1,4 +1,4 @@
-# OptArena benchmark manifest for kleinman_bylander_nonlocal -- see README.md; schema optarena/schemas/bench_spec.schema.yaml.
+# OptArena benchmark manifest for kleinman_bylander_nonlocal -- see README.md
 name: Kleinman-Bylander nonlocal pseudopotential application
 short_name: kleinman_bylander_nonlocal
 kind: microkernel

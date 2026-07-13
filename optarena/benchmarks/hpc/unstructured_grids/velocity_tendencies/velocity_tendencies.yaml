@@ -2,7 +2,7 @@
 # velocity-advection dwarf, an UNSTRUCTURED-grid stencil with indirect neighbour
 # gathers). Ported from dace-fortran's velocity_full.f90 and validated
 # bit-for-bit (rtol/atol 1e-10) against the Fortran reference the DaCe SDFG /
-# generated C++ are validated against. Schema: optarena/schemas/bench_spec.schema.json
+# generated C++ are validated against
 # Sizes: nproma = horizontal block width, nlev = vertical levels, nblks_{c,e,v}
 # = number of cell / edge / vertex blocks. initialize() builds an ICON-LIKE patch
 # (degree-correct, in-range connectivity; near-uniform-with-tail edge lengths from

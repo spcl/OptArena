@@ -9,7 +9,6 @@
 # (iord in {5,6,7}) in full, including the grid_type < 3 cubed-sphere edge
 # regions; iord >= 8 (ord8plus) is out of scope (see fv3_xppm_numpy.py).
 #
-# Schema: optarena/schemas/bench_spec.schema.yaml
 # Sizes: ni/nj/nk = interior cubed-sphere tile extents (x, y, z). The padded
 # x-extent is nx = nhalo + ni + nhalo with nhalo = 3.
 name: FV3 x-PPM Advective Flux (xppm)

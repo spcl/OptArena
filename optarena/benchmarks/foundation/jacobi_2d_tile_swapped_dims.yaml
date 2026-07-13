@@ -1,5 +1,4 @@
 # OptArena benchmark manifest -- adding a benchmark: see README.md.
-# Schema: optarena/schemas/bench_spec.schema.yaml
 name: Adversarial jacobi_2d_tile_swapped_dims
 kind: microkernel
 level: 1

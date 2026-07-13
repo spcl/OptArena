@@ -1,4 +1,4 @@
-# OptArena benchmark manifest for poisson_cg_3d -- see README.md; schema optarena/schemas/bench_spec.schema.yaml.
+# OptArena benchmark manifest for poisson_cg_3d -- see README.md
 name: Conjugate-gradient Poisson solver (DFT Hartree potential)
 short_name: poisson_cg_3d
 func_name: kernel

@@ -1,5 +1,4 @@
 # OptArena benchmark manifest -- adding a benchmark: see README.md.
-# Schema: optarena/schemas/bench_spec.schema.yaml
 name: 3D Tensor Permutation
 short_name: permute3d
 kind: microkernel

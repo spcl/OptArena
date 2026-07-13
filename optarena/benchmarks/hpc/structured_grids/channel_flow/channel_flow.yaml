@@ -1,5 +1,4 @@
 # OptArena benchmark manifest -- adding a benchmark: see README.md.
-# Schema: optarena/schemas/bench_spec.schema.yaml
 name: Channel Flow
 short_name: chanflow
 kind: microapp

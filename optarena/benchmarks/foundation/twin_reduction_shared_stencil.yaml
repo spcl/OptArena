@@ -1,5 +1,4 @@
 # OptArena benchmark manifest -- adding a benchmark: see README.md.
-# Schema: optarena/schemas/bench_spec.schema.yaml
 name: Canonicalize twin_reduction_shared_stencil
 kind: microkernel
 level: 1

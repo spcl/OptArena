@@ -21,7 +21,6 @@
 # noncolin) is DERIVED inside initialize(), so any sampled (sizes, config) is a
 # valid problem.
 #
-# Schema: optarena/schemas/bench_spec.schema.yaml
 # Sizes: ngrid = cubic FFT grid edge, nbnd = occupied orbitals, m = trial bands.
 name: QE Exact Exchange k-point (vexx_k)
 short_name: vexx_k

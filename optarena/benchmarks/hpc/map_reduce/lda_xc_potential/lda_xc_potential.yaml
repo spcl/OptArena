@@ -1,4 +1,4 @@
-# OptArena benchmark manifest for lda_xc_potential -- see README.md; schema optarena/schemas/bench_spec.schema.yaml.
+# OptArena benchmark manifest for lda_xc_potential -- see README.md
 name: LDA exchange-correlation potential (Slater + Perdew-Zunger)
 short_name: lda_xc_potential
 kind: microkernel

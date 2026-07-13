@@ -227,9 +227,8 @@ SUPPORTED_SPARSE_FORMATS = frozenset({
 
 #: Closed set of HPC dwarf tags (Berkeley "13 dwarfs"). A kernel carries
 #: EXACTLY ONE -- the single dominant dwarf by runtime/FLOP majority;
-#: secondary dwarfs live in ``notes``, not here. Documented in
-#: ``optarena/taxonomy/dwarfs.yaml`` and mirrored in the bench_spec JSON
-#: schema. :func:`validate_dwarf` rejects any off-vocabulary value.
+#: secondary dwarfs live in ``notes``, not here. This frozenset is the single
+#: source of truth; :func:`validate_dwarf` rejects any off-vocabulary value.
 SUPPORTED_DWARFS = frozenset({
     "dense_linear_algebra",
     "sparse_linear_algebra",
@@ -246,9 +245,9 @@ SUPPORTED_DWARFS = frozenset({
     "finite_state_machine",
 })
 
-#: Top-level keys allowed in a co-located manifest -- a mirror of the properties
-#: in optarena/schemas/bench_spec.schema.yaml. :meth:`BenchSpec.from_yaml` rejects
-#: anything else (typo guard); keep the two in sync.
+#: Top-level keys allowed in a co-located manifest -- the single source of truth
+#: for the manifest schema. :meth:`BenchSpec.from_yaml` rejects anything else
+#: (typo guard).
 KNOWN_MANIFEST_KEYS = frozenset({
     "name",
     "short_name",
@@ -812,7 +811,7 @@ class BenchSpec:
                 near = difflib.get_close_matches(key, KNOWN_MANIFEST_KEYS, n=1)
                 hints.append(repr(key) + (f" (did you mean {near[0]!r}?)" if near else ""))
             raise ValueError(f"{source}: unknown manifest field(s): {', '.join(hints)}. "
-                             f"Allowed keys mirror optarena/schemas/bench_spec.schema.yaml.")
+                             f"Allowed keys: {', '.join(sorted(KNOWN_MANIFEST_KEYS))}.")
         # Identity that the manifest's LOCATION already states need not be
         # repeated: ``relative_path`` is the folder under ``benchmarks/`` that
         # holds this manifest, and ``module_name`` defaults to the file stem

@@ -1,5 +1,4 @@
 # OptArena benchmark manifest -- adding a benchmark: see README.md.
-# Schema: optarena/schemas/bench_spec.schema.yaml
 name: ICON unstructured/semi-structured gather
 short_name: icon_gather
 kind: microkernel

@@ -1,4 +1,4 @@
-# OptArena benchmark manifest for laplacian_stencil_3d -- see README.md; schema optarena/schemas/bench_spec.schema.yaml.
+# OptArena benchmark manifest for laplacian_stencil_3d -- see README.md
 name: High-order 3-D Laplacian stencil (DFT kinetic operator)
 short_name: laplacian_stencil_3d
 kind: microkernel

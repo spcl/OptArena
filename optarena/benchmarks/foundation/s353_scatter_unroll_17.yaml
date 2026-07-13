@@ -1,5 +1,4 @@
 # OptArena benchmark manifest -- adding a benchmark: see README.md.
-# Schema: optarena/schemas/bench_spec.schema.yaml
 name: Adversarial s353_scatter_unroll_17
 kind: microkernel
 level: 1

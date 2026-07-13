@@ -1,5 +1,4 @@
 # OptArena benchmark manifest -- adding a benchmark: see README.md.
-# Schema: optarena/schemas/bench_spec.schema.yaml
 name: Daubechies-4 DWT 2D (db2)
 short_name: daubechies_dwt2d
 kind: microapp
