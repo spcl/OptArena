@@ -90,7 +90,7 @@ With `mean` shaped `(M,)`, `data -= mean` parses. ✅
 (A weaker, more local desugar — writing `data -= mean[None, :]` — does **not**
 help here, because the operand's free `__rd0_d1` dim is the actual blocker.)
 
-### 5. durbin — negative-stride slice  ⚠️ STILL OPEN (desugar applied, deeper limit remains)
+### 5. durbin — dynamic reversed recurrence  ⚠️ STILL OPEN (flip desugar landed; dynamic-slice View remains)
 
 ```python
 alpha = -(r[k] + np.dot(r[:k][::-1], y[:k])) / beta   # durbin_dace.py:18
@@ -102,18 +102,41 @@ Please use a Map scope to express this operation.
 ```
 DaCe subscripts reject a negative step.
 
-**Desugar applied:** `x[::-1]` → `np.flip(x)` (`_DesugarReverseSlice`). This is
-the correct general transform (helps any static-length reverse) and the two
-`[::-1]` are gone. But durbin still does **not** build: its reverses are over a
-*dynamic* length `k` inside a sequential recurrence
-(`np.dot(np.flip(r[:k]), y[:k])`), and dace can neither view-reverse a dynamic
-slice into a reduction (`InvalidSDFGNodeError: Ambiguous or invalid edge
-to/from a View access node`) nor materialise a dynamic-size temp
-(`np.flip(r[:k]).copy()` → `_add_transient_data: NotImplementedError`).
-Additionally `y[:k] += alpha * y[:k][::-1]` reads the *old* reversed self while
-writing, so a naive scalarised copy loop would be a WAR miscompile. A real fix
-needs a Map-scope reverse over a fixed-size (`[N]`) workspace with an explicit
-snapshot — a kernel-shaped rewrite, not a general desugar. **Left open.**
+**Desugars applied (both general, both corpus-safe — 259 dace-emit tests green):**
+1. `_DesugarReverseSlice` — `x[::-1]` → `np.flip(x)` (helps any static reverse).
+2. `_MaterializeDynamicFlip` — each *dynamic-length* `np.flip(base[lo:hi])` (a
+   loop-var `hi`) is snapshotted into a fresh fixed-`[N]` reversing-copy workspace
+   by an explicit copy loop placed immediately before the consuming statement, and
+   the flip is replaced by a plain dynamic slice of that workspace. This is exactly
+   the "fixed-size workspace with an explicit snapshot" the old note called for: it
+   removes the reversed-View edge AND the `y[:k] += alpha*y[:k][::-1]` write-after-read
+   hazard for free (the copy captures the old values before the augassign writes).
+
+The emitted durbin body is now flip-free:
+```python
+for __fi0 in range(k):
+    __flip0[__fi0] = r[k - 1 - __fi0]
+alpha = -(r[k] + np.dot(__flip0[0:k], y[:k])) / beta
+for __fi1 in range(k):
+    __flip1[__fi1] = y[k - 1 - __fi1]
+y[:k] += alpha * __flip1[0:k]
+```
+
+**Remaining blocker (the true error, captured 2026-07-13):** durbin still does not
+build — `InvalidSDFGNodeError: Ambiguous or invalid edge to/from a View access node`,
+now raised inside the **simplify** pass, not the initial build. The cause is no
+longer the flip but the *dynamic-length slices themselves*: `__flip0[0:k]` / `y[:k]`
+(with `k` a loop variable) are runtime-extent Views, and dace rejects a dynamic View
+feeding a reduction (`np.dot(...)`) or a dynamic-slice augassign (`y[:k] += ...`).
+
+**Next step (a second general desugar, not yet written):** lower a dynamic-length
+slice that feeds a reduction / augassign to an explicit scalar loop, so no dynamic
+View is created —
+`np.dot(a[0:k], b[0:k])` → `acc = 0.0; for i in range(k): acc += a[i]*b[i]`, and
+`y[:k] += c * w[0:k]` → `for i in range(k): y[i] += c * w[i]`. Fire only on a
+dynamic (loop-var) bound, exactly like `_MaterializeDynamicFlip`, so static/symbolic
+slices are untouched. **Flip desugar landed; the dynamic-slice→scalar-loop desugar
+is left open.**
 
 ### 6. seissol_batched_gemm — free symbol `NQ` not wired + canonicalize CMake error  ⚠️ STILL OPEN
 

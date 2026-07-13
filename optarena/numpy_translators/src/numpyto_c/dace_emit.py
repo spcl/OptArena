@@ -225,6 +225,134 @@ class _DesugarReverseSlice(ast.NodeTransformer):
         return node
 
 
+class _FlipReplacer(ast.NodeTransformer):
+    """Replace each materialisable ``np.flip(base[lo:hi])`` inside ONE statement with
+    a reversing-copy workspace slice, appending the copy loop to ``prelude`` (so the
+    owner can splice it in front of the statement). Delegates the match/build to the
+    owning :class:`_MaterializeDynamicFlip`."""
+
+    def __init__(self, owner: "_MaterializeDynamicFlip", prelude: List[ast.stmt]):
+        self.owner = owner
+        self.prelude = prelude
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)  # innermost flips first (their copy loop precedes the outer's)
+        spec = self.owner.match_dynamic_flip(node)
+        if spec is None:
+            return node
+        return self.owner.materialize(spec, self.prelude)
+
+
+class _MaterializeDynamicFlip(ast.NodeTransformer):
+    """dace rejects ``np.flip`` over a *dynamic-length* slice: the reversed slice is a
+    View access node, and a View feeding a reduction (``np.dot(np.flip(r[:k]), y[:k])``)
+    or a self-referential update (``y[:k] += alpha * np.flip(y[:k])``) is an
+    ``InvalidSDFGNodeError: Ambiguous or invalid edge to/from a View access node``. The
+    dynamic dot / dynamic-slice augassign themselves lower fine -- only the reversed View
+    is the blocker (durbin, the Levinson-Durbin Toeplitz solve).
+
+    Desugar: for each ``np.flip(base[lo:hi])`` whose length is dynamic (``hi`` is not a
+    pure symbol/constant, i.e. a loop variable), snapshot the reverse into a fresh
+    fixed-``[extent]`` workspace via an explicit copy loop placed IMMEDIATELY BEFORE the
+    consuming statement, then replace the flip with a plain (dace-lowerable) dynamic slice
+    of that workspace:
+
+        for __fi in range(hi - lo):        # reversed(base[lo:hi])[i] == base[hi-1-i]
+            __flip[__fi] = base[hi - 1 - __fi]
+        ... __flip[0:hi - lo] ...          # in place of np.flip(base[lo:hi])
+
+    The workspace is a real transient (not a View), so no View edge crosses into the
+    reduction. The snapshot ALSO fixes the write-after-read hazard of the self-update for
+    free: ``y[:k] += alpha * np.flip(y[:k])`` reads the OLD ``y`` through the workspace,
+    which the copy captured before the augassign mutates ``y``.
+
+    Only fires on a 1-D ``base`` that is a declared array (so the extent is known and the
+    axis-0 reverse is unambiguous) with a dynamic upper bound; a static/whole-array flip
+    (``np.flip(x)``, ``np.flip(x[:5])``, ``np.flip(x[:N])``) lowers in dace as-is and is
+    left untouched."""
+
+    def __init__(self, arr_shapes: Dict[str, List[str]], arr_dtypes: Dict[str, str], symbols: set):
+        self.arr_shapes = arr_shapes
+        self.arr_dtypes = arr_dtypes
+        self.symbols = set(symbols)
+        self.ctr = 0
+        self.workspaces: Dict[str, tuple] = {}  # ws name -> (extent token, dtype expr)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        node.body = self._process_body(node.body)
+        if not self.workspaces:
+            return node
+        decls = [
+            ast.parse(f"{ws} = np.zeros(({ext},), dtype={dt})").body[0] for ws, (ext, dt) in self.workspaces.items()
+        ]
+        at = 1 if (node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)
+                   and isinstance(node.body[0].value.value, str)) else 0
+        node.body[at:at] = decls
+        ast.fix_missing_locations(node)
+        return node
+
+    def visit_For(self, node: ast.For):
+        node.body = self._process_body(node.body)
+        node.orelse = self._process_body(node.orelse)
+        return node
+
+    def visit_While(self, node: ast.While):
+        node.body = self._process_body(node.body)
+        node.orelse = self._process_body(node.orelse)
+        return node
+
+    def visit_If(self, node: ast.If):
+        node.body = self._process_body(node.body)
+        node.orelse = self._process_body(node.orelse)
+        return node
+
+    def _process_body(self, stmts: List[ast.stmt]) -> List[ast.stmt]:
+        out: List[ast.stmt] = []
+        for stmt in stmts:
+            if isinstance(stmt, (ast.For, ast.While, ast.If)):
+                out.append(self.visit(stmt))  # recurse: flips inside nested bodies hoist there
+                continue
+            prelude: List[ast.stmt] = []
+            new_stmt = _FlipReplacer(self, prelude).visit(stmt)
+            out.extend(prelude)
+            out.append(new_stmt)
+        return out
+
+    def match_dynamic_flip(self, node: ast.Call):
+        """Return ``(base, lo, hi)`` for a materialisable dynamic-length ``np.flip``, else None."""
+        if not (isinstance(node.func, ast.Attribute) and node.func.attr == "flip" and isinstance(
+                node.func.value, ast.Name) and node.func.value.id in ("np", "numpy") and len(node.args) == 1):
+            return None
+        for kw in node.keywords:  # only a bare / axis=0 flip is an unambiguous axis-0 reverse
+            if not (kw.arg == "axis" and isinstance(kw.value, ast.Constant) and kw.value.value == 0):
+                return None
+        arg = node.args[0]
+        if not (isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name)
+                and isinstance(arg.slice, ast.Slice)):
+            return None
+        base = arg.value.id
+        if base not in self.arr_shapes or len(self.arr_shapes[base]) != 1 or arg.slice.step is not None:
+            return None
+        hi = arg.slice.upper
+        # A whole-array or static-length reverse (``hi`` absent, or a pure symbol/const)
+        # lowers in dace on its own; only a runtime-length reverse (``hi`` a loop var) needs
+        # materialising.
+        if hi is None or _is_symbol_expr(hi, self.symbols):
+            return None
+        return base, arg.slice.lower, hi
+
+    def materialize(self, spec, prelude: List[ast.stmt]) -> ast.AST:
+        base, lo, hi = spec
+        ws, fi = f"__optarena_flip{self.ctr}", f"__optarena_fi{self.ctr}"
+        self.ctr += 1
+        self.workspaces[ws] = (self.arr_shapes[base][0], self.arr_dtypes.get(base, "dc_float"))
+        hi_src = ast.unparse(hi)
+        length = hi_src if lo is None else f"({hi_src}) - ({ast.unparse(lo)})"
+        loop = f"for {fi} in range({length}):\n    {ws}[{fi}] = {base}[({hi_src}) - 1 - {fi}]"
+        prelude.append(ast.parse(loop).body[0])
+        return ast.parse(f"{ws}[0:{length}]", mode="eval").body
+
+
 class _DesugarBroadcastAugAssign(ast.NodeTransformer):
     """An in-place augmented assign that BROADCASTS a lower-rank operand into a
     whole array (``data -= mean``: ``data`` is ``[N, M]``, ``mean`` is ``[M]``)
@@ -528,6 +656,14 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     # desugar, which lowers np.flip BACK to ``x[::-1]`` for pythran.
     fn_ast = _DesugarOuter().visit(fn_ast)
     fn_ast = _DesugarReverseSlice().visit(fn_ast)
+    # dace rejects a reversed *dynamic-length* slice (a View edge into a reduction / self
+    # update): ``np.flip(r[:k])`` inside the durbin recurrence. Snapshot each such flip
+    # into a fixed-[extent] reversing-copy workspace right before its use, then reference a
+    # plain dynamic slice of that workspace -- which dace lowers, and which also removes the
+    # self-update's write-after-read hazard (the copy captures the old values).
+    arr_dtypes = {a.name: _dace_dtype(a.dtype) for a in kir.arrays}
+    fn_ast = _MaterializeDynamicFlip(arr_shapes, arr_dtypes, set(symbol_names)).visit(fn_ast)
+    ast.fix_missing_locations(fn_ast)
     # dace cannot codegen a chained slice assignment (``a[s1] = a[s2] = rhs``):
     # evaluate rhs into a temp, then assign each target (covariance symmetric fill).
     fn_ast = _DesugarChainedAssign().visit(fn_ast)
