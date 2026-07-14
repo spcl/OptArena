@@ -13,8 +13,8 @@ harness supplies), so anything here is linkable as `-l<name>`. The base image is
 
 Scope: CPU numeric libraries for the 13 Berkeley dwarfs (dense/sparse linear algebra,
 spectral, structured/unstructured grids, N-body, tensor). GPU math libraries (cuBLAS,
-cuTENSOR, rocBLAS, …) ship with the CUDA/ROCm toolkits in `nvidia.def` / `amd.def` and
-are tracked separately in `optarena/envs/toolset.yaml`.
+cuTENSOR, rocBLAS, …) ship with the CUDA/ROCm toolkits in the `HW=nvidia` / `HW=amd`
+build of `optarena.Dockerfile` and are tracked separately in `optarena/envs/toolset.yaml`.
 
 Legend: **[have]** already installed · **[add-apt]** apt, add to the images ·
 **[add-src]** build from source (not packaged) · **[opt]** optional/heavy, listed not
@@ -132,8 +132,9 @@ submission in-container. All from apt on the same shared install line.
 
 ## Concrete change to the images
 
-Applied to **`cpu.def`, `nvidia.def`, `amd.def`** and their `.Dockerfile` twins (identical in
-all; `judge.def` inherits `cpu.sif`). Added to the single apt install line:
+Applied to the unified **`optarena.Dockerfile`** -- one apt install line shared by every
+`HW=cpu|nvidia|amd` variant -- and the kept **`cpu.def`** Apptainer recipe (`judge.def`
+inherits `cpu.sif`). Added to the single apt install line:
 
 ```
 liblapacke-dev libomp-dev libtbb-dev libsleef-dev libxsimd-dev libhwy-dev
@@ -147,10 +148,9 @@ Then HPTT is built from source in a post-apt step (`sh /build-hptt.sh`, the copi
 
 ## Notes / follow-ups
 
-- **Deduplicate**: the apt list is copy-pasted across `cpu.def`/`nvidia.def`/`amd.def`.
-  A shared `containers/install-numeric-libs.sh` (`%files`-copied, run in `%post`) would
-  make *this file's* list the single source of truth. Deferred (a build-structure change,
-  not build-verifiable in this dev env).
+- **Deduplicate**: DONE -- the per-hardware recipes were unified into a single
+  `optarena.Dockerfile` (build arg `HW=cpu|nvidia|amd`), so the apt list lives in exactly
+  one place. This file remains the human-readable rationale for that list.
 - **Advertise to the agent**: the prompt/ABI doc does not currently tell the agent which
   libraries are present, so it will not link them. Add an "available libraries" section to
   the task prompt (or `abi_contract.md`) enumerating this list once installed.

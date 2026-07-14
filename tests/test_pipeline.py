@@ -6,7 +6,7 @@ assignment is static. Every test fakes the agent + the judge -- no LLM, no compi
 import optarena.agent_bench.pipeline as pipeline
 from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.runner import CallPoint, RunRow
-from optarena.agent_bench.scoring import Score, VerifyResult
+from optarena.agent_bench.scoring import Score
 from optarena.agent_bench.task import Task
 
 
@@ -79,31 +79,17 @@ def test_score_from_oracle_drops_extra_keys():
 
 def test_merge_overwrites_proxy_with_authoritative():
     sc = pipeline.score_from_oracle(make_oracle_response(speedup=2.0, native_ns=200))
-    row = pipeline.merge_graded_row(make_think_row(speedup=9.9), (sc, None))
+    row = pipeline.merge_graded_row(make_think_row(speedup=9.9), sc)
     assert row.speedup == 2.0 and row.native_ns == 200 and row.baseline_ns == 400  # judge numbers
     assert row.tokens == 1234 and row.prompt == "the-prompt" and row.rounds == 1  # provenance survives
     assert row.trajectory and row.trajectory[0].speedup == 9.9  # proxy trajectory kept verbatim
     assert row.correct and row.status == "ok"
 
 
-def test_merge_reverify_failure_downgrades_to_unverified():
-    sc = pipeline.score_from_oracle(make_oracle_response(correct=True))
-    vr = VerifyResult(False, False, True, True, True, False, "fresh-seed-mismatch")
-    row = pipeline.merge_graded_row(make_think_row(), (sc, vr))
-    assert row.correct is False and row.status == "unverified"
-    assert "judge re-verify failed" in row.detail and "fresh-seed-mismatch" in row.detail
-
-
 def test_gradable():
     assert pipeline.gradable(a_submission())  # has source
     assert pipeline.gradable(Submission(language="c", library="/tmp/k.so"))  # has library
     assert not pipeline.gradable(None)  # agent produced nothing to time
-
-
-def test_verify_settings_keys_are_independent_verify_kwargs():
-    # service._record calls independent_verify(**verify_settings()); guard the key set so the
-    # service's harden gate cannot drift from the pipeline's re-verify contract.
-    assert set(pipeline.verify_settings()) == {"reverify_seed", "dual_oracle", "suspect_above"}
 
 
 # ---- static endpoint assignment ---------------------------------------------

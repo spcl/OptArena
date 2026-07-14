@@ -6,14 +6,15 @@
 pip install -e .                                  # optarena + the numpyto_* translators
 pip install -r requirements/cpu.txt               # numeric deps for the hardware target
 pip install -r requirements/optional.txt          # apache-tvm + mpi4py baselines (optional; see Platforms)
-pip install -r requirements/harbor.txt            # harbor + udocker (only to run the benchmark)
+pip install -r requirements/harbor.txt            # harbor / container tooling (only to run the benchmark)
 optarena-install-apptainer                         # Apptainer, unprivileged, into ~/.local (optional)
 ```
 
-Everything is pip-installable except Apptainer itself (a Go binary). `udocker` is
-pip-installable; `optarena-install-apptainer` runs Apptainer's official unprivileged
-installer for the rootless case. There is no pip package that bundles the Apptainer
-binary (`spython` only wraps the CLI).
+Everything is pip-installable except the container runtimes themselves. Apptainer is a
+Go binary — `optarena-install-apptainer` runs Apptainer's official unprivileged
+installer for the rootless case; `podman` is the rootless alternative, installed as a
+system package. There is no pip package that bundles the Apptainer binary (`spython`
+only wraps the CLI).
 
 ## Platforms (Linux / macOS / WSL2)
 
@@ -74,8 +75,8 @@ The norm on clusters is **build off-cluster, run on-cluster**:
   is opt-in and skips when this tooling is absent — matching HPC reality.
 - **Running** needs none of that. Apptainer/Singularity is usually preinstalled
   (`module load apptainer`) in setuid/userns mode, so `apptainer run image.sif` needs
-  no `uidmap` and no sudo. Where it is absent, `udocker` (pip, pure user space) runs
-  the image with no admin support at all. Assume Apptainer modules, GPU drivers, MPI,
+  no `uidmap` and no sudo. Where it is absent, rootless `podman` runs the image with no
+  admin support at all. Assume Apptainer modules, GPU drivers, MPI,
   a shared FS, and Slurm — not root or package installs.
 
 ## MPI / multi-node
@@ -98,20 +99,20 @@ are wired.
   never resolves to a stray system OpenMPI.
 - **Multi-node (Alps / Ault).** Harbor has no native multi-node, so this is
   native-harness + Slurm, and the interconnect / launcher / MPI-replacement is
-  **site responsibility**. Build the XaaS comm-fwk[.cxi] → MPICH layer, `enroot import`
-  the image to SquashFS, and launch under the site MPI:
+  **site responsibility**. Build the XaaS comm-fwk[.cxi] → MPICH layer into the image —
+  either backend, the apptainer SIF or the podman OCI — and launch it under the site MPI
+  with the CXI hook enabled on Alps:
 
   ```
-  apptainer build optarena-cpu.sif containers/cpu.def   # or: podman pull …
-  enroot import -x mount -o optarena-mpi.sqsh podman://…
-  # env.toml:  image = "optarena-mpi.sqsh"
+  # env.toml:  image = "optarena-cpu.sif"      # the apptainer SIF, or the podman OCI tag
   #            [annotations] com.hooks.cxi.enabled = "true"   # Slingshot/CXI on Alps
-  srun --mpi=pmi2 -A <account> --nodes=<n> --ntasks=<R> --environment=env.toml ./bench <in> <out>
   ```
 
-  `--environment=<toml>` + the CXI hook inject the site libfabric/CXI provider into the
-  MPICH image at launch; because MPICH is ABI-compatible, the same `./bench` binary runs
-  unchanged. `mpi.launcher` selects `srun` (cluster) vs `mpirun` (local apptainer/udocker).
+  The CXI hook injects the site libfabric/CXI provider into the MPICH image at launch;
+  because MPICH is ABI-compatible, the same `./bench` binary runs unchanged. Locally,
+  `mpi.launcher` runs `mpirun` inside the apptainer/podman sandbox; on the cluster the
+  node allocation and the `srun`/site-MPI launch are external job submission, not run
+  from inside the repo — see **docs/LAUNCH.md**.
 - **Device residency — per array.** The agent places **each array on the host or the GPU
   independently** (a `location: "host"|"device"` on the array's distribution entry; `mpi.residency`
   is the run-wide default). The harness always scatters on the host, then moves each **device**

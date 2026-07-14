@@ -69,9 +69,7 @@ def test_framework_declares_optimizer_status():
 def test_tvm_and_triton_are_optimizers():
     # Class-level flag (no tvm/triton install needed to read it).
     from optarena.infrastructure.triton_framework import TritonFramework
-    from optarena.infrastructure.tvm_cpu_framework import TVMCPUFramework
     from optarena.infrastructure.tvm_framework import TVMFramework
-    assert TVMCPUFramework.is_optimizer is True
     assert TVMFramework.is_optimizer is True
     assert TritonFramework.is_optimizer is True
 
@@ -84,10 +82,12 @@ def test_dace_score_empty_series_raises_descriptive():
     from optarena.infrastructure.dace_framework import DaceFramework
 
     class EmptyMeasureFramework(DaceFramework):
+
         def __init__(self):
             pass
 
         def build_call(self, bench, variant, bdata):
+
             class Plan:
                 run = staticmethod(lambda: None)
                 before_each = staticmethod(lambda: None)
@@ -105,7 +105,7 @@ def test_dace_score_empty_series_raises_descriptive():
 
 
 def test_metaschedule_trials_delegates_to_budget(monkeypatch):
-    from optarena.infrastructure.tvm_cpu_framework import metaschedule_trials
+    from optarena.infrastructure.tvm_framework import metaschedule_trials
     monkeypatch.setenv("OPTARENA_OPTIMIZE_BUDGET", "full")
     assert metaschedule_trials() == SCALES["full"][0]
     monkeypatch.setenv("OPTARENA_OPTIMIZE_BUDGET", "small")

@@ -24,7 +24,7 @@ import subprocess
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DOCKERFILE = "containers/cpu.Dockerfile"
+DOCKERFILE = "containers/optarena.Dockerfile"
 IMAGE = "optarena:test-cpu"
 
 pytestmark = pytest.mark.skipif(

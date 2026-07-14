@@ -1,39 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-import argparse
 import numpy as np
-import sqlite3
-
-from typing import Union
-
-
-# From https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
-def str2bool(v: Union[str, bool]) -> bool:
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
-
-
-# Taken from shttps://www.sqlitetutorial.net/sqlite-python/create-tables/
-def create_connection(db_file) -> sqlite3.Connection:
-    """ create a database connection to the SQLite database
-        specified by db_file
-    :param db_file: database file
-    :return: Connection object or None
-    """
-    conn = None
-    try:
-        conn = sqlite3.connect(db_file)
-        return conn
-    except sqlite3.Error as e:
-        print(e)
-
-    return conn
 
 
 def cpu_model() -> str:

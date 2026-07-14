@@ -4,7 +4,6 @@
 # which self-skips when harbor is absent). The task GENERATOR + in-container grader
 # carry no harbor dependency.
 harbor
-# Local, sudoless container runtime (runtime.backend = udocker) for running the
-# OptArena images without Harbor / Docker / root. Apptainer is not pip-installable
-# (Go binary) -- install it sudoless with `optarena-install-apptainer`.
-udocker
+# The container runtimes (runtime.backend = apptainer|podman) are NOT pip-installable:
+# apptainer is a Go binary (install it sudoless with `optarena-install-apptainer`) and
+# podman is a system package -- both are provided at the system/site level, not here.

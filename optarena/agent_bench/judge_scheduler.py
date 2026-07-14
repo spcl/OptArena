@@ -15,7 +15,6 @@ override works with no ``config.yaml`` entry):
 * ``judge.cpu_slots_per_node`` -- CPU slots (default: 1 when no GPU, else 0).
 """
 from dataclasses import dataclass
-from typing import Optional
 
 from optarena import config
 
@@ -26,19 +25,6 @@ class DeviceSlot:
 
     kind: str  # "gpu" | "cpu"
     index: int  # GPU ordinal (kind == "gpu"), else a CPU slot ordinal
-    node: Optional[str] = None  # always None (single-node judge); kept for the slot label
-
-    @property
-    def is_local(self) -> bool:
-        return self.node is None
-
-    @property
-    def label(self) -> str:
-        return f"{self.node or 'local'}:{self.kind}{self.index}"
-
-
-#: Shared frozen fallback slot (a pool with no configured device runs one local CPU slot).
-LOCAL_CPU_SLOT = DeviceSlot("cpu", 0, None)
 
 
 def local_gpu_count() -> int:

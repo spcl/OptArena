@@ -25,30 +25,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from optarena import config
 from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.runner import RunRow, solve_task, status_of
-from optarena.agent_bench.scoring import Score, VerifyResult
+from optarena.agent_bench.scoring import Score
 from optarena.agent_bench.task import Task
 from optarena.agent_bench.tools import JudgeClient
 
-#: A think stage produces this: the agent's self-graded row plus the best submission it
-#: reached (``None`` when the agent produced nothing -- an agent error / empty attempt).
-Candidate = Tuple[RunRow, Optional[Submission]]
-#: A grade stage produces this: the judge's authoritative score and (unused over HTTP, the
-#: judge owns re-verification server-side) the re-verify outcome.
-Graded = Tuple[Score, Optional[VerifyResult]]
-
 #: The judge endpoint when none is configured (a co-located single-box judge service).
 DEFAULT_JUDGE_URL = "http://127.0.0.1:8800"
-
-
-def verify_settings() -> Dict[str, Any]:
-    """The judge re-verify knobs, from the same config keys the HTTP judge's harden gate
-    reads (:meth:`optarena.agent_bench.service.JudgeHandler._record`), so the service's
-    re-verification is configured from ONE place."""
-    return {
-        "reverify_seed": int(config.get("seeds.reverify", 777)),
-        "dual_oracle": bool(config.get("record.dual_oracle", True)),
-        "suspect_above": float(config.get("record.speedup_suspect_above", 1000.0)),
-    }
 
 
 def gradable(submission: Optional[Submission]) -> bool:
@@ -57,22 +39,15 @@ def gradable(submission: Optional[Submission]) -> bool:
     return submission is not None and (submission.source is not None or submission.library is not None)
 
 
-def merge_graded_row(think_row: RunRow, graded: Graded) -> RunRow:
-    """Fold the judge's authoritative :class:`Graded` onto the agent's think row: the timed
+def merge_graded_row(think_row: RunRow, result: Score) -> RunRow:
+    """Fold the judge's authoritative :class:`Score` onto the agent's think row: the timed
     numbers, correctness, and per-reference detail become the judge's, while the agent-side
     provenance (tokens, trajectory, prompt, rounds, environment, ids) is preserved from the
-    think row. A submission that scored correct but FAILED a re-verify (when the judge returns
-    one) is downgraded to not-correct with ``status="unverified"``."""
-    result, vr = graded
-    reverify_failed = vr is not None and not vr.ok
-    correct = result.correct and not reverify_failed
-    status = "unverified" if (result.correct and reverify_failed) else status_of(result)
-    detail = result.detail
-    if reverify_failed:
-        detail = (detail + "; " if detail else "") + f"judge re-verify failed: {vr.reason}"
+    think row. Re-verification is the judge's own (server-side harden gate), so the client
+    takes the judge's Score verbatim."""
     return replace(think_row,
-                   status=status,
-                   correct=correct,
+                   status=status_of(result),
+                   correct=result.correct,
                    max_rel_error=result.max_rel_error,
                    native_ns=result.native_ns,
                    baseline_ns=result.baseline_ns,
@@ -84,7 +59,7 @@ def merge_graded_row(think_row: RunRow, graded: Graded) -> RunRow:
                    baselines=dict(result.baselines),
                    speedups=dict(result.speedups),
                    oracle=result.oracle,
-                   detail=detail)
+                   detail=result.detail)
 
 
 def error_row(exc: Any) -> RunRow:
@@ -149,11 +124,11 @@ def score_from_oracle(resp: Dict[str, Any]) -> Score:
     return Score(**{k: v for k, v in resp.items() if k in keep})
 
 
-def http_grade(judge_url: str, submission: Submission, task: Task, *, preset: str) -> Graded:
-    """The authoritative grade: POST the submission to the assigned judge and fold its Score.
-    The judge owns re-verification (its harden gate), so no client-side re-verify is returned."""
+def http_grade(judge_url: str, submission: Submission, task: Task, *, preset: str) -> Score:
+    """The authoritative grade: POST the submission to the assigned judge and return its Score.
+    The judge owns re-verification (its harden gate), so there is no client-side re-verify."""
     resp = JudgeClient(judge_url).submit(submission, task.kernel, preset=preset)
-    return score_from_oracle(resp), None
+    return score_from_oracle(resp)
 
 
 def run_static(agent_builder: Callable[[Optional[str]], Any],

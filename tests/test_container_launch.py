@@ -41,7 +41,9 @@ COMPOSE = REPO / "containers" / "agentbench.compose.yml"
 # --------------------------------------------------------------------------- #
 def test_launch_script_is_sudoless():
     text = SCRIPT.read_text()
-    assert "apptainer exec" in text, "launch script must support Apptainer"
+    # The launch argv is data-driven from container_backends.txt (backend + verb + ...), so the
+    # runtime command is `exec apptainer <verb> ...`, not a literal "apptainer exec" in the script.
+    assert "apptainer" in text, "launch script must support the Apptainer backend"
     assert "sudo" not in text, "Apptainer launch must never require sudo"
 
 

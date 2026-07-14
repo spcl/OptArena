@@ -25,10 +25,10 @@ import tvm
 from tvm.s_tir.meta_schedule import tune_tir
 from tvm.s_tir.meta_schedule.tir_integration import compile_tir
 
-from optarena.infrastructure.tvm_cpu_framework import metaschedule_trials
+from optarena.infrastructure.tvm_framework import metaschedule_trials
 
 # Active TVM backend ("cpu" / "gpu"), set by the running framework (mirrors
-# ``tvm_cpu_framework.tvm_dtype``). A *unified* ``<kernel>_tvm.py`` builds both
+# ``tvm_framework.tvm_dtype``). A *unified* ``<kernel>_tvm.py`` builds both
 # a CPU and a GPU :class:`TvmKernel` and calls :func:`active_kernel` to pick the
 # one matching the framework driving the run, so one file serves both backends.
 tvm_backend: str = "cpu"

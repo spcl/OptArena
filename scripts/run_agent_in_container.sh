@@ -6,7 +6,7 @@
 # The launch argv is folded from optarena/container_backends.txt -- the SAME flat
 # spelling file optarena/containers.py reads -- so this python-less host path and the
 # Python factory cannot drift (a golden parity test locks them byte-identical). See
-# docs/DESIGN_container_launch_and_submission.md.
+# docs/LAUNCH.md.
 #
 # The *agent* (the optimizer) stays OUTSIDE, reached over its API / port (Ollama on
 # :11434 via OPTARENA_OLLAMA_HOST/OLLAMA_HOST; Claude via ANTHROPIC_API_KEY). Only the

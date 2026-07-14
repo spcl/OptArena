@@ -103,7 +103,7 @@ optarena/
 │   ├── envs/  flags.py           the compiler/flag matrix (no literal -O3 anywhere)
 │   ├── docs/                     abi_contract.md · sparse_abi.md · …
 │   └── spec.py  cli.py  config.py
-├── containers/                   container images (Docker + Apptainer)
+├── containers/                   container images (Apptainer + Podman)
 ├── scripts/                      hidden-test firewall + agent_bench setup helpers
 └── run_benchmark.py  quickstart.py  plot_results.py
 ```
@@ -131,7 +131,7 @@ see the hidden tests or tamper with the clock.
 
 - **Local (pip).** Install with `pip`, start the judge, point the agent at it. The
   judge is a pure-stdlib socket webapp, so the whole loop runs in a plain Python
-  environment -- no Docker, no root:
+  environment -- no container, no root:
   ```sh
   optarena serve --port 8800        # the verification+oracle webapp (oracle + baseline)
   # in another shell, the agent (or you) calls it over the socket:
@@ -139,9 +139,11 @@ see the hidden tests or tamper with the clock.
   ```
 - **Containers (reproducible timing).** Run judge and agent as **two instances of the
   same image** -- identical toolchain + CPU → bit-reproducible timing across machines
-  (e.g. a shared leaderboard). Runtimes: **Apptainer** (sudoless, shared/HPC) and
-  **Docker** (needs sudo). See `containers/agentbench.compose.yml`. Same judge code as
-  local; reach for it only when timing must match across *different* machines.
+  (e.g. a shared leaderboard). Backends (both rootless): **Apptainer** (shared/HPC) and
+  **Podman**. See `containers/agentbench.compose.yml`. Same judge code as
+  local; reach for it only when timing must match across *different* machines. For the
+  static distributed (multi-endpoint) launch -- single-node containers whose agents
+  round-robin to the vLLM + judge HTTP endpoints -- see [docs/LAUNCH.md](docs/LAUNCH.md).
 
 ---
 
@@ -161,7 +163,7 @@ No per-language or per-framework sub-installs. To drive the loop with a model
 backend, add one opt-in file on top (`requirements/agent-anthropic.txt`,
 `…-aider.txt`, `…-local.txt`).
 
-Inside a container the same `pip` line is used (Docker/Apptainer run it in the
+Inside a container the same `pip` line is used (apptainer/podman run it in the
 image). Native toolchains (`gcc`/`g++`/`gfortran`/`nvcc`/`hipcc`) come from the
 system package manager -- see `optarena/envs/compilers.yaml`.
 
@@ -674,18 +676,23 @@ icon4py Python, TSVC C). Coverage is tracked in
 
 ## Contributing: add a container
 
-Container images live in `containers/`, one Dockerfile + Apptainer `.def` per
-**hardware** -- `cpu` (the default), `nvidia`, `amd` -- maintained directly.
+Container images live in `containers/`. There is **one unified OCI recipe** --
+`containers/optarena.Dockerfile` -- selected per **hardware** by a build arg
+`HW=cpu|nvidia|amd` (`cpu` is the default). Two runtime backends are supported,
+both rootless: **Apptainer** and **Podman**.
 
 ```
-containers/<hw>.Dockerfile        Docker image  (cpu | nvidia | amd)
-containers/<hw>.def               Apptainer image
+containers/optarena.Dockerfile    the single OCI recipe   (build arg HW=cpu | nvidia | amd)
+containers/cpu.def                Apptainer build recipe  (quickstart CPU .sif)
+containers/judge.def              Apptainer build recipe  (the judge image)
 ```
 
-Each is the full image (toolchain + HPC libraries + the Python deps in
-`requirements/<hw>.txt`). To add or change one, edit the matching
-`containers/<hw>.Dockerfile` (and `.def`); compiler keys resolve from
-`optarena/envs/compilers.yaml`.
+The image is the full toolchain + HPC libraries + the Python deps in
+`requirements/<hw>.txt`. Build the OCI image once, then either `apptainer build`
+a SIF from it (`docker-archive:…`) or `podman run` it directly; the `cpu.def`
+quickstart (`apptainer build optarena-cpu.sif containers/cpu.def`) stays a valid
+shortcut. Compiler keys resolve from `optarena/envs/compilers.yaml`. For the static
+distributed (multi-endpoint) launch, see [docs/LAUNCH.md](docs/LAUNCH.md).
 
 ---
 

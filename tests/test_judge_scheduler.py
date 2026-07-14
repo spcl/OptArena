@@ -8,11 +8,11 @@ from optarena.agent_bench import judge_scheduler as js
 from optarena.agent_bench.judge_scheduler import DeviceSlot, JudgeConfig
 
 
-def test_device_slot_is_local_and_label():
-    local = DeviceSlot("gpu", 1)
-    assert local.is_local and local.node is None
-    assert local.label == "local:gpu1"
-    assert DeviceSlot("cpu", 0).label == "local:cpu0"
+def test_device_slot_holds_kind_and_index():
+    gpu = DeviceSlot("gpu", 1)
+    assert gpu.kind == "gpu" and gpu.index == 1
+    cpu = DeviceSlot("cpu", 0)
+    assert cpu.kind == "cpu" and cpu.index == 0
 
 
 def test_local_gpu_count_is_a_nonnegative_int():

@@ -7,7 +7,7 @@ import urllib.request
 
 import pytest
 
-from optarena.agent_bench.service import ServiceConfig, make_server
+from optarena.agent_bench.service import ServiceConfig, make_server, verify_settings
 
 
 def _server(cfg):
@@ -29,6 +29,12 @@ def _post(port, path, body):
                                  method="POST")
     with urllib.request.urlopen(req, timeout=300) as r:
         return r.status, json.loads(r.read())
+
+
+def test_verify_settings_keys_are_independent_verify_kwargs():
+    # JudgeHandler._record calls independent_verify(**verify_settings()); guard the key set so
+    # the service's harden gate cannot drift from the independent_verify contract.
+    assert set(verify_settings()) == {"reverify_seed", "dual_oracle", "suspect_above"}
 
 
 def test_health_and_task():

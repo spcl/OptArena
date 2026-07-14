@@ -9,9 +9,40 @@ framework ``arch`` -- the dace_cpu/dace_gpu -> one DaceFramework pattern.
 from optarena.infrastructure import Benchmark, Framework
 from typing import Any, Callable, Dict
 
-# Mirrors tvm_cpu_framework.tvm_dtype so kernels can `from
-# optarena.infrastructure.tvm_framework import tvm_dtype`.
+# Datatype string picked by the harness's set_datatype(); kernels read this when
+# constructing their te.placeholder shapes (`from optarena.infrastructure.tvm_framework
+# import tvm_dtype`).
 tvm_dtype: str = "float64"
+
+
+def tvm_dtype_str(datatype) -> str:
+    """The TVM dtype string for a datatype request (numpy or enum spelling).
+
+    fp64/fp32/fp16/bf16 map to their TVM names; anything else (fp8 -- TVM's
+    support is partial and the siblings pin float32 there) falls back to float64.
+    """
+    from optarena.precision import Precision, precision_from_datatype
+    return {
+        Precision.FP64: "float64",
+        Precision.FP32: "float32",
+        Precision.FP16: "float16",
+        Precision.BF16: "bfloat16",
+    }.get(precision_from_datatype(datatype), "float64")
+
+
+# Per-process MetaSchedule trial cap. Smaller = faster sanity smoke; full = paper.
+METASCHEDULE_TRIALS_DEFAULT = 64
+METASCHEDULE_TRIALS_FULL = 1024
+
+
+def metaschedule_trials() -> int:
+    """How many tuning trials to give ``tune_tir`` per task.
+
+    Delegates to the unified optimize budget (:class:`optarena.optimize.OptimizeBudget`)
+    so TVM and Triton share ONE knob (``$OPTARENA_OPTIMIZE_BUDGET``), read on every call
+    so a test can change it mid-process."""
+    from optarena.optimize import OptimizeBudget
+    return OptimizeBudget.from_env().tvm_trials()
 
 
 class TVMFramework(Framework):
@@ -22,7 +53,7 @@ class TVMFramework(Framework):
 
     An :class:`optarena.optimize.Optimizer`: ``tune_tir`` (MetaSchedule) searches a
     schedule within :meth:`optimize_budget`'s ``trials`` (see
-    :func:`tvm_cpu_framework.metaschedule_trials`)."""
+    :func:`metaschedule_trials`)."""
 
     is_optimizer = True
 
@@ -72,11 +103,8 @@ class TVMFramework(Framework):
     def set_datatype(self, datatype):
         super().set_datatype(datatype)
         global tvm_dtype
-        from optarena.infrastructure import tvm_build, tvm_cpu_framework
-        tvm_dtype = tvm_cpu_framework.tvm_dtype_str(datatype)
-        # Keep the CPU module's tvm_dtype in sync so a process that
-        # exercises both frameworks sees a consistent value.
-        tvm_cpu_framework.tvm_dtype = tvm_dtype
+        from optarena.infrastructure import tvm_build
+        tvm_dtype = tvm_dtype_str(datatype)
         # Mark the active backend so a unified <kernel>_tvm.py picks the matching
         # TvmKernel (see tvm_build.active_kernel).
         tvm_build.tvm_backend = "gpu" if self._gpu() else "cpu"
