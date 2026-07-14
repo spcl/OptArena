@@ -308,13 +308,17 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
 
-      - name: Phase 6a -- build + smoke-test the cpu agent-bench image (sudoless fakeroot, gating)
-        # GATES now. Rootless `--fakeroot` build -- unprivileged userns (permitted by the host; the
-        # setup step enables it only if a runner clamps it) maps this user to root inside the def's
-        # %post, no sudo -- the same path our HPC targets use. Gates so a broken image reds the build.
+      - name: Phase 6a -- build + smoke-test the cpu agent-bench image (unified OCI -> SIF, gating)
+        # GATES now. UNIFIED build: one OCI Dockerfile (containers/optarena.Dockerfile, HW=cpu) is the
+        # single recipe; apptainer builds the SIF FROM that OCI image (docker-daemon://), no .def. The
+        # docker daemon on the ubuntu-latest runner holds the built image; the SIF conversion runs no
+        # %post so it needs no --fakeroot. Gates so a broken image reds the build.
+        # UNVERIFIED: swapped from `apptainer build --fakeroot optarena-cpu.sif containers/cpu.def`;
+        # verify the OCI->SIF path on the runner before relying on it (revert = restore that one line).
         if: ${{ !cancelled() }}
         run: |
-          apptainer build --fakeroot optarena-cpu.sif containers/cpu.def
+          docker build -f containers/optarena.Dockerfile --build-arg HW=cpu -t optarena:cpu .
+          apptainer build optarena-cpu.sif docker-daemon://optarena:cpu
           # The cpu image must import its numeric deps and carry the CPU-only torch build: a
           # bare ``torch`` would drag in the ~2 GB CUDA stack (see cpu.def). Assert the ``+cpu``
           # local version.
