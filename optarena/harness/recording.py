@@ -285,6 +285,23 @@ def _commit_sha() -> Optional[str]:
         return None
 
 
+def prepare_row(conn, task, prompt, prompt_hash, variant, language, source_mode, path):
+    """Shared record / record_trajectory preamble: load + upsert the kernel spec, stamp
+    ts / cpu / sha / execution, and store the prompt in the content-addressed store (a
+    caller that already stored it elsewhere passes ``prompt_hash`` directly). Returns
+    ``(spec, ts, cpu, sha, execution, prompt_hash)``."""
+    spec = BenchSpec.load(task.kernel)
+    upsert_benchmark(conn, spec)
+    ts = int(time.time() * 1000)
+    cpu = cpu_model()
+    sha = _commit_sha()
+    execution = _execution()
+    if prompt is not None and prompt_hash is None:
+        prompt_hash = store_prompt(conn, prompt, spec.short_name, variant=variant, language=language,
+                                   source_mode=source_mode, store_dir=prompt_store_dir(path))
+    return spec, ts, cpu, sha, execution, prompt_hash
+
+
 def record(score: Score,
            submission,
            task: Task,
@@ -312,20 +329,10 @@ def record(score: Score,
     """
     conn = connect(path)
     try:
-        spec = BenchSpec.load(task.kernel)
-        upsert_benchmark(conn, spec)
-        ts = int(time.time() * 1000)
-        cpu = cpu_model()
-        sha = _commit_sha()
-        execution = _execution()
         source_mode = task.source_mode
         language = submission.language
-        # Store the prompt in the content-addressed store and link this row to it. Passing
-        # the text is the ergonomic path (store + hash here); a caller that already stored
-        # it elsewhere can pass ``prompt_hash`` directly instead.
-        if prompt is not None and prompt_hash is None:
-            prompt_hash = store_prompt(conn, prompt, spec.short_name, variant=variant, language=language,
-                                       source_mode=source_mode, store_dir=prompt_store_dir(path))
+        spec, ts, cpu, sha, execution, prompt_hash = prepare_row(
+            conn, task, prompt, prompt_hash, variant, language, source_mode, path)
 
         verified = bool(score.build_ok and score.correct and (verify is None or verify.ok))
         if verified:
@@ -386,15 +393,8 @@ def record_trajectory(task: Task,
         return 0
     conn = connect(path)
     try:
-        spec = BenchSpec.load(task.kernel)
-        upsert_benchmark(conn, spec)
-        ts = int(time.time() * 1000)
-        cpu = cpu_model()
-        sha = _commit_sha()
-        execution = _execution()
-        if prompt is not None and prompt_hash is None:
-            prompt_hash = store_prompt(conn, prompt, spec.short_name, variant=variant, language=language,
-                                       source_mode=source_mode, store_dir=prompt_store_dir(path))
+        spec, ts, cpu, sha, execution, prompt_hash = prepare_row(
+            conn, task, prompt, prompt_hash, variant, language, source_mode, path)
         conn.executemany(
             """INSERT INTO calls(
                 run_id, ts, benchmark, preset, datatype, language, source_mode, optimizer,
