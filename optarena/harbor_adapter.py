@@ -36,6 +36,7 @@ from typing import Dict, List, Optional, Tuple
 from optarena import config, hf_export, languages
 from optarena.agent_bench import repo_pr
 from optarena.agent_bench.mpi_descriptor import distribution_for_kernel
+from optarena.agent_bench.timing import measurement_baseline
 from optarena.bindings import binding_from_spec
 from optarena.bindings.mpi_driver import gen_kernel_mpi_stub, mpi_symbol
 from optarena.languages import LANG_EXT
@@ -744,7 +745,7 @@ def generate(out_dir: str,
     judge_image = judge_image or cfg_judge
     # The distributed metric is speed-up / weak-efficiency over the 1-node NumPy reference (the C
     # dual-oracle does not apply to the MPI path), so its verifier baseline is always numpy.
-    baseline = "numpy" if distributed else (baseline or config.get("measurement.baseline", "c"))
+    baseline = "numpy" if distributed else (baseline or measurement_baseline())
     commit = hf_export.repo_commit() if commit is None else commit
     base = pathlib.Path(out_dir)
     base.mkdir(parents=True, exist_ok=True)

@@ -293,7 +293,7 @@ def perf_sampling(spec) -> dict:
     from optarena import fuzz
     params = spec.parameters or {}
     hidden = fuzz.perf_mode().startswith("secret")
-    n = int(config.get("perf.n_large_shapes", 3))
+    n = fuzz.default_n_large_shapes()
     fuzzed = fuzz.resolve_ranges(params) if params else {}
     ranges = []
     for name, value in sorted(fuzzed.items()):

@@ -29,7 +29,7 @@ APPTAINER_INSTALLER = "https://raw.githubusercontent.com/apptainer/apptainer/mai
 
 
 def backend(name=None):
-    name = name or config.get("runtime.backend", "singularity")
+    name = name or config.get("runtime.backend", "apptainer")
     if name not in BACKENDS:
         raise ValueError(f"runtime.backend must be one of {BACKENDS}; got {name!r}")
     return name

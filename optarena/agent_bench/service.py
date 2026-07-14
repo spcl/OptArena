@@ -39,7 +39,7 @@ from optarena import config
 from optarena.api import InputMode, RunConfig
 from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.scoring import measure_baselines, score
-from optarena.agent_bench.timing import measurement_repeat
+from optarena.agent_bench.timing import measurement_baseline, measurement_repeat
 from optarena.agent_bench.task import Task
 
 #: The judge config IS the single :class:`~optarena.api.RunConfig` (the client bindings
@@ -65,9 +65,9 @@ def from_config() -> RunConfig:
     """
     return RunConfig(
         oracle=str(config.get("service.oracle", "numpy")),
-        baseline=str(config.get("measurement.baseline", "track")),
+        baseline=measurement_baseline(),
         input_mode=str(config.get("service.input_mode", "source")),
-        preset=str(config.get("service.preset", "S")),
+        preset=str(config.get("service.preset", "fuzzed")),
         datatype=str(config.get("service.datatype", "float64")),
         repeat=measurement_repeat(),
     )

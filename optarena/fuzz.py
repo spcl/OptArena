@@ -508,7 +508,7 @@ def large_shapes(parameters: Dict[str, Any],
 
     # NB: the ``config`` parameter shadows the config module, so the seeds +
     # default n are read via module-scope helpers.
-    n = int(n) if n is not None else _default_n_large_shapes()
+    n = int(n) if n is not None else default_n_large_shapes()
     n = max(1, n)
     if mode.startswith("secret"):
         # n large shapes from the JUDGE-ONLY secret seed, hidden from the agent.
@@ -573,7 +573,7 @@ def correctness_size_cap() -> int:
     The global ``fuzz.size_cap`` still bounds it (so a test that shrinks everything
     shrinks the correctness cells too). Does NOT touch the timed large shapes
     (:func:`large_shapes`) or the edge probes."""
-    caps = [c for c in (int(config.get("fuzz.correctness_size_cap", 0)), int(config.get("fuzz.size_cap", 0))) if c > 0]
+    caps = [c for c in (int(config.get("fuzz.correctness_size_cap", 1024)), int(config.get("fuzz.size_cap", 0))) if c > 0]
     return min(caps) if caps else 0
 
 
@@ -587,8 +587,10 @@ def secret_shape_seed() -> int:
     return int(config.get("seeds.secret_shape", 31337))
 
 
-def _default_n_large_shapes() -> int:
-    """Configured number of timed large shapes per config (``perf.n_large_shapes``)."""
+def default_n_large_shapes() -> int:
+    """Configured number of timed large shapes per config (``perf.n_large_shapes``) --
+    the ONE source of truth for the count, shared by the fuzz shape draw and the
+    prompt's disclosure of how many large shapes are timed."""
     return int(config.get("perf.n_large_shapes", 3))
 
 

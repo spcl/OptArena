@@ -33,7 +33,7 @@ from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.metric import geomean, score_task_fuzzed
 from optarena.agent_bench.scoring import BASELINE_CHOICES
 from optarena.agent_bench.task import Task
-from optarena.agent_bench.timing import measurement_repeat, pin_threads
+from optarena.agent_bench.timing import measurement_baseline, measurement_repeat, pin_threads
 
 
 @contextlib.contextmanager
@@ -89,7 +89,7 @@ def grade(kernel: str,
     changes only ``src/``, merges cleanly into ``main``, is correct, AND clears ``speedup_min``
     (default ``config.yaml`` ``repo.speedup_min``). The ``pr`` / ``accepted`` / ``accept_reason``
     fields record the decision."""
-    baseline = baseline or config.get("measurement.baseline", "c")
+    baseline = baseline or measurement_baseline()
     datatype = datatype or config.get("service.datatype", "float64")
     repeat = repeat if repeat is not None else measurement_repeat()
     c_max = c_max if c_max is not None else config.get("measurement.c_max", 100.0)
@@ -341,7 +341,7 @@ def main(argv=None) -> int:
     p.add_argument("--reward", default="/logs/verifier/reward.json", help="reward file to write")
     p.add_argument("--k", type=int, default=None, help="fuzz iterations (default config fuzz.iterations)")
     p.add_argument("--baseline",
-                   default=config.get("measurement.baseline", "c"),
+                   default=measurement_baseline(),
                    choices=list(BASELINE_CHOICES),
                    help="speedup denominator")
     p.add_argument("--no-verify", dest="verify", action="store_false", help="skip independent_verify")
