@@ -271,12 +271,11 @@ def grade_items(kernels: Sequence[str],
     (one per kernel, repo layout) carries each agent's git repo for the PR acceptance rule;
     ``anchor_sources`` / ``anchor_libraries`` (one per kernel) carry the best correct single-node
     solution the harness supplies as the scaling-curve ``T_i(1)`` anchor."""
-    libs = list(libraries) if libraries is not None else [None] * len(kernels)
-    dists = list(distributions) if distributions is not None else [None] * len(kernels)
-    repos = list(repo_dirs) if repo_dirs is not None else [None] * len(kernels)
-    seeds = list(seed_shas) if seed_shas is not None else [None] * len(kernels)
-    a_srcs = list(anchor_sources) if anchor_sources is not None else [None] * len(kernels)
-    a_libs = list(anchor_libraries) if anchor_libraries is not None else [None] * len(kernels)
+    def col(seq):
+        return list(seq) if seq is not None else [None] * len(kernels)
+
+    libs, dists, repos = col(libraries), col(distributions), col(repo_dirs)
+    seeds, a_srcs, a_libs = col(seed_shas), col(anchor_sources), col(anchor_libraries)
     rewards = [
         _grade_one(kern,
                    src,
@@ -356,13 +355,16 @@ def main(argv=None) -> int:
         p.error("more --anchor-source/--anchor-library than --kernel")
     if (args.anchor_source or args.anchor_library) and args.residency != "distributed":
         p.error("--anchor-source/--anchor-library only apply to --residency distributed")
-    sources: List[Optional[str]] = list(args.source) + [None] * (n - len(args.source))
-    libraries: List[Optional[str]] = list(args.library) + [None] * (n - len(args.library))
-    distributions: List[Optional[str]] = list(args.distribution) + [None] * (n - len(args.distribution))
-    repo_dirs: List[Optional[str]] = list(args.repo_dir) + [None] * (n - len(args.repo_dir))
-    seed_shas: List[Optional[str]] = list(args.seed_sha) + [None] * (n - len(args.seed_sha))
-    anchor_sources: List[Optional[str]] = list(args.anchor_source) + [None] * (n - len(args.anchor_source))
-    anchor_libraries: List[Optional[str]] = list(args.anchor_library) + [None] * (n - len(args.anchor_library))
+    def pad(vals):
+        return list(vals) + [None] * (n - len(vals))
+
+    sources = pad(args.source)
+    libraries = pad(args.library)
+    distributions = pad(args.distribution)
+    repo_dirs = pad(args.repo_dir)
+    seed_shas = pad(args.seed_sha)
+    anchor_sources = pad(args.anchor_source)
+    anchor_libraries = pad(args.anchor_library)
     if not any(sources) and not any(libraries):
         p.error("at least one --source or --library is required")
 

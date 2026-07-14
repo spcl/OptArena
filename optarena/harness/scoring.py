@@ -246,30 +246,13 @@ def independent_verify(submission: Submission,
             built = sb.build(submission, mode=Mode.SINGLE_CORE)
             if not built.ok:
                 return VerifyResult(False, False, False, False, False, suspect, "harden: rebuild failed")
-            o1, _, _ = _call_isolated(built.lib,
-                                      binding,
-                                      data,
-                                      submission.language,
-                                      device=device,
-                                      timeout=timeout,
-                                      memory_gb=memory_gb,
-                                      workspace_bytes=submission.workspace_bytes)
-            o2, _, _ = _call_isolated(built.lib,
-                                      binding,
-                                      data,
-                                      submission.language,
-                                      device=device,
-                                      timeout=timeout,
-                                      memory_gb=memory_gb,
-                                      workspace_bytes=submission.workspace_bytes)
-            ro, _, _ = _call_isolated(built.lib,
-                                      binding,
-                                      redata,
-                                      submission.language,
-                                      device=device,
-                                      timeout=timeout,
-                                      memory_gb=memory_gb,
-                                      workspace_bytes=submission.workspace_bytes)
+            def _run(d):
+                outs, _, _ = _call_isolated(built.lib, binding, d, submission.language, device=device,
+                                            timeout=timeout, memory_gb=memory_gb,
+                                            workspace_bytes=submission.workspace_bytes)
+                return outs
+
+            o1, o2, ro = _run(data), _run(data), _run(redata)
             c_pub = None
             if dual_oracle:
                 try:
