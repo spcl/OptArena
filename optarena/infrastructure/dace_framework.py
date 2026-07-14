@@ -399,6 +399,8 @@ class DaceFramework(Framework):
         plan = self.build_call(bench, variant, bdata)
         samples = self.measure(impl=variant, runner=plan.run, repeat=SCORE_REPEAT, before_each=plan.before_each)
         series = samples["native"] if samples["native"] else samples["python"]
+        if not series:
+            raise RuntimeError(f"variant {variant.name!r} produced no timing samples")
         return sorted(series)[len(series) // 2]
 
     def reference_outputs(self, bench: Benchmark, bdata: Dict[str, Any]) -> Optional[List[Any]]:

@@ -16,6 +16,8 @@ tvm_dtype: str = "float64"
 class TVMFramework(Framework):
     """Framework binding for Apache TVM on GPU (``cuda`` target)."""
 
+    is_optimizer = True
+
     def __init__(self, fname: str):
         super().__init__(fname)
 

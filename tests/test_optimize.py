@@ -70,8 +70,38 @@ def test_tvm_and_triton_are_optimizers():
     # Class-level flag (no tvm/triton install needed to read it).
     from optarena.infrastructure.triton_framework import TritonFramework
     from optarena.infrastructure.tvm_cpu_framework import TVMCPUFramework
+    from optarena.infrastructure.tvm_framework import TVMFramework
     assert TVMCPUFramework.is_optimizer is True
+    assert TVMFramework.is_optimizer is True
     assert TritonFramework.is_optimizer is True
+
+
+def test_dace_score_empty_series_raises_descriptive():
+    # An empty timing series (all reps failed / no samples) must surface as an
+    # explicit, descriptive failure -- select_fastest catches it and logs
+    # "scoring failed: <msg>" before dropping the variant -- not a cryptic
+    # IndexError from sorted([])[len//2] that gets silently swallowed.
+    from optarena.infrastructure.dace_framework import DaceFramework
+
+    class EmptyMeasureFramework(DaceFramework):
+        def __init__(self):
+            pass
+
+        def build_call(self, bench, variant, bdata):
+            class Plan:
+                run = staticmethod(lambda: None)
+                before_each = staticmethod(lambda: None)
+
+            return Plan()
+
+        def measure(self, **kw):
+            return {"native": None, "python": []}
+
+    class Variant:
+        name = "autoopt"
+
+    with pytest.raises(RuntimeError, match="no timing samples"):
+        EmptyMeasureFramework().score(Variant(), None, None)
 
 
 def test_metaschedule_trials_delegates_to_budget(monkeypatch):

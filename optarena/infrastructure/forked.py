@@ -30,10 +30,13 @@ _DRAIN_S = 5.0
 
 @dataclass
 class RunResult:
-    """Outcome of a forked run. ``ok`` is the only success signal; on failure exactly
-    one of ``signal`` (fatal signal name, e.g. ``SIGSEGV`` / ``TIMEOUT``) or ``error``
-    (a traceback / message) explains why. ``result`` carries the callable's return
-    value on success (must be picklable; ``None`` if it was not)."""
+    """Outcome of a forked run. ``ok`` is the only success signal. On failure the cause
+    is either a kill -- ``signal`` names the fatal signal / ``TIMEOUT`` and ``error`` may
+    carry a human-readable detail (e.g. the timeout seconds) -- or a non-signal fault,
+    where ``error`` alone holds the traceback / message and ``signal`` is ``None``. Use
+    :func:`forked_failure_reason` for the one-line cause (it prefers ``signal``).
+    ``result`` carries the callable's return value on success (must be picklable;
+    ``None`` if it was not)."""
     ok: bool
     exit_code: Optional[int] = None
     signal: Optional[str] = None
