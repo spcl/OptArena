@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def argmax_value(a, out, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), out=(1,)
     """TSVC ``s314``: running maximum carried in a scalar.

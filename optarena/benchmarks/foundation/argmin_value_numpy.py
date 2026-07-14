@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def argmin_value(a, out, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), out=(1,)
     """TSVC ``s316``: running minimum sibling of :func:`argmax_value`.

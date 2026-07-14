@@ -24,8 +24,7 @@ def conv2d(input, weights):
     for i in range(H_out):
         for j in range(W_out):
             output[:, i, j, :] = np.sum(
-                input[:, i:i + K, j:j + K, :, np.newaxis] *
-                weights[np.newaxis, :, :, :],
+                input[:, i:i + K, j:j + K, :, np.newaxis] * weights[np.newaxis, :, :, :],
                 axis=(1, 2, 3),
             )
 
@@ -43,8 +42,7 @@ def batchnorm2d(x, eps=1e-5):
 # in the ResNet-50 CNN (inference)
 def resnet_basicblock(input, conv1, conv2, conv3):
     # Pad output of first convolution for second convolution
-    padded = np.zeros((input.shape[0], input.shape[1] + 2, input.shape[2] + 2,
-                       conv1.shape[3]))
+    padded = np.zeros((input.shape[0], input.shape[1] + 2, input.shape[2] + 2, conv1.shape[3]))
 
     padded[:, 1:-1, 1:-1, :] = conv2d(input, conv1)
     x = batchnorm2d(padded)

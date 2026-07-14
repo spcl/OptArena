@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def jacobi2d_tiled_sym(a, b, LEN_2D, T):
     # array shapes (numpy->dace): a=(LEN_2D,LEN_2D), b=(LEN_2D,LEN_2D)
     """2D Jacobi 5-point stencil pre-tiled with symbolic tile size

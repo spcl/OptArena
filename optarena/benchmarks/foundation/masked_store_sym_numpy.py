@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def masked_store_sym(a, b, threshold_data, LEN_1D, K):
     # array shapes (numpy->dace): a=(LEN_1D,), b=(LEN_1D,), threshold_data=(LEN_1D,)
     """Predicated store keyed on a comparison against the symbolic

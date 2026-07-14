@@ -13,7 +13,7 @@ def initialize(R, K, datatype=np.float32):
     rng = default_rng(42)
 
     N = R**K
-    X = rng_complex((N,), rng, datatype)
+    X = rng_complex((N, ), rng, datatype)
     Y = np.zeros_like(X, dtype=X.dtype)
 
     return N, X, Y

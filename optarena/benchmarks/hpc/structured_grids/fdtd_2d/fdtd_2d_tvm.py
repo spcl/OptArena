@@ -38,8 +38,7 @@ def _build_step_ey(NX, NY, dtype):
         ),
         name="ey_out",
     )
-    return te.create_prim_func([fict, ey_in, hz, ey_out]).with_attr(
-        "global_symbol", "fdtd_2d_step_ey")
+    return te.create_prim_func([fict, ey_in, hz, ey_out]).with_attr("global_symbol", "fdtd_2d_step_ey")
 
 
 def _build_step_ex(NX, NY, dtype):
@@ -55,8 +54,7 @@ def _build_step_ex(NX, NY, dtype):
         ),
         name="ex_out",
     )
-    return te.create_prim_func([ex_in, hz, ex_out]).with_attr(
-        "global_symbol", "fdtd_2d_step_ex")
+    return te.create_prim_func([ex_in, hz, ex_out]).with_attr("global_symbol", "fdtd_2d_step_ex")
 
 
 def _build_step_hz(NX, NY, dtype):
@@ -69,15 +67,12 @@ def _build_step_hz(NX, NY, dtype):
         (NX, NY),
         lambda i, j: te.if_then_else(
             te.all(i < NX - 1, j < NY - 1),
-            hz_in[i, j] - 0.7 * (
-                ex[i, te.min(j + 1, NY - 1)] - ex[i, j]
-                + ey[te.min(i + 1, NX - 1), j] - ey[i, j]),
+            hz_in[i, j] - 0.7 * (ex[i, te.min(j + 1, NY - 1)] - ex[i, j] + ey[te.min(i + 1, NX - 1), j] - ey[i, j]),
             hz_in[i, j],
         ),
         name="hz_out",
     )
-    return te.create_prim_func([hz_in, ex, ey, hz_out]).with_attr(
-        "global_symbol", "fdtd_2d_step_hz")
+    return te.create_prim_func([hz_in, ex, ey, hz_out]).with_attr("global_symbol", "fdtd_2d_step_hz")
 
 
 # build_primfunc kept for the GPU module / build-check contract: it returns

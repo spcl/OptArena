@@ -44,7 +44,7 @@ ZETA_M_SYMM, ZETA_P_FREE = 0x100, 0x800
 
 
 def _edge_elems(numElem):
-    e = round(numElem ** (1.0 / 3.0))
+    e = round(numElem**(1.0 / 3.0))
     if e * e * e != numElem:
         raise ValueError(f"numElem={numElem} is not a perfect cube (edgeElems^3)")
     return e
@@ -53,12 +53,15 @@ def _edge_elems(numElem):
 def _calc_elem_volume(xl, yl, zl):
     """Single-hexahedron volume (CalcElemVolume) for the reference-volume init.
     xl/yl/zl are (numelem, 8)."""
+
     def c(a, i):
         return a[:, i]
+
     twelfth = 1.0 / 12.0
 
     def tp(x1, y1, z1, x2, y2, z2, x3, y3, z3):
         return x1 * (y2 * z3 - z2 * y3) + x2 * (z1 * y3 - y1 * z3) + x3 * (y1 * z2 - z1 * y2)
+
     dx61, dy61, dz61 = c(xl, 6) - c(xl, 1), c(yl, 6) - c(yl, 1), c(zl, 6) - c(zl, 1)
     dx70, dy70, dz70 = c(xl, 7) - c(xl, 0), c(yl, 7) - c(yl, 0), c(zl, 7) - c(zl, 0)
     dx63, dy63, dz63 = c(xl, 6) - c(xl, 3), c(yl, 6) - c(yl, 3), c(zl, 6) - c(zl, 3)
@@ -80,7 +83,7 @@ def _calc_elem_volume(xl, yl, zl):
 def initialize(numElem, nsteps, datatype=np.float64):
     edgeElems = _edge_elems(numElem)
     edgeNodes = edgeElems + 1
-    numNode = edgeNodes ** 3
+    numNode = edgeNodes**3
     NE = numElem
 
     # --- Nodal coordinates (BuildMesh). tx/ty/tz = 1.125 * idx / meshEdge ----
@@ -93,8 +96,7 @@ def initialize(numElem, nsteps, datatype=np.float64):
     z = np.ascontiguousarray(zz.reshape(-1).astype(datatype))
 
     # --- elemToNode connectivity (nodelist), shape (numElem, 8) -------------
-    ci, ri, pi = np.meshgrid(np.arange(edgeElems), np.arange(edgeElems),
-                             np.arange(edgeElems), indexing="ij")
+    ci, ri, pi = np.meshgrid(np.arange(edgeElems), np.arange(edgeElems), np.arange(edgeElems), indexing="ij")
     # Match the driver's plane->row->col nest: nidx = plane*eN^2 + row*eN + col
     # (it advances nidx by +1 per col, +1 extra per row, +edgeNodes per plane).
     plane = pi.transpose(2, 1, 0).reshape(-1)
@@ -217,8 +219,6 @@ def initialize(numElem, nsteps, datatype=np.float64):
             elemBC[rowInc + j] |= ZETA_M_SYMM
             elemBC[rowInc + j + domElems - edgeElems * edgeElems] |= ZETA_P_FREE
 
-    return (e, p, q, ql, qq, v, volo, vnew, delv, vdov, arealg, ss, elemMass,
-            dxx, dyy, dzz, delv_xi, delv_eta, delv_zeta, delx_xi, delx_eta, delx_zeta,
-            lxim, lxip, letam, letap, lzetam, lzetap, elemBC,
-            x, y, z, xd, yd, zd, xdd, ydd, zdd, fx, fy, fz, nodalMass,
-            symmX, symmY, symmZ, nodelist, numElem, numNode, nsteps)
+    return (e, p, q, ql, qq, v, volo, vnew, delv, vdov, arealg, ss, elemMass, dxx, dyy, dzz, delv_xi, delv_eta,
+            delv_zeta, delx_xi, delx_eta, delx_zeta, lxim, lxip, letam, letap, lzetam, lzetap, elemBC, x, y, z, xd, yd,
+            zd, xdd, ydd, zdd, fx, fy, fz, nodalMass, symmX, symmY, symmZ, nodelist, numElem, numNode, nsteps)

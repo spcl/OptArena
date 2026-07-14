@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def s118(a, bb, LEN_2D):
     # array shapes (numpy->dace): a=(LEN_2D,), bb=(LEN_2D,LEN_2D)
     for i in range(1, LEN_2D):

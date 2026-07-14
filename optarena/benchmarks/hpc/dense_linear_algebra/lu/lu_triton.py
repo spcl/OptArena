@@ -3,28 +3,32 @@ import torch
 import triton
 import triton.language as tl
 
+
 def generate_config():
     return [
-        triton.Config(kwargs={"BLOCK_SIZE_M": m, "BLOCK_SIZE_N": n}, num_warps=w)
-        for m, n, w in itertools.product(
-            [8, 16, 32, 64, 128], [8, 16, 32, 64, 128], [1, 2, 4, 8]
-        )
+        triton.Config(kwargs={
+            "BLOCK_SIZE_M": m,
+            "BLOCK_SIZE_N": n
+        }, num_warps=w) for m, n, w in itertools.product([8, 16, 32, 64, 128], [8, 16, 32, 64, 128], [1, 2, 4, 8])
         if m != 128 or n != 128
     ]
+
 
 def generate_config_col():
     return [
         triton.Config(kwargs={"BLOCK_SIZE": m}, num_warps=w)
-        for m, w in itertools.product(
-            [8, 16, 32, 64, 128], [1, 2, 4, 8]
-        )
+        for m, w in itertools.product([8, 16, 32, 64, 128], [1, 2, 4, 8])
     ]
+
 
 @triton.autotune(configs=generate_config_col(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_lu_div_column(
-    A_ptr, stride_am, stride_an,
-    N, k,
+    A_ptr,
+    stride_am,
+    stride_an,
+    N,
+    k,
     BLOCK_SIZE: tl.constexpr,
 ):
     """
@@ -46,11 +50,15 @@ def _kernel_lu_div_column(
     vals = vals / pivot
     tl.store(col_ptrs, vals, mask=mask)
 
+
 @triton.autotune(configs=generate_config(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_lu_trailing_update(
-    A_ptr, stride_am, stride_an,
-    N, k,
+    A_ptr,
+    stride_am,
+    stride_an,
+    N,
+    k,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
 ):
@@ -69,8 +77,8 @@ def _kernel_lu_trailing_update(
 
     # pointers
     a_ptrs = A_ptr + rows[:, None] * stride_am + cols[None, :] * stride_an
-    l_ptrs = A_ptr + rows * stride_am + k * stride_an          # L column (k)
-    u_ptrs = A_ptr + k * stride_am + cols * stride_an          # U row (k)
+    l_ptrs = A_ptr + rows * stride_am + k * stride_an  # L column (k)
+    u_ptrs = A_ptr + k * stride_am + cols * stride_an  # U row (k)
 
     Ablk = tl.load(a_ptrs, mask=mask, other=0.0)
     Lcol = tl.load(l_ptrs, mask=rows < N, other=0.0)[:, None]
@@ -93,12 +101,13 @@ def kernel(A: torch.Tensor):
 
     for k in range(N):
         # 1) scale column below pivot
-        grid_col = lambda meta: (
-            triton.cdiv((max(N - (k + 1), 0) + meta["BLOCK_SIZE"] - 1), meta["BLOCK_SIZE"]),
-        )
+        grid_col = lambda meta: (triton.cdiv((max(N - (k + 1), 0) + meta["BLOCK_SIZE"] - 1), meta["BLOCK_SIZE"]), )
         _kernel_lu_div_column[grid_col](
-            A, stride_am, stride_an,
-            N, k,
+            A,
+            stride_am,
+            stride_an,
+            N,
+            k,
         )
 
         # 2) update trailing submatrix
@@ -110,9 +119,11 @@ def kernel(A: torch.Tensor):
             triton.cdiv((rem + meta["BLOCK_SIZE_N"] - 1), meta["BLOCK_SIZE_N"]),
         )
         _kernel_lu_trailing_update[grid](
-            A, stride_am, stride_an,
-            N, k,
+            A,
+            stride_am,
+            stride_an,
+            N,
+            k,
         )
 
     return A
-

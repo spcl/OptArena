@@ -9,10 +9,12 @@ from optarena.infrastructure.triton_utilities import get_2d_tile_offsets, derive
 
 
 def _generate_config():
-    return [triton.Config(kwargs={
-        'BLOCK_SIZE_X': x,
-        'BLOCK_SIZE_Y': y,
-    }, num_warps=w) for x, y, w in itertools.product(powers_of_2(8), powers_of_2(8), powers_of_2(3))]
+    return [
+        triton.Config(kwargs={
+            'BLOCK_SIZE_X': x,
+            'BLOCK_SIZE_Y': y,
+        }, num_warps=w) for x, y, w in itertools.product(powers_of_2(8), powers_of_2(8), powers_of_2(3))
+    ]
 
 
 @use_grid(lambda meta: (triton.cdiv(meta['nx'], meta['BLOCK_SIZE_X']), triton.cdiv(meta['ny'], meta['BLOCK_SIZE_Y'])))
@@ -32,8 +34,8 @@ def build_b_kernel(
         dy,
         nx: tl.constexpr,
         ny: tl.constexpr,
-        BLOCK_SIZE_X: tl.constexpr, BLOCK_SIZE_Y: tl.constexpr
-):
+        BLOCK_SIZE_X: tl.constexpr,
+        BLOCK_SIZE_Y: tl.constexpr):
     tl.static_assert(BLOCK_SIZE_X < 2 * nx)
     tl.static_assert(BLOCK_SIZE_Y < 2 * ny)
 
@@ -42,11 +44,8 @@ def build_b_kernel(
     pid_y = tl.program_id(1)
 
     # We get the flat memory offsets (idx) and the row/col vectors for logic
-    offsets, mask_bounds, rows, cols = get_2d_tile_offsets(
-        pid_x * BLOCK_SIZE_X, pid_y * BLOCK_SIZE_Y,
-        BLOCK_SIZE_X, BLOCK_SIZE_Y,
-        nx, ny
-    )
+    offsets, mask_bounds, rows, cols = get_2d_tile_offsets(pid_x * BLOCK_SIZE_X, pid_y * BLOCK_SIZE_Y, BLOCK_SIZE_X,
+                                                           BLOCK_SIZE_Y, nx, ny)
 
     # 2. Logic Masks
     # Interior points only: 1 to nx-2
@@ -89,13 +88,15 @@ def pressure_step_kernel(
         p_next_ptr,
         p_curr_ptr,
         b_ptr,  # (ny, nx)
-        dx, dy,
+        dx,
+        dy,
         barrier,
         num_sms: tl.constexpr,
         nit: tl.constexpr,
-        nx: tl.constexpr, ny: tl.constexpr,
-        BLOCK_SIZE_X: tl.constexpr, BLOCK_SIZE_Y: tl.constexpr
-):
+        nx: tl.constexpr,
+        ny: tl.constexpr,
+        BLOCK_SIZE_X: tl.constexpr,
+        BLOCK_SIZE_Y: tl.constexpr):
     tl.static_assert(BLOCK_SIZE_X < 2 * nx)
     tl.static_assert(BLOCK_SIZE_Y < 2 * ny)
     tl.static_assert(((nx + BLOCK_SIZE_X - 1) // BLOCK_SIZE_X) * ((ny + BLOCK_SIZE_Y - 1) // BLOCK_SIZE_Y) <= num_sms,
@@ -104,11 +105,8 @@ def pressure_step_kernel(
     pid_x = tl.program_id(0)
     pid_y = tl.program_id(1)
 
-    offsets, mask_bounds, rows, cols = get_2d_tile_offsets(
-        pid_x * BLOCK_SIZE_X, pid_y * BLOCK_SIZE_Y,
-        BLOCK_SIZE_X, BLOCK_SIZE_Y,
-        nx, ny
-    )
+    offsets, mask_bounds, rows, cols = get_2d_tile_offsets(pid_x * BLOCK_SIZE_X, pid_y * BLOCK_SIZE_Y, BLOCK_SIZE_X,
+                                                           BLOCK_SIZE_Y, nx, ny)
 
     # Interior Logic mask
     mask_interior = ((cols[None, :] > 0) & (cols[None, :] < nx - 1)) & \
@@ -169,25 +167,16 @@ def pressure_step_kernel(
 })
 @triton.autotune(configs=_generate_config(), key=['nx', 'ny'], cache_results=True)
 @triton.jit
-def velocity_update_kernel(
-        u_new_ptr, v_new_ptr,
-        u_curr_ptr, v_curr_ptr,
-        p_ptr,
-        dt, dx, dy, rho, nu,
-        nx: tl.constexpr, ny: tl.constexpr,
-        BLOCK_SIZE_X: tl.constexpr, BLOCK_SIZE_Y: tl.constexpr
-):
+def velocity_update_kernel(u_new_ptr, v_new_ptr, u_curr_ptr, v_curr_ptr, p_ptr, dt, dx, dy, rho, nu, nx: tl.constexpr,
+                           ny: tl.constexpr, BLOCK_SIZE_X: tl.constexpr, BLOCK_SIZE_Y: tl.constexpr):
     tl.static_assert(BLOCK_SIZE_X < 2 * nx)
     tl.static_assert(BLOCK_SIZE_Y < 2 * ny)
 
     pid_x = tl.program_id(0)
     pid_y = tl.program_id(1)
 
-    offsets, mask_bounds, rows, cols = get_2d_tile_offsets(
-        pid_x * BLOCK_SIZE_X, pid_y * BLOCK_SIZE_Y,
-        BLOCK_SIZE_X, BLOCK_SIZE_Y,
-        nx, ny
-    )
+    offsets, mask_bounds, rows, cols = get_2d_tile_offsets(pid_x * BLOCK_SIZE_X, pid_y * BLOCK_SIZE_Y, BLOCK_SIZE_X,
+                                                           BLOCK_SIZE_Y, nx, ny)
 
     mask_interior = ((cols[None, :] > 0) & (cols[None, :] < nx - 1)) & \
                     ((rows[:, None] > 0) & (rows[:, None] < ny - 1))
@@ -217,15 +206,13 @@ def velocity_update_kernel(
     # --- U Update ---
     u_advection = u_c * dt / dx * (u_c - u_w) + v_c * dt / dy * (u_c - u_s)
     u_pressure = dt / (2 * rho * dx) * (p_e - p_w)
-    u_diffusion = nu * ((dt / (dx * dx)) * (u_e - 2 * u_c + u_w) +
-                        (dt / (dy * dy)) * (u_n - 2 * u_c + u_s))
+    u_diffusion = nu * ((dt / (dx * dx)) * (u_e - 2 * u_c + u_w) + (dt / (dy * dy)) * (u_n - 2 * u_c + u_s))
     u_next = u_c - u_advection - u_pressure + u_diffusion
 
     # --- V Update ---
     v_advection = u_c * dt / dx * (v_c - v_w) + v_c * dt / dy * (v_c - v_s)
     v_pressure = dt / (2 * rho * dy) * (p_n - p_s)
-    v_diffusion = nu * ((dt / (dx * dx)) * (v_e - 2 * v_c + v_w) +
-                        (dt / (dy * dy)) * (v_n - 2 * v_c + v_s))
+    v_diffusion = nu * ((dt / (dx * dx)) * (v_e - 2 * v_c + v_w) + (dt / (dy * dy)) * (v_n - 2 * v_c + v_s))
     v_next = v_c - v_advection - v_pressure + v_diffusion
 
     # --- Boundary Conditions ---
@@ -270,26 +257,30 @@ def cavity_flow(nx, ny, nt, nit, u, v, dt, dx, dy, p, rho, nu):
     for n in range(nt):
         # 1. Build B
         build_b_kernel(
-            b, u_prev, v_prev,
-            rho, dt, dx, dy,
+            b,
+            u_prev,
+            v_prev,
+            rho,
+            dt,
+            dx,
+            dy,
         )
 
         # 2. Pressure Poisson
-        pressure_step_kernel(
-            p_curr, p_prev, b,
-            dx, dy,
-            barrier,
-            nit=nit,
-            num_sms=num_sms,
-            launch_cooperative_grid=True
-        )
+        pressure_step_kernel(p_curr, p_prev, b, dx, dy, barrier, nit=nit, num_sms=num_sms, launch_cooperative_grid=True)
 
         # 3. Velocity Update
         velocity_update_kernel(
-            u, v,  # Out
-            u_prev, v_prev,  # In
+            u,
+            v,  # Out
+            u_prev,
+            v_prev,  # In
             p_prev,  # Pressure In
-            dt, dx, dy, rho, nu,
+            dt,
+            dx,
+            dy,
+            rho,
+            nu,
         )
 
         u_prev.copy_(u)

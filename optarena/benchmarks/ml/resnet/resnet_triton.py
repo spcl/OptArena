@@ -11,48 +11,47 @@ from optarena.infrastructure.triton_utilities import get_4d_tile_offsets, derive
 
 
 def _generate_conv2d_config():
-    return [triton.Config(
-        kwargs={'BLOCK_SIZE_C1': block_size_c1, 'BLOCK_SIZE_C2': block_size_c2, 'REUSE_INPUT': reuse_input},
-        num_warps=warps)
-        for block_size_c1, block_size_c2, warps, reuse_input in
-        itertools.product([1, 2, 4, 8, 16, 32, 64],
-                          [1, 2, 4, 8, 16, 32, 64],
-                          [1, 2],
-                          [False, True])
-        if (block_size_c2 < 512 and warps < 4 if reuse_input else block_size_c1 < 8)]
+    return [
+        triton.Config(kwargs={
+            'BLOCK_SIZE_C1': block_size_c1,
+            'BLOCK_SIZE_C2': block_size_c2,
+            'REUSE_INPUT': reuse_input
+        },
+                      num_warps=warps) for block_size_c1, block_size_c2, warps, reuse_input in itertools.product(
+                          [1, 2, 4, 8, 16, 32, 64], [1, 2, 4, 8, 16, 32, 64], [1, 2], [False, True])
+        if (block_size_c2 < 512 and warps < 4 if reuse_input else block_size_c1 < 8)
+    ]
 
 
-@use_grid(lambda meta: (meta['H'], meta['W'],
-                        meta['N'] * (triton.cdiv(meta['C1'], meta['BLOCK_SIZE_C1']) if meta['REUSE_INPUT']
-                        else triton.cdiv(meta['C2'], meta['BLOCK_SIZE_C2']))))
-@derive_launch_arguments(lambda input, weights, **_: {
-    'N': input.shape[0],
-    'H': input.shape[1],
-    'W': input.shape[2],
-    'C1': input.shape[3],
-    'C2': weights.shape[-1],
-    'K': weights.shape[0],
-    'K_NEXT_2': triton.next_power_of_2(weights.shape[0])
-})
-@triton.autotune(configs=_generate_conv2d_config(),
-                 key=['N', 'H', 'W', 'K', 'C1', 'C2'],
-                 cache_results=True
-                 )
+@use_grid(lambda meta: (meta['H'], meta['W'], meta['N'] * (triton.cdiv(meta['C1'], meta['BLOCK_SIZE_C1']) if meta[
+    'REUSE_INPUT'] else triton.cdiv(meta['C2'], meta['BLOCK_SIZE_C2']))))
+@derive_launch_arguments(
+    lambda input, weights, **_: {
+        'N': input.shape[0],
+        'H': input.shape[1],
+        'W': input.shape[2],
+        'C1': input.shape[3],
+        'C2': weights.shape[-1],
+        'K': weights.shape[0],
+        'K_NEXT_2': triton.next_power_of_2(weights.shape[0])
+    })
+@triton.autotune(configs=_generate_conv2d_config(), key=['N', 'H', 'W', 'K', 'C1', 'C2'], cache_results=True)
 @triton.jit()
-def _conv2d(input,  # (N, H, W, C1)
-            weights,  # (K, K, C1, C2)
-            output,  # (N, H - K + 1, W - K + 1, C2),
-            N: tl.constexpr,
-            H: tl.constexpr,
-            W: tl.constexpr,
-            K: tl.constexpr,
-            C1: tl.constexpr,
-            C2: tl.constexpr,
-            K_NEXT_2: tl.constexpr,
-            BLOCK_SIZE_C1: tl.constexpr = 1,
-            BLOCK_SIZE_C2: tl.constexpr = 16,
-            REUSE_INPUT: tl.constexpr = False,
-            ):
+def _conv2d(
+    input,  # (N, H, W, C1)
+    weights,  # (K, K, C1, C2)
+    output,  # (N, H - K + 1, W - K + 1, C2),
+    N: tl.constexpr,
+    H: tl.constexpr,
+    W: tl.constexpr,
+    K: tl.constexpr,
+    C1: tl.constexpr,
+    C2: tl.constexpr,
+    K_NEXT_2: tl.constexpr,
+    BLOCK_SIZE_C1: tl.constexpr = 1,
+    BLOCK_SIZE_C2: tl.constexpr = 16,
+    REUSE_INPUT: tl.constexpr = False,
+):
     """
     for i in range(H_out): # 56
         for j in range(W_out): # 56
@@ -79,7 +78,10 @@ def _conv2d(input,  # (N, H, W, C1)
         c1 = extra // N
 
         input_tile, input_mask = get_4d_tile_offsets(
-            n, i, j, c1 * BLOCK_SIZE_C1,
+            n,
+            i,
+            j,
+            c1 * BLOCK_SIZE_C1,
             tile_dims=(1, K_NEXT_2, K_NEXT_2, BLOCK_SIZE_C1),
             matrix_dims=(N, H, W, C1),
         )
@@ -91,7 +93,10 @@ def _conv2d(input,  # (N, H, W, C1)
 
         for c2 in range(tl.cdiv(C2, BLOCK_SIZE_C2)):
             tile, mask = get_4d_tile_offsets(
-                0, 0, c1 * BLOCK_SIZE_C1, c2 * BLOCK_SIZE_C2,
+                0,
+                0,
+                c1 * BLOCK_SIZE_C1,
+                c2 * BLOCK_SIZE_C2,
                 tile_dims=(K_NEXT_2, K_NEXT_2, BLOCK_SIZE_C1, BLOCK_SIZE_C2),
                 matrix_dims=(K, K, C1, C2),
             )
@@ -100,7 +105,10 @@ def _conv2d(input,  # (N, H, W, C1)
             sum = tl.sum(conv_matrix * weight_tile, axis=0)[None, None, None, :]
 
             output_tile, output_mask = get_4d_tile_offsets(
-                n, i, j, c2 * BLOCK_SIZE_C2,
+                n,
+                i,
+                j,
+                c2 * BLOCK_SIZE_C2,
                 tile_dims=(1, 1, 1, BLOCK_SIZE_C2),
                 matrix_dims=(N, H_out, W_out, C2),
             )
@@ -111,7 +119,10 @@ def _conv2d(input,  # (N, H, W, C1)
         sum = tl.zeros(shape=(1, 1, 1, BLOCK_SIZE_C2), dtype=input.dtype.element_ty)
         for c1 in tl.range(tl.cdiv(C1, BLOCK_SIZE_C1)):
             input_tile, input_mask = get_4d_tile_offsets(
-                n, i, j, c1 * BLOCK_SIZE_C1,
+                n,
+                i,
+                j,
+                c1 * BLOCK_SIZE_C1,
                 tile_dims=(1, K_NEXT_2, K_NEXT_2, BLOCK_SIZE_C1),
                 matrix_dims=(N, H, W, C1),
             )
@@ -122,7 +133,10 @@ def _conv2d(input,  # (N, H, W, C1)
             ).reshape(K_NEXT_2 * K_NEXT_2 * BLOCK_SIZE_C1, 1)
 
             tile, mask = get_4d_tile_offsets(
-                0, 0, c1 * BLOCK_SIZE_C1, c2 * BLOCK_SIZE_C2,
+                0,
+                0,
+                c1 * BLOCK_SIZE_C1,
+                c2 * BLOCK_SIZE_C2,
                 tile_dims=(K_NEXT_2, K_NEXT_2, BLOCK_SIZE_C1, BLOCK_SIZE_C2),
                 matrix_dims=(K, K, C1, C2),
             )
@@ -131,7 +145,10 @@ def _conv2d(input,  # (N, H, W, C1)
             sum += tl.sum(conv_matrix * weight_tile, axis=0)[None, None, None, :]
 
         output_tile, output_mask = get_4d_tile_offsets(
-            n, i, j, c2 * BLOCK_SIZE_C2,
+            n,
+            i,
+            j,
+            c2 * BLOCK_SIZE_C2,
             tile_dims=(1, 1, 1, BLOCK_SIZE_C2),
             matrix_dims=(N, H_out, W_out, C2),
         )
@@ -139,36 +156,38 @@ def _conv2d(input,  # (N, H, W, C1)
 
 
 @use_grid(lambda meta: (
-        triton.cdiv(meta['N'], meta['BLOCK_SIZE_N']),
-        triton.cdiv(meta['M'], meta['BLOCK_SIZE_M']),
+    triton.cdiv(meta['N'], meta['BLOCK_SIZE_N']),
+    triton.cdiv(meta['M'], meta['BLOCK_SIZE_M']),
 ))
 @derive_launch_arguments(lambda x, **_: {
     'N': reduce(operator.mul, x.shape[1:], 1),
     'M': x.shape[0],
 })
-@triton.autotune(configs=[
-    triton.Config(kwargs={'BLOCK_SIZE_N': n, 'BLOCK_SIZE_M': m}, num_warps=w)
-    for n, m, w in
-    itertools.product([4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048],
-                      [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048],
-                      [1, 2, 4, 8])
-    if n * m < (1 << 16)  # Arbitrary limit to not be too slow.
-],
+@triton.autotune(
+    configs=[
+        triton.Config(kwargs={
+            'BLOCK_SIZE_N': n,
+            'BLOCK_SIZE_M': m
+        }, num_warps=w)
+        for n, m, w in itertools.product([4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048],
+                                         [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048], [1, 2, 4, 8])
+        if n * m < (1 << 16)  # Arbitrary limit to not be too slow.
+    ],
     key=['N', 'M'],
-    cache_results=True
-)
+    cache_results=True)
 @triton.jit()
-def _batchnorm2d_normalize(x,  # (M, N)
-                           mean,  # (N,)
-                           stddev,  # (N,)
-                           eps,
-                           N: tl.constexpr,
-                           M: tl.constexpr,
-                           BLOCK_SIZE_N: tl.constexpr,
-                           BLOCK_SIZE_M: tl.constexpr,
-                           post_process: tl.constexpr,
-                           extra_arg=0.0,
-                           ):
+def _batchnorm2d_normalize(
+    x,  # (M, N)
+    mean,  # (N,)
+    stddev,  # (N,)
+    eps,
+    N: tl.constexpr,
+    M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    post_process: tl.constexpr,
+    extra_arg=0.0,
+):
     n = tl.program_id(axis=0)
     m = tl.program_id(axis=1)
     tile, mask, rows, columns = get_2d_tile_offsets(n * BLOCK_SIZE_N,
@@ -189,17 +208,17 @@ def _padded_batchnorm2d_relu(x, eps=1e-5):
     Fused implementation of batchnorm2d with relu activation with a padding preprocessing step.
     """
 
-    padded = torch.zeros((x.shape[0], x.shape[1] + 2, x.shape[2] + 2,
-                          x.shape[3]), dtype=x.dtype, device=x.device)
+    padded = torch.zeros((x.shape[0], x.shape[1] + 2, x.shape[2] + 2, x.shape[3]), dtype=x.dtype, device=x.device)
     # TODO: Maybe this can somehow be fused into 'batchnorm2d_relu'?
     padded[:, 1:-1, 1:-1, :] = x
     return _batchnorm2d_relu(padded, eps)
 
 
 # Batch normalization operator, as used in ResNet
-def _batchnorm2d_relu_input(x,  # (N, H, W, C)
-                            input,  # (N, H, W, C)
-                            eps=1e-5):
+def _batchnorm2d_relu_input(
+        x,  # (N, H, W, C)
+        input,  # (N, H, W, C)
+        eps=1e-5):
     """
     Fused implementation of batchnorm2d with 'relu(result + input)' activation.
     """
@@ -223,8 +242,9 @@ def _batchnorm2d_relu_input(x,  # (N, H, W, C)
     return x
 
 
-def _batchnorm2d_relu(x,  # (N, H, W, C)
-                      eps=1e-5):
+def _batchnorm2d_relu(
+        x,  # (N, H, W, C)
+        eps=1e-5):
     """
     Fused implementation of batchnorm2d with relu activation.
     """
@@ -239,7 +259,8 @@ def _batchnorm2d_relu(x,  # (N, H, W, C)
     kernel_compute_stddev(mean, stddev)
 
     @triton.jit()
-    def post_process(x, _0, _1, _2): return tl.maximum(x, 0.0)
+    def post_process(x, _0, _1, _2):
+        return tl.maximum(x, 0.0)
 
     # (N, H, W, C) -> (1, H, W, C) -> (1, H, W, C) -> () -> (N, H, W, C)
     _batchnorm2d_normalize(x, mean, stddev, eps, post_process=post_process)
@@ -252,8 +273,7 @@ def resnet_basicblock(input, conv1, conv2, conv3):
     N, H, W, C1 = input.shape
     C2 = conv1.shape[-1]
 
-    x_new = torch.zeros((N, H, W, C2), dtype=input.dtype,
-                        device=input.device)
+    x_new = torch.zeros((N, H, W, C2), dtype=input.dtype, device=input.device)
     # (N, H, W, C1) -> (1, 1, C1, C2) -> (N, H, W, C2)
     _conv2d(input, conv1, x_new)
 

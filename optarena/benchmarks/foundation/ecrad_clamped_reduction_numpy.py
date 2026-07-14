@@ -9,6 +9,7 @@ the Foundation track.
 import numpy as np
 from math import sqrt
 
+
 def ecrad_clamped_reduction(x, y, d, out, LEN_1D):
     # array shapes (numpy->dace): x=(LEN_1D,), y=(LEN_1D,), d=(LEN_1D,), out=(LEN_1D,)
     """ECRAD-shaped per-element clamped transmittance:

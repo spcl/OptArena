@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def scan_multi_carry(a, b, x, y, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), b=(LEN_1D,), x=(LEN_1D,), y=(LEN_1D,)
     """Two distinct unit-stride recurrences in one loop body: an additive

@@ -11,5 +11,6 @@ comm + workspace as keywords; the output tile B is mutated IN PLACE. M/N (the LO
 and workspace are unused -- numpy carries the shape, and there is no halo or scratch.
 """
 
+
 def kernel_mpi(A, B, M, N, alpha, *, comm, workspace):
     B[...] = B + alpha * A

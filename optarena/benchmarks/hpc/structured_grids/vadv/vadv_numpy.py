@@ -21,8 +21,7 @@ def vadv(utens_stage, u_stage, wcon, u_pos, utens, dtr_stage):
 
         # update the d column
         correction_term = -cs * (u_stage[:, :, k + 1] - u_stage[:, :, k])
-        dcol[:, :, k] = (dtr_stage * u_pos[:, :, k] + utens[:, :, k] +
-                         utens_stage[:, :, k] + correction_term)
+        dcol[:, :, k] = (dtr_stage * u_pos[:, :, k] + utens[:, :, k] + utens_stage[:, :, k] + correction_term)
 
         # Thomas forward
         divided = 1.0 / bcol
@@ -41,11 +40,9 @@ def vadv(utens_stage, u_stage, wcon, u_pos, utens, dtr_stage):
         bcol = dtr_stage - acol - ccol[:, :, k]
 
         # update the d column
-        correction_term = -as_ * (u_stage[:, :, k - 1] -
-                                  u_stage[:, :, k]) - cs * (
-                                      u_stage[:, :, k + 1] - u_stage[:, :, k])
-        dcol[:, :, k] = (dtr_stage * u_pos[:, :, k] + utens[:, :, k] +
-                         utens_stage[:, :, k] + correction_term)
+        correction_term = -as_ * (u_stage[:, :, k - 1] - u_stage[:, :, k]) - cs * (u_stage[:, :, k + 1] -
+                                                                                   u_stage[:, :, k])
+        dcol[:, :, k] = (dtr_stage * u_pos[:, :, k] + utens[:, :, k] + utens_stage[:, :, k] + correction_term)
 
         # Thomas forward
         divided = 1.0 / (bcol - ccol[:, :, k - 1] * acol)
@@ -60,8 +57,7 @@ def vadv(utens_stage, u_stage, wcon, u_pos, utens, dtr_stage):
 
         # update the d column
         correction_term = -as_ * (u_stage[:, :, k - 1] - u_stage[:, :, k])
-        dcol[:, :, k] = (dtr_stage * u_pos[:, :, k] + utens[:, :, k] +
-                         utens_stage[:, :, k] + correction_term)
+        dcol[:, :, k] = (dtr_stage * u_pos[:, :, k] + utens[:, :, k] + utens_stage[:, :, k] + correction_term)
 
         # Thomas forward
         divided = 1.0 / (bcol - ccol[:, :, k - 1] * acol)

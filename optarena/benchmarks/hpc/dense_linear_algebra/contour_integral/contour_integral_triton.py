@@ -15,10 +15,10 @@ def generate_config_2d():
     if knobs.runtime.interpret:
         return [triton.Config(kwargs={"BLOCK_SIZE_M": 4, "BLOCK_SIZE_N": 2})]
     return [
-        triton.Config(kwargs={"BLOCK_SIZE_M": m, "BLOCK_SIZE_N": n}, num_warps=w)
-        for m, n, w in itertools.product(
-            powers_of_2(10), powers_of_2(10), powers_of_2(3)
-        )
+        triton.Config(kwargs={
+            "BLOCK_SIZE_M": m,
+            "BLOCK_SIZE_N": n
+        }, num_warps=w) for m, n, w in itertools.product(powers_of_2(10), powers_of_2(10), powers_of_2(3))
         if m * n <= 1 << 13  # Arbitrary choice.
     ]
 
@@ -32,16 +32,18 @@ def generate_config_1d():
     ]
 
 
-@use_grid(lambda meta: (triton.cdiv((meta['N'] - (meta['k'] + 1)), meta["BLOCK_SIZE"]),))
-@derive_launch_arguments(lambda M_real, **_:
-                         {'N': M_real.shape[0], })
+@use_grid(lambda meta: (triton.cdiv((meta['N'] - (meta['k'] + 1)), meta["BLOCK_SIZE"]), ))
+@derive_launch_arguments(lambda M_real, **_: {
+    'N': M_real.shape[0],
+})
 @triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_lu_div_column(
-        M_real,
-        M_imag,
-        k, N,
-        BLOCK_SIZE: tl.constexpr,
+    M_real,
+    M_imag,
+    k,
+    N,
+    BLOCK_SIZE: tl.constexpr,
 ):
     """
     for i in k+1..N-1: A[i,k] /= A[k,k]
@@ -67,16 +69,18 @@ def _kernel_lu_div_column(
     tl.store(col_imag_ptrs, vals_imag, mask=mask)
 
 
-@derive_launch_arguments(lambda M_real, **_:
-                         {'N': M_real.shape[0], })
+@derive_launch_arguments(lambda M_real, **_: {
+    'N': M_real.shape[0],
+})
 @triton.autotune(configs=generate_config_2d(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_lu_trailing_update(
-        M_real,
-        M_imag,
-        k, N: tl.constexpr,
-        BLOCK_SIZE_M: tl.constexpr,
-        BLOCK_SIZE_N: tl.constexpr,
+    M_real,
+    M_imag,
+    k,
+    N: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
 ):
     """
     A[k+1:, k+1:] -= A[k+1:, k] @ A[k, k+1:]   (rank-1 update)
@@ -111,21 +115,24 @@ def _kernel_lu_trailing_update(
         tl.store(a_imag_ptrs, Ablk_imag - temp_imag, mask=mask)
 
 
-@use_grid(lambda meta: (triton.cdiv(meta['NM'], meta['BLOCK_SIZE_M']),))
-@derive_launch_arguments(lambda M_real, A_real, **_:
-                         {
-                             'N': M_real.shape[0],
-                             'NM': A_real.shape[-1],
-                         })
+@use_grid(lambda meta: (triton.cdiv(meta['NM'], meta['BLOCK_SIZE_M']), ))
+@derive_launch_arguments(lambda M_real, A_real, **_: {
+    'N': M_real.shape[0],
+    'NM': A_real.shape[-1],
+})
 @triton.autotune(configs=generate_config_2d(), key=["N", "NM"], cache_results=True)
 @triton.jit
 def _kernel_forward_row(
-        M_real, M_imag,  # (NR, NR)
-        A_real, A_imag,  # (NR, NM)
-        y_real, y_imag,  # (NR, NM)
-        N: tl.constexpr, NM: tl.constexpr,
-        BLOCK_SIZE_N: tl.constexpr,
-        BLOCK_SIZE_M: tl.constexpr,
+    M_real,
+    M_imag,  # (NR, NR)
+    A_real,
+    A_imag,  # (NR, NM)
+    y_real,
+    y_imag,  # (NR, NM)
+    N: tl.constexpr,
+    NM: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
 ):
     """
     Compute: y[i] = b[i] - dot(A[i, :i], y[:i])
@@ -134,20 +141,21 @@ def _kernel_forward_row(
     m = tl.program_id(axis=0)
 
     for i in range(N):
-        acc_real = tl.zeros((BLOCK_SIZE_M,), dtype=M_real.dtype.element_ty)
-        acc_imag = tl.zeros((BLOCK_SIZE_M,), dtype=M_real.dtype.element_ty)
+        acc_real = tl.zeros((BLOCK_SIZE_M, ), dtype=M_real.dtype.element_ty)
+        acc_imag = tl.zeros((BLOCK_SIZE_M, ), dtype=M_real.dtype.element_ty)
 
         # process in tiles of BLOCK_SIZE
         # num full/partial tiles = ceil(i / BLOCK_SIZE)
         num_tiles = (i + BLOCK_SIZE_N - 1) // BLOCK_SIZE_N
         for t in range(0, num_tiles):
-            tile, mask, rows, _ = get_2d_tile_offsets(m * BLOCK_SIZE_M,
-                                                      t * BLOCK_SIZE_N,
-                                                      tile_width=BLOCK_SIZE_M,
-                                                      tile_height=BLOCK_SIZE_N,
-                                                      matrix_width=NM,
-                                                      matrix_height=N,
-                                                      )  # (BLOCK_SIZE_N, BLOCK_SIZE_M)
+            tile, mask, rows, _ = get_2d_tile_offsets(
+                m * BLOCK_SIZE_M,
+                t * BLOCK_SIZE_N,
+                tile_width=BLOCK_SIZE_M,
+                tile_height=BLOCK_SIZE_N,
+                matrix_width=NM,
+                matrix_height=N,
+            )  # (BLOCK_SIZE_N, BLOCK_SIZE_M)
             mask &= rows[:, None] < i
             cols = rows
             cols_mask = cols < i
@@ -162,13 +170,14 @@ def _kernel_forward_row(
             acc_real += tl.sum(mul_real, axis=0)
             acc_imag += tl.sum(mul_imag, axis=0)
 
-        tile, mask, _, _ = get_2d_tile_offsets(x=m * BLOCK_SIZE_M,
-                                               y=i,
-                                               tile_width=BLOCK_SIZE_M,
-                                               tile_height=1,
-                                               matrix_width=NM,
-                                               matrix_height=N,
-                                               )
+        tile, mask, _, _ = get_2d_tile_offsets(
+            x=m * BLOCK_SIZE_M,
+            y=i,
+            tile_width=BLOCK_SIZE_M,
+            tile_height=1,
+            matrix_width=NM,
+            matrix_height=N,
+        )
 
         bi_real = tl.load(A_real + tile, mask)
         bi_imag = tl.load(A_imag + tile, mask)
@@ -178,43 +187,46 @@ def _kernel_forward_row(
         tl.store(y_imag + tile, yi_imag, mask)
 
 
-@use_grid(lambda meta: (triton.cdiv(meta['NM'], meta['BLOCK_SIZE_M']),))
-@derive_launch_arguments(lambda M_real, y_real, **_:
-                         {
-                             'N': M_real.shape[0],
-                             'NM': y_real.shape[-1],
-                         })
+@use_grid(lambda meta: (triton.cdiv(meta['NM'], meta['BLOCK_SIZE_M']), ))
+@derive_launch_arguments(lambda M_real, y_real, **_: {
+    'N': M_real.shape[0],
+    'NM': y_real.shape[-1],
+})
 @triton.autotune(configs=generate_config_2d(), key=["N", "NM"], cache_results=True)
 @triton.jit
 def _kernel_backward_row(
-        M_real, M_imag,  # (NR, NR)
-        y_real, y_imag,  # (NR, NM)
-        x_real, x_imag,  # (NR, NM)
-        N: tl.constexpr,
-        NM: tl.constexpr,
-        BLOCK_SIZE_N: tl.constexpr,
-        BLOCK_SIZE_M: tl.constexpr,
+    M_real,
+    M_imag,  # (NR, NR)
+    y_real,
+    y_imag,  # (NR, NM)
+    x_real,
+    x_imag,  # (NR, NM)
+    N: tl.constexpr,
+    NM: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
 ):
     """
     Compute: x[i] = (y[i] - dot(A[i, i+1:], x[i+1:])) / A[i,i]
     """
     m = tl.program_id(axis=0)
     for i in range(N - 1, -1, -1):
-        acc_real = tl.zeros((BLOCK_SIZE_M,), dtype=M_real.dtype.element_ty)
-        acc_imag = tl.zeros((BLOCK_SIZE_M,), dtype=M_real.dtype.element_ty)
+        acc_real = tl.zeros((BLOCK_SIZE_M, ), dtype=M_real.dtype.element_ty)
+        acc_imag = tl.zeros((BLOCK_SIZE_M, ), dtype=M_real.dtype.element_ty)
 
         # length of the suffix
         len_suf = N - (i + 1)
         num_tiles = (len_suf + BLOCK_SIZE_N - 1) // BLOCK_SIZE_N
 
         for t in range(0, num_tiles):
-            tile, mask, rows, _ = get_2d_tile_offsets(m * BLOCK_SIZE_M,
-                                                      (i + 1) + t * BLOCK_SIZE_N,
-                                                      tile_width=BLOCK_SIZE_M,
-                                                      tile_height=BLOCK_SIZE_N,
-                                                      matrix_width=NM,
-                                                      matrix_height=N,
-                                                      )  # (BLOCK_SIZE_N, BLOCK_SIZE_M)
+            tile, mask, rows, _ = get_2d_tile_offsets(
+                m * BLOCK_SIZE_M,
+                (i + 1) + t * BLOCK_SIZE_N,
+                tile_width=BLOCK_SIZE_M,
+                tile_height=BLOCK_SIZE_N,
+                matrix_width=NM,
+                matrix_height=N,
+            )  # (BLOCK_SIZE_N, BLOCK_SIZE_M)
 
             cols = rows
             cols_mask = cols < N
@@ -228,13 +240,14 @@ def _kernel_backward_row(
             acc_real += tl.sum(mul_real, axis=0)
             acc_imag += tl.sum(mul_imag, axis=0)
 
-        tile, mask, _, _ = get_2d_tile_offsets(m * BLOCK_SIZE_M,
-                                               i,
-                                               tile_width=BLOCK_SIZE_M,
-                                               tile_height=1,
-                                               matrix_width=NM,
-                                               matrix_height=N,
-                                               )  # (BLOCK_SIZE_N, BLOCK_SIZE_M)
+        tile, mask, _, _ = get_2d_tile_offsets(
+            m * BLOCK_SIZE_M,
+            i,
+            tile_width=BLOCK_SIZE_M,
+            tile_height=1,
+            matrix_width=NM,
+            matrix_height=N,
+        )  # (BLOCK_SIZE_N, BLOCK_SIZE_M)
 
         yi_real = tl.load(y_real + tile, mask)
         yi_imag = tl.load(y_imag + tile, mask)
@@ -247,15 +260,16 @@ def _kernel_backward_row(
         tl.store(x_imag + tile, xi_imag, mask)
 
 
-def _linalg_solve(M_real,  # (NR, NR)
-                  M_imag,  # (NR, NR)
-                  A_real,  # (NR, NM)
-                  A_imag,  # (NR, NM)
-                  X_real,  # (NR, NM)
-                  X_imag,  # (NR, NM)
-                  y_real,  # (NR, NM)
-                  y_imag,  # (NR, NM)
-                  ):
+def _linalg_solve(
+        M_real,  # (NR, NR)
+        M_imag,  # (NR, NR)
+        A_real,  # (NR, NM)
+        A_imag,  # (NR, NM)
+        X_real,  # (NR, NM)
+        X_imag,  # (NR, NM)
+        y_real,  # (NR, NM)
+        y_imag,  # (NR, NM)
+):
     """
     Solves for every X in: \forall nm: M * X_{nm} = A_{nm}
     """
@@ -266,7 +280,8 @@ def _linalg_solve(M_real,  # (NR, NR)
         # 1) scale column below pivot
         if k + 1 < N:
             _kernel_lu_div_column(
-                M_real, M_imag,
+                M_real,
+                M_imag,
                 k,
             )
 
@@ -279,52 +294,62 @@ def _linalg_solve(M_real,  # (NR, NR)
             )
 
             _kernel_lu_trailing_update[grid_upd](
-                M_real, M_imag, k,
+                M_real,
+                M_imag,
+                k,
             )
 
     # -------- Forward solve Ly=b (unit lower) --------
 
     _kernel_forward_row(
-        M_real, M_imag,
-        A_real, A_imag, y_real, y_imag,
+        M_real,
+        M_imag,
+        A_real,
+        A_imag,
+        y_real,
+        y_imag,
     )
 
     # -------- Backward solve Ux=y --------
 
     _kernel_backward_row(
-        M_real, M_imag,
-        y_real, y_imag,
-        X_real, X_imag,
+        M_real,
+        M_imag,
+        y_real,
+        y_imag,
+        X_real,
+        X_imag,
     )
 
 
-@use_grid(lambda meta: (triton.cdiv(meta['NR'], meta['BLOCK_SIZE_N']),
-                        triton.cdiv(meta['NM'], meta['BLOCK_SIZE_M'])))
-@derive_launch_arguments(lambda X_real, **_:
-                         {
-                             'NR': X_real.shape[0],
-                             'NM': X_real.shape[1],
-                         })
+@use_grid(lambda meta: (triton.cdiv(meta['NR'], meta['BLOCK_SIZE_N']), triton.cdiv(meta['NM'], meta['BLOCK_SIZE_M'])))
+@derive_launch_arguments(lambda X_real, **_: {
+    'NR': X_real.shape[0],
+    'NM': X_real.shape[1],
+})
 @triton.autotune(configs=generate_config_2d(), key=["NR", "NM"], cache_results=True)
 @triton.jit(do_not_specialize=['z_real', 'z_imag'])
 def _post_process(
-        X_real,  # (NR, NM)
-        X_imag,  # (NR, NM)
-        P0,  # (NR, NM, 2)
-        P1,  # (NR, NM, 2)
-        z_real: tl_float,
-        z_imag: tl_float,
-        NR: tl.constexpr,
-        NM: tl.constexpr,
-        BLOCK_SIZE_N: tl.constexpr,
-        BLOCK_SIZE_M: tl.constexpr,
+    X_real,  # (NR, NM)
+    X_imag,  # (NR, NM)
+    P0,  # (NR, NM, 2)
+    P1,  # (NR, NM, 2)
+    z_real: tl_float,
+    z_imag: tl_float,
+    NR: tl.constexpr,
+    NM: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
 ):
     n = tl.program_id(axis=0)
     m = tl.program_id(axis=1)
 
-    tile, mask, _, _ = get_2d_tile_offsets(m * BLOCK_SIZE_M, n * BLOCK_SIZE_N,
-                                           tile_width=BLOCK_SIZE_M, tile_height=BLOCK_SIZE_N,
-                                           matrix_width=NM, matrix_height=NR)
+    tile, mask, _, _ = get_2d_tile_offsets(m * BLOCK_SIZE_M,
+                                           n * BLOCK_SIZE_N,
+                                           tile_width=BLOCK_SIZE_M,
+                                           tile_height=BLOCK_SIZE_N,
+                                           matrix_width=NM,
+                                           matrix_height=NR)
     x_real = tl.load(X_real + tile, mask)
     x_imag = tl.load(X_imag + tile, mask)
     comp_abs = z_real * z_real + z_imag * z_imag
@@ -336,7 +361,8 @@ def _post_process(
                                            n * BLOCK_SIZE_N,
                                            tile_width=BLOCK_SIZE_M * 2,
                                            tile_height=BLOCK_SIZE_N,
-                                           matrix_width=NM * 2, matrix_height=NR)
+                                           matrix_width=NM * 2,
+                                           matrix_height=NR)
     p0 = tl.load(P0 + tile, mask)
     p1 = tl.load(P1 + tile, mask)
     p0 += tl.interleave(x_real, x_imag)
@@ -346,28 +372,28 @@ def _post_process(
     tl.store(P1 + tile, p1, mask)
 
 
-@use_grid(lambda meta: (triton.cdiv(meta['NR'], meta['BLOCK_SIZE']),
-                        triton.cdiv(meta['NR'], meta['BLOCK_SIZE'])))
-@derive_launch_arguments(lambda Ham_real, **_:
-                         {
-                             'NR': Ham_real.shape[-1],
-                             'slab_per_bc': Ham_real.shape[0] - 1,
-                         })
+@use_grid(lambda meta: (triton.cdiv(meta['NR'], meta['BLOCK_SIZE']), triton.cdiv(meta['NR'], meta['BLOCK_SIZE'])))
+@derive_launch_arguments(lambda Ham_real, **_: {
+    'NR': Ham_real.shape[-1],
+    'slab_per_bc': Ham_real.shape[0] - 1,
+})
 @triton.autotune(configs=[
     triton.Config(kwargs={"BLOCK_SIZE": bsz}, num_warps=w)
     for bsz, w in itertools.product(powers_of_2(7), powers_of_2(3))
-], key=["NR"], cache_results=True)
+],
+                 key=["NR"],
+                 cache_results=True)
 @triton.jit
 def _calculate_tz(
-        Tz_real,  # (NR, NR)
-        Tz_imag,  # (NR, NR)
-        Ham_real,  # (slab_per_bc + 1, NR, NR)
-        Ham_imag,  # (slab_per_bc + 1, NR, NR)
-        z_real: tl_float,
-        z_imag: tl_float,
-        NR: tl.constexpr,
-        slab_per_bc: tl.constexpr,
-        BLOCK_SIZE: tl.constexpr,
+    Tz_real,  # (NR, NR)
+    Tz_imag,  # (NR, NR)
+    Ham_real,  # (slab_per_bc + 1, NR, NR)
+    Ham_imag,  # (slab_per_bc + 1, NR, NR)
+    z_real: tl_float,
+    z_imag: tl_float,
+    NR: tl.constexpr,
+    slab_per_bc: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
 ):
     """
         Tz = torch.zeros((NR, NR), dtype=dtype)
@@ -380,7 +406,8 @@ def _calculate_tz(
     x = tl.program_id(axis=0)
     y = tl.program_id(axis=1)
 
-    tile, mask, _, _ = get_2d_tile_offsets(x * BLOCK_SIZE, y * BLOCK_SIZE,
+    tile, mask, _, _ = get_2d_tile_offsets(x * BLOCK_SIZE,
+                                           y * BLOCK_SIZE,
                                            tile_width=BLOCK_SIZE,
                                            tile_height=BLOCK_SIZE,
                                            matrix_width=NR,
@@ -410,13 +437,14 @@ def _calculate_tz(
     tl.store(Tz_imag + tile, acc_imag, mask)
 
 
-def contour_integral(NR,
-                     NM,
-                     _,
-                     Ham,  # (slab_per_bc + 1, NR, NR)[complex128]
-                     int_pts: torch.Tensor,  # (num_int_ptsm, )[complex128]
-                     Y,  # (NR, NM)[complex128]
-                     ):
+def contour_integral(
+        NR,
+        NM,
+        _,
+        Ham,  # (slab_per_bc + 1, NR, NR)[complex128]
+        int_pts: torch.Tensor,  # (num_int_ptsm, )[complex128]
+        Y,  # (NR, NM)[complex128]
+):
     dtype = Ham.dtype
     sdtype = torch.float32 if dtype == torch.complex64 else torch.float64
     P0 = torch.zeros_like(Y)

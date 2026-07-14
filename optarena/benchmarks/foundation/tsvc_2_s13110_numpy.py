@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def s13110(aa, bb, LEN_2D):
     # array shapes (numpy->dace): aa=(LEN_2D,LEN_2D), bb=(2,2)
     maxv = aa[0, 0]

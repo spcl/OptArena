@@ -19,5 +19,5 @@ import numpy as np
 
 def kernel(beta, dij, psi, hpsi):
 
-    overlap = beta.T @ psi              # <beta_q | psi_j>   (nproj, nstate)
-    hpsi[:] = beta @ (dij @ overlap)   # sum_pq beta_p D_pq overlap_qj   (ngrid, nstate)
+    overlap = beta.T @ psi  # <beta_q | psi_j>   (nproj, nstate)
+    hpsi[:] = beta @ (dij @ overlap)  # sum_pq beta_p D_pq overlap_qj   (ngrid, nstate)

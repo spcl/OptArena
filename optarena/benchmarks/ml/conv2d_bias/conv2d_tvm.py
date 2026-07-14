@@ -24,7 +24,7 @@ from optarena.infrastructure.tvm_build import TvmKernel, cpu_target, gpu_target,
 def build_primfunc(N, H, W, C_in, K, C_out, dtype):
     inp = te.placeholder((N, H, W, C_in), name="input", dtype=dtype)
     wgt = te.placeholder((K, K, C_in, C_out), name="weights", dtype=dtype)
-    bias = te.placeholder((C_out,), name="bias", dtype=dtype)
+    bias = te.placeholder((C_out, ), name="bias", dtype=dtype)
 
     H_out = H - K + 1
     W_out = W - K + 1
@@ -45,8 +45,7 @@ def build_primfunc(N, H, W, C_in, K, C_out, dtype):
         lambda n, i, j, co: out[n, i, j, co] + bias[co],
         name="conv_bias",
     )
-    return te.create_prim_func([inp, wgt, bias, out_b]).with_attr(
-        "global_symbol", "conv2d_bias")
+    return te.create_prim_func([inp, wgt, bias, out_b]).with_attr("global_symbol", "conv2d_bias")
 
 
 _K_cpu = TvmKernel("conv2d_bias_cpu", build_primfunc, cpu_target, lambda: tvm.cpu(0))

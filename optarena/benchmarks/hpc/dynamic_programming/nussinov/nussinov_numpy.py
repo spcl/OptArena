@@ -18,9 +18,7 @@ def kernel(N, seq, table):
                 table[i, j] = max(table[i, j], table[i + 1, j])
             if j - 1 >= 0 and i + 1 < N:
                 if i < j - 1:
-                    table[i,
-                          j] = max(table[i, j],
-                                   table[i + 1, j - 1] + match(seq[i], seq[j]))
+                    table[i, j] = max(table[i, j], table[i + 1, j - 1] + match(seq[i], seq[j]))
                 else:
                     table[i, j] = max(table[i, j], table[i + 1, j - 1])
             for k in range(i + 1, j):

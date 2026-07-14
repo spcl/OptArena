@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def fuse_move_ifs(a, b, src, cond, LEN_2D, K):
     # array shapes (numpy->dace): a=(LEN_2D,LEN_2D), b=(LEN_2D,LEN_2D), src=(LEN_2D,LEN_2D), cond=(LEN_2D,)
     """Follow-up to :func:`move_if_data_dep_nest`: two loop nests whose

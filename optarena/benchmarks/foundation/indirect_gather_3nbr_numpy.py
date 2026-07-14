@@ -6,6 +6,7 @@ either the test's hand-written reference or the @dace.program
 body with dace annotations stripped.
 """
 
+
 def indirect_gather_3nbr(field, idx, w, out, N):
     """``out[jc] = sum_k w[jc, k] * field[idx[jc, k]]`` -- 3-neighbor
     gather via an index table. Parallel over ``jc``."""

@@ -1,5 +1,3 @@
-
-
 def kernel(TSTEPS, A, B):
 
     for t in range(1, TSTEPS):

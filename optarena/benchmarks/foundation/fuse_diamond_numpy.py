@@ -8,6 +8,7 @@ the Foundation track.
 """
 import numpy as np
 
+
 def fuse_diamond(out, a, LEN_1D):
     # array shapes (numpy->dace): out=(LEN_1D,), a=(LEN_1D,)
     """Diamond producer-consumer fusion: one producer ``t = a*a`` feeds

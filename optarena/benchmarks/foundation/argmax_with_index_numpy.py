@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def argmax_with_index(a, out_value, out_index, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), out_value=(1,), out_index=(1,)
     """TSVC ``s315``: running maximum carrying BOTH the value and its

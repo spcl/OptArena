@@ -23,4 +23,3 @@ def mandelbrot(xmin, xmax, ymin, ymax, xn, yn, maxiter, horizon, Z_out, N_out):
     N[N == maxiter - 1] = 0
     Z_out[:] = Z
     N_out[:] = N
-

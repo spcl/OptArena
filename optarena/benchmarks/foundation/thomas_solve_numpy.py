@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def thomas_solve(a, b, c, d, x, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), b=(LEN_1D,), c=(LEN_1D,), d=(LEN_1D,), x=(LEN_1D,)
     """Tridiagonal Thomas algorithm: a forward elimination sweep followed

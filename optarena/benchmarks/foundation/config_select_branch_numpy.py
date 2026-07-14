@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def config_select_branch(out_a, out_b, src, LEN_1D, K):
     # array shapes (numpy->dace): out_a=(LEN_1D,), out_b=(LEN_1D,), src=(LEN_1D,)
     """Loop-invariant config flag ``K`` selects which output array each

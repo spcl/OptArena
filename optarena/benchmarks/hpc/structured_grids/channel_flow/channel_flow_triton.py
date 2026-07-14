@@ -5,14 +5,18 @@ import triton.language as tl
 
 def get_autotune_config():
     return [
-        triton.Config(kwargs={"BLOCK_SIZE_X": bx, "BLOCK_SIZE_Y": by}, num_warps=nw)
-        for bx in [8, 16, 32]
-        for by in [8, 16, 32]
-        for nw in [2, 4, 8, 16]
+        triton.Config(kwargs={
+            "BLOCK_SIZE_X": bx,
+            "BLOCK_SIZE_Y": by
+        }, num_warps=nw) for bx in [8, 16, 32] for by in [8, 16, 32] for nw in [2, 4, 8, 16]
     ]
 
 
-@triton.autotune(configs=get_autotune_config(), key=["H", "W"], cache_results=True, )
+@triton.autotune(
+    configs=get_autotune_config(),
+    key=["H", "W"],
+    cache_results=True,
+)
 @triton.jit
 def build_b_kernel(
     u_ptr,
@@ -73,7 +77,11 @@ def build_b_kernel(
     tl.store(b_ptr + center_ptr, result, mask=mask)
 
 
-@triton.autotune(configs=get_autotune_config(), key=["H", "W"], cache_results=True, )
+@triton.autotune(
+    configs=get_autotune_config(),
+    key=["H", "W"],
+    cache_results=True,
+)
 @triton.jit
 def pressure_poisson_kernel(
     p_new_ptr,
@@ -110,24 +118,19 @@ def pressure_poisson_kernel(
     pn_u = tl.load(p_old_ptr + (up_y * W + pid_x[None, :]), mask=mask & is_interior)
     pn_d = tl.load(p_old_ptr + (down_y * W + pid_x[None, :]), mask=mask & is_interior)
 
-    b_val = tl.load(
-        b_ptr + (pid_y[:, None] * W + pid_x[None, :]), mask=mask & is_interior
-    )
+    b_val = tl.load(b_ptr + (pid_y[:, None] * W + pid_x[None, :]), mask=mask & is_interior)
 
     # Poisson Equation
     dx2 = dx * dx
     dy2 = dy * dy
-    p_computed = ((pn_r + pn_l) * dy2 + (pn_u + pn_d) * dx2) / (2 * (dx2 + dy2)) - (
-        dx2 * dy2
-    ) / (2 * (dx2 + dy2)) * b_val
+    p_computed = ((pn_r + pn_l) * dy2 + (pn_u + pn_d) * dx2) / (2 * (dx2 + dy2)) - (dx2 * dy2) / (2 *
+                                                                                                  (dx2 + dy2)) * b_val
 
     # --- Wall Logic ---
     # p[0, :] = p[1, :] (dp/dy = 0)
     # p[-1, :] = p[-2, :]
     val_at_row1 = tl.load(p_old_ptr + (1 * W + pid_x[None, :]), mask=mask_x[None, :])
-    val_at_rowHm2 = tl.load(
-        p_old_ptr + ((H - 2) * W + pid_x[None, :]), mask=mask_x[None, :]
-    )
+    val_at_rowHm2 = tl.load(p_old_ptr + ((H - 2) * W + pid_x[None, :]), mask=mask_x[None, :])
 
     # Combine results
     result = tl.where(is_interior, p_computed, 0.0)
@@ -137,7 +140,11 @@ def pressure_poisson_kernel(
     tl.store(p_new_ptr + (pid_y[:, None] * W + pid_x[None, :]), result, mask=mask)
 
 
-@triton.autotune(configs=get_autotune_config(), key=["H", "W"], cache_results=True, )
+@triton.autotune(
+    configs=get_autotune_config(),
+    key=["H", "W"],
+    cache_results=True,
+)
 @triton.jit
 def update_uv_kernel(
     u_new_ptr,
@@ -200,19 +207,13 @@ def update_uv_kernel(
     dx2 = dx * dx
     dy2 = dy * dy
 
-    u_diff = nu * (
-        dt / dx2 * (un_r - 2 * un_c + un_l) + dt / dy2 * (un_u - 2 * un_c + un_d)
-    )
+    u_diff = nu * (dt / dx2 * (un_r - 2 * un_c + un_l) + dt / dy2 * (un_u - 2 * un_c + un_d))
 
     v_adv = un_c * dt / dx * (vn_c - vn_l) + vn_c * dt / dy * (vn_c - vn_d)
     v_press = dt / (2 * rho * dy) * (p_u - p_d)
-    v_diff = nu * (
-        dt / dx2 * (vn_r - 2 * vn_c + vn_l) + dt / dy2 * (vn_u - 2 * vn_c + vn_d)
-    )
+    v_diff = nu * (dt / dx2 * (vn_r - 2 * vn_c + vn_l) + dt / dy2 * (vn_u - 2 * vn_c + vn_d))
 
-    tl.store(
-        u_new_ptr + center_ptr, un_c - u_adv - u_press + u_diff + F * dt, mask=mask
-    )
+    tl.store(u_new_ptr + center_ptr, un_c - u_adv - u_press + u_diff + F * dt, mask=mask)
     tl.store(v_new_ptr + center_ptr, vn_c - v_adv - v_press + v_diff, mask=mask)
 
 
@@ -248,9 +249,8 @@ def channel_flow(nit, u, v, dt, dx, dy, p, rho, nu, F):
 
         p_curr, p_next = p_in, p_out
 
-        update_uv_kernel[grid](
-            u_next, v_next, u_curr, v_curr, p_curr, float(rho), float(nu), float(dt), float(dx), float(dy), float(F), H, W
-        )
+        update_uv_kernel[grid](u_next, v_next, u_curr, v_curr, p_curr, float(rho), float(nu), float(dt), float(dx),
+                               float(dy), float(F), H, W)
 
         sum_u_next = torch.sum(u_next)
         udiff = (sum_u_next - sum_u_curr) / sum_u_next

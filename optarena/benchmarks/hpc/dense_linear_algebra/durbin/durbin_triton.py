@@ -5,14 +5,11 @@ import triton.language as tl
 import torch
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_SIZE": bs}, num_warps=nw)
-        for bs, nw in itertools.product([64, 128, 256, 512], [1, 2, 4, 8])
-    ],
-    key=["N"],
-    cache_results=True
-)
+@triton.autotune(configs=[
+    triton.Config({"BLOCK_SIZE": bs}, num_warps=nw) for bs, nw in itertools.product([64, 128, 256, 512], [1, 2, 4, 8])
+],
+                 key=["N"],
+                 cache_results=True)
 @triton.jit
 def durbin_kernel(
     y_ptr,
@@ -73,5 +70,5 @@ def kernel(r: torch.Tensor):
     y = torch.empty_like(r)
     y_temp = torch.empty_like(r)
 
-    durbin_kernel[(1,)](y, y_temp, r, N)
+    durbin_kernel[(1, )](y, y_temp, r, N)
     return y

@@ -5,28 +5,30 @@ import triton
 import triton.language as tl
 from optarena.infrastructure.triton_utilities import get_2d_tile_offsets
 
+
 def generate_config():
     return [
-        triton.Config(kwargs={"BLOCK_SIZE_M": m, "BLOCK_SIZE_N": n}, num_warps=w)
-        for m, n, w in itertools.product(
-            [8, 16, 32, 64, 128], [8, 16, 32, 64, 128], [1, 2, 4, 8]
-        )
+        triton.Config(kwargs={
+            "BLOCK_SIZE_M": m,
+            "BLOCK_SIZE_N": n
+        }, num_warps=w) for m, n, w in itertools.product([8, 16, 32, 64, 128], [8, 16, 32, 64, 128], [1, 2, 4, 8])
         if m != 128 or n != 128
     ]
+
 
 @triton.autotune(configs=generate_config(), key=["M", "N"], cache_results=True)
 @triton.jit()
 def _kernel(
-        A, # (M, N)
-        R, # (M, )
-        P, # (N, )
-        OUT0, # (M, )
-        OUT1, # (N, )
-        M: tl.constexpr,
-        N: tl.constexpr,
-        BLOCK_SIZE_M: tl.constexpr,
-        BLOCK_SIZE_N: tl.constexpr,
-    ):
+    A,  # (M, N)
+    R,  # (M, )
+    P,  # (N, )
+    OUT0,  # (M, )
+    OUT1,  # (N, )
+    M: tl.constexpr,
+    N: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+):
     i = tl.program_id(axis=0)
     j = tl.program_id(axis=1)
 
@@ -50,8 +52,8 @@ def _kernel(
 
 def kernel(A: torch.Tensor, p: torch.Tensor, r: torch.Tensor):
     # return r @ A, A @ p
-    out0 = torch.zeros((A.shape[1],), dtype=A.dtype)
-    out1 = torch.zeros((A.shape[0],), dtype=A.dtype)
+    out0 = torch.zeros((A.shape[1], ), dtype=A.dtype)
+    out1 = torch.zeros((A.shape[0], ), dtype=A.dtype)
 
     grid = lambda meta: (
         triton.cdiv(A.shape[0], meta["BLOCK_SIZE_M"]),

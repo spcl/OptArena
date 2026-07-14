@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def s319(a, b, c, d, e, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), b=(LEN_1D,), c=(LEN_1D,), d=(LEN_1D,), e=(LEN_1D,)
     sum_val = 0.0

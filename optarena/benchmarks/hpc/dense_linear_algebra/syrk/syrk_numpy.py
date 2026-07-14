@@ -1,5 +1,3 @@
-
-
 def kernel(alpha, beta, C, A):
 
     for i in range(A.shape[0]):

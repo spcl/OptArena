@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def scan_multi_5carry(acc, delta, LEN_1D):
     # array shapes (numpy->dace): acc=(5,LEN_1D), delta=(5,LEN_1D)
     """Five INDEPENDENT prefix sums carried in one loop body (the cloudsc

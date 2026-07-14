@@ -3,12 +3,13 @@ import torch
 import triton
 import triton.language as tl
 
+
 def generate_config_2d():
     return [
-        triton.Config(kwargs={"BLOCK_SIZE_M": m, "BLOCK_SIZE_N": n}, num_warps=w)
-        for m, n, w in itertools.product(
-            [16, 32, 64, 128], [16, 32, 64, 128], [1, 2, 4, 8]
-        )
+        triton.Config(kwargs={
+            "BLOCK_SIZE_M": m,
+            "BLOCK_SIZE_N": n
+        }, num_warps=w) for m, n, w in itertools.product([16, 32, 64, 128], [16, 32, 64, 128], [1, 2, 4, 8])
     ]
 
 
@@ -17,6 +18,7 @@ def generate_config_1d():
         triton.Config(kwargs={"BLOCK_SIZE": bsz}, num_warps=w)
         for bsz, w in itertools.product([64, 128, 256, 512, 1024], [1, 2, 4, 8])
     ]
+
 
 # 1) Diagonal update at step k:
 #    L[k,k] = sqrt( A[k,k] - sum_{s<k} L[k,s]^2 )
@@ -37,12 +39,12 @@ def chol_diag_kernel(A_ptr, stride_am, stride_an, N, k, BLOCK_SIZE: tl.constexpr
     val = tl.sqrt(akk - acc)
     tl.store(A_ptr + k * stride_am + k * stride_an, val)
 
+
 # 2) Column update below diagonal at step k:
 #    For i>k: L[i,k] = ( A[i,k] - sum_{s<k} L[i,s]*L[k,s] ) / L[k,k]
 @triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True)
 @triton.jit
-def chol_col_kernel(A_ptr, stride_am, stride_an, N, k,
-                    BLOCK_SIZE: tl.constexpr):
+def chol_col_kernel(A_ptr, stride_am, stride_an, N, k, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     i = k + 1 + pid
     if i >= N:
@@ -79,11 +81,10 @@ def kernel(A: torch.Tensor):
     # Cholesky: overwrite A's lower triangle with L
     for k in range(N):
         # diag
-        chol_diag_kernel[(1,)](A, stride_am, stride_an, N, k)
+        chol_diag_kernel[(1, )](A, stride_am, stride_an, N, k)
         # column below diag: launch one program per row i=k+1..N-1
         n_rows = max(0, N - (k + 1))
         if n_rows > 0:
-            chol_col_kernel[(n_rows,)](A, stride_am, stride_an, N, k)
-
+            chol_col_kernel[(n_rows, )](A, stride_am, stride_an, N, k)
 
     return A

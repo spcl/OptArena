@@ -7,6 +7,7 @@ body with dace annotations stripped.
 """
 from math import exp, sqrt
 
+
 def two_stream_reftrans(od, g1, g2, ref, trans, NG):
     """Per-g-point two-stream reflectance/transmittance with a small-``od``
     branch and saturation clamps. Fully parallel over ``jg``."""

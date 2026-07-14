@@ -33,8 +33,8 @@ def _hpsi(x, vloc, half_inv_h2):
 
 def kernel(a, b, a0, half_inv_h2, m, vloc, X, out):
 
-    e = 0.5 * (b - a)          # half-width of the damping interval
-    c = 0.5 * (b + a)          # its centre
+    e = 0.5 * (b - a)  # half-width of the damping interval
+    c = 0.5 * (b + a)  # its centre
     sigma = e / (a0 - c)
     sigma1 = sigma
     Y = (_hpsi(X, vloc, half_inv_h2) - c * X) * (sigma1 / e)

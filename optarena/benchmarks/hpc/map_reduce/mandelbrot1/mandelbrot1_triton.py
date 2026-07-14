@@ -4,26 +4,33 @@ import triton.language as tl
 import itertools
 from optarena.infrastructure.triton_framework import tl_float
 
+
 def get_configs():
     return [
-        triton.Config(
-            {"BLOCK_SIZE_X": bx, "BLOCK_SIZE_Y": by}, num_warps=w
-        ) for bx, by, w in itertools.product([4, 8, 16, 32], [4, 8, 16], [1, 2, 4, 8])
+        triton.Config({
+            "BLOCK_SIZE_X": bx,
+            "BLOCK_SIZE_Y": by
+        }, num_warps=w) for bx, by, w in itertools.product([4, 8, 16, 32], [4, 8, 16], [1, 2, 4, 8])
     ]
+
 
 @triton.autotune(configs=get_configs(), key=["xn", "yn", "maxiter"], cache_results=True)
 @triton.jit
 def _kernel_mandelbrot(
-      N_ptr,          # output: iteration counts
-      Z_real_ptr,     # output: real part of Z
-      Z_imag_ptr,     # output: imaginary part of Z
-      xmin: tl_float, xmax: tl_float, ymin: tl_float, ymax: tl_float,  # bounds
-      xn, yn,         # grid size
-      maxiter,
-      horizon,
-      BLOCK_SIZE_X: tl.constexpr,
-      BLOCK_SIZE_Y: tl.constexpr,
-  ):
+    N_ptr,  # output: iteration counts
+    Z_real_ptr,  # output: real part of Z
+    Z_imag_ptr,  # output: imaginary part of Z
+    xmin: tl_float,
+    xmax: tl_float,
+    ymin: tl_float,
+    ymax: tl_float,  # bounds
+    xn,
+    yn,  # grid size
+    maxiter,
+    horizon,
+    BLOCK_SIZE_X: tl.constexpr,
+    BLOCK_SIZE_Y: tl.constexpr,
+):
     pid_x = tl.program_id(0)
     pid_y = tl.program_id(1)
     x_idx = pid_x * BLOCK_SIZE_X + tl.arange(0, BLOCK_SIZE_X)
@@ -62,6 +69,7 @@ def _kernel_mandelbrot(
     tl.store(Z_real_ptr + offsets, Z_real, mask=mask_2d)
     tl.store(Z_imag_ptr + offsets, Z_imag, mask=mask_2d)
 
+
 def mandelbrot(xmin, xmax, ymin, ymax, xn, yn, maxiter, horizon, Z_out, N_out):
     # Z_out / N_out are accepted to match the harness call signature; this
     # kernel allocates its own device tensors and RETURNS (Z, N) -- the harness
@@ -79,11 +87,7 @@ def mandelbrot(xmin, xmax, ymin, ymax, xn, yn, maxiter, horizon, Z_out, N_out):
     Z_real = torch.zeros((yn, xn), dtype=dtype, device=device)
     Z_imag = torch.zeros((yn, xn), dtype=dtype, device=device)
 
-    grid = lambda meta: (
-        triton.cdiv(xn, meta['BLOCK_SIZE_X']),
-        triton.cdiv(yn, meta['BLOCK_SIZE_Y'])
-    )
-
+    grid = lambda meta: (triton.cdiv(xn, meta['BLOCK_SIZE_X']), triton.cdiv(yn, meta['BLOCK_SIZE_Y']))
 
     _kernel_mandelbrot[grid](
         N,

@@ -7,31 +7,25 @@ from optarena.infrastructure.triton_utilities import matmul
 
 
 def get_conv2d_configs():
-    return [
-        triton.Config({"BLOCK_C_IN": bc}, num_warps=w)
-        for bc, w in itertools.product(
-            [16, 32, 64, 128],
-            [2, 4, 8]
-        )
-    ]
+    return [triton.Config({"BLOCK_C_IN": bc}, num_warps=w) for bc, w in itertools.product([16, 32, 64, 128], [2, 4, 8])]
 
 
-@triton.autotune(
-    configs=get_conv2d_configs(),
-    key=["C_in", "C_out", "K"],
-    cache_results=True
-)
+@triton.autotune(configs=get_conv2d_configs(), key=["C_in", "C_out", "K"], cache_results=True)
 @triton.jit
 def _kernel_conv2d_bias_relu(
-        input_ptr,
-        weights_ptr,
-        output_ptr,
-        bias_ptr,
-        N, H, W, C_in,
-        K,
-        C_out,
-        H_out, W_out,
-        BLOCK_C_IN: tl.constexpr,
+    input_ptr,
+    weights_ptr,
+    output_ptr,
+    bias_ptr,
+    N,
+    H,
+    W,
+    C_in,
+    K,
+    C_out,
+    H_out,
+    W_out,
+    BLOCK_C_IN: tl.constexpr,
 ):
     spatial_idx = tl.program_id(0)
     c_out = tl.program_id(1)
@@ -74,38 +68,39 @@ def conv2d_bias_relu(input, weights, bias):
 
     grid = (N * H_out * W_out, C_out, 1)
     _kernel_conv2d_bias_relu[grid](
-        input, weights, output, bias,
-        N, H, W, C_in,
+        input,
+        weights,
+        output,
+        bias,
+        N,
+        H,
+        W,
+        C_in,
         K,
         C_out,
-        H_out, W_out,
+        H_out,
+        W_out,
     )
 
     return output
 
 
 def get_maxpool_configs():
-    return [
-        triton.Config({"BLOCK_C": bc}, num_warps=w)
-        for bc, w in itertools.product(
-            [4, 8, 16, 32],
-            [1, 2, 4]
-        )
-    ]
+    return [triton.Config({"BLOCK_C": bc}, num_warps=w) for bc, w in itertools.product([4, 8, 16, 32], [1, 2, 4])]
 
 
-@triton.autotune(
-    configs=get_maxpool_configs(),
-    key=["C"],
-    cache_results=True
-)
+@triton.autotune(configs=get_maxpool_configs(), key=["C"], cache_results=True)
 @triton.jit
 def _kernel_maxpool2d(
-        input_ptr,
-        output_ptr,
-        N, H, W, C,
-        H_out, W_out,
-        BLOCK_C: tl.constexpr,
+    input_ptr,
+    output_ptr,
+    N,
+    H,
+    W,
+    C,
+    H_out,
+    W_out,
+    BLOCK_C: tl.constexpr,
 ):
     spatial_idx = tl.program_id(0)
     c_block_start = tl.program_id(1) * BLOCK_C
@@ -121,7 +116,7 @@ def _kernel_maxpool2d(
     h_in = h_out * 2
     w_in = w_out * 2
 
-    max_val = tl.full((BLOCK_C,), -float('inf'), dtype=input_ptr.dtype.element_ty)
+    max_val = tl.full((BLOCK_C, ), -float('inf'), dtype=input_ptr.dtype.element_ty)
 
     for i in range(2):
         for j in range(2):
@@ -144,9 +139,14 @@ def maxpool2d(x):
 
     grid = lambda meta: (N * H_out * W_out, triton.cdiv(C, meta["BLOCK_C"]), 1)
     _kernel_maxpool2d[grid](
-        x, output,
-        N, H, W, C,
-        H_out, W_out,
+        x,
+        output,
+        N,
+        H,
+        W,
+        C,
+        H_out,
+        W_out,
     )
 
     return output
@@ -155,22 +155,19 @@ def maxpool2d(x):
 def get_fc_configs():
     return [
         triton.Config({"BLOCK_SIZE": bs}, num_warps=w)
-        for bs, w in itertools.product(
-            [8, 16, 32, 64, 128],
-            [1, 2, 4, 8]
-        )
+        for bs, w in itertools.product([8, 16, 32, 64, 128], [1, 2, 4, 8])
     ]
 
 
 @triton.autotune(configs=get_fc_configs(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_bias_relu(
-        A_ptr,
-        B_ptr,
-        N: tl.int32,
-        stride_am: tl.int32,
-        stride_an: tl.int32,
-        BLOCK_SIZE: tl.constexpr,
+    A_ptr,
+    B_ptr,
+    N: tl.int32,
+    stride_am: tl.int32,
+    stride_an: tl.int32,
+    BLOCK_SIZE: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -203,12 +200,12 @@ def fc_bias_relu(A, B):
 @triton.autotune(configs=get_fc_configs(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_bias(
-        A_ptr,
-        B_ptr,
-        N: tl.int32,
-        stride_am: tl.int32,
-        stride_an: tl.int32,
-        BLOCK_SIZE: tl.constexpr,
+    A_ptr,
+    B_ptr,
+    N: tl.int32,
+    stride_am: tl.int32,
+    stride_an: tl.int32,
+    BLOCK_SIZE: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -236,8 +233,7 @@ def fc_bias(A, B):
     _kernel_bias[grid](A, B, N, A.stride(0), A.stride(1))
 
 
-def lenet5(input, conv1, conv1bias, conv2, conv2bias, fc1w, fc1b, fc2w, fc2b,
-           fc3w, fc3b, N, C_before_fc1):
+def lenet5(input, conv1, conv1bias, conv2, conv2bias, fc1w, fc1b, fc2w, fc2b, fc3w, fc3b, N, C_before_fc1):
     x = conv2d_bias_relu(input, conv1, conv1bias)
     x = maxpool2d(x)
     x = conv2d_bias_relu(x, conv2, conv2bias)

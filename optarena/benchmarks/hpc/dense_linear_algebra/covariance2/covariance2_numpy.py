@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def kernel(M, float_n, data, out):
 
     mean = np.mean(data, axis=0)

@@ -55,12 +55,12 @@ import numpy as np
 # Written as precomputed float literals (not ``7.0 / 12.0`` expressions) so the
 # OptArena frontend's module-constant inliner folds them into the C / C++ /
 # Fortran body, matching the cloudsc convention.
-P1 = 0.5833333333333334     # 7/12   (PPM volume-mean)
-P2 = -0.08333333333333333   # -1/12
+P1 = 0.5833333333333334  # 7/12   (PPM volume-mean)
+P2 = -0.08333333333333333  # -1/12
 # volume-conserving cubic, 2nd deriv = 0 at end point (non-monotonic):
-C1 = -0.14285714285714285   # -2/14
-C2 = 0.7857142857142857     # 11/14
-C3 = 0.35714285714285715    # 5/14
+C1 = -0.14285714285714285  # -2/14
+C2 = 0.7857142857142857  # 11/14
+C3 = 0.35714285714285715  # 5/14
 
 
 def fv3_xppm(q, courant, dxa, xflux, nhalo, ni, nj, nk, iord, grid_type):
@@ -78,7 +78,7 @@ def fv3_xppm(q, courant, dxa, xflux, nhalo, ni, nj, nk, iord, grid_type):
     """
     mord = abs(iord)
     i_start = nhalo
-    i_end = nhalo + ni - 1            # last interior cell center
+    i_end = nhalo + ni - 1  # last interior cell center
 
     # ``al``: q interpolated to x-interfaces. Build it over the window that the
     # flux loop reads ( i_start-1 .. i_end+2 ), so al[i], al[i+1] and al[i-1]
@@ -94,10 +94,10 @@ def fv3_xppm(q, courant, dxa, xflux, nhalo, ni, nj, nk, iord, grid_type):
                     if i == i_start - 1 or i == i_end:
                         a = C1 * q[i - 2, j, k] + C2 * q[i - 1, j, k] + C3 * q[i, j, k]
                     if i == i_start or i == i_end + 1:
-                        left = ((2.0 * dxa[i - 1, j, k] + dxa[i - 2, j, k]) * q[i - 1, j, k]
-                                - dxa[i - 1, j, k] * q[i - 2, j, k]) / (dxa[i - 2, j, k] + dxa[i - 1, j, k])
-                        right = ((2.0 * dxa[i, j, k] + dxa[i + 1, j, k]) * q[i, j, k]
-                                 - dxa[i, j, k] * q[i + 1, j, k]) / (dxa[i, j, k] + dxa[i + 1, j, k])
+                        left = ((2.0 * dxa[i - 1, j, k] + dxa[i - 2, j, k]) * q[i - 1, j, k] -
+                                dxa[i - 1, j, k] * q[i - 2, j, k]) / (dxa[i - 2, j, k] + dxa[i - 1, j, k])
+                        right = ((2.0 * dxa[i, j, k] + dxa[i + 1, j, k]) * q[i, j, k] -
+                                 dxa[i, j, k] * q[i + 1, j, k]) / (dxa[i, j, k] + dxa[i + 1, j, k])
                         a = 0.5 * (left + right)
                     if i == i_start + 1 or i == i_end + 2:
                         a = C3 * q[i - 1, j, k] + C2 * q[i, j, k] + C1 * q[i + 1, j, k]

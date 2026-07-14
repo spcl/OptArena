@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def reroll_gather(a, b, ip, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), b=(LEN_1D,), ip=(LEN_1D,)
     """TSVC ``s353``: a saxpy hand-unrolled 7x whose source is an indirect

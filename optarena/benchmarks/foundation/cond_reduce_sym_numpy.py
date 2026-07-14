@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def cond_reduce_sym(a, out, LEN_1D, K):
     # array shapes (numpy->dace): a=(LEN_1D,), out=(1,)
     """Symbolic-threshold sibling of :func:`cond_reduce_sum`:

@@ -13,8 +13,7 @@ import scipy.sparse as sp
 # then forms the dense triple product. This is statically lowerable (no helper
 # tuple-returns, no map/lambda, no dynamic-length ``@``) and numerically
 # identical to a band-aware multiply -- both compute the same A @ B @ A^T.
-def banded_mmt(A, a_lbound: int, a_ubound: int,
-               B, b_lbound: int, b_ubound: int, ret_out):
+def banded_mmt(A, a_lbound: int, a_ubound: int, B, b_lbound: int, b_ubound: int, ret_out):
     # Sparse inputs: native sparse triple product. The static dense backends
     # prune this branch (sp.issparse is statically False there).
     if sp.issparse(A) and sp.issparse(B):

@@ -85,7 +85,7 @@ def make_coulomb_force_table(table_size, cutoff, table_strength=0.15):
 
 
 def _cluster_grid_dimensions(n_clusters):
-    nx = int(math.ceil(n_clusters ** (1.0 / 3.0)))
+    nx = int(math.ceil(n_clusters**(1.0 / 3.0)))
     ny = int(math.ceil(math.sqrt(max(1, n_clusters / nx))))
     nz = int(math.ceil(n_clusters / (nx * ny)))
     return nx, ny, nz
@@ -119,14 +119,14 @@ def _generate_clustered_coordinates(n_clusters, cutoff, rng):
             ],
             dtype=np.float64,
         ) * float(cutoff)
-        x[cluster * UNROLLI : (cluster + 1) * UNROLLI, :] = center + local
+        x[cluster * UNROLLI:(cluster + 1) * UNROLLI, :] = center + local
 
     return x
 
 
 def _minimum_cluster_pair_distance(x, ci, cj):
-    xi = x[ci * UNROLLI : (ci + 1) * UNROLLI]
-    xj = x[cj * UNROLLJ : (cj + 1) * UNROLLJ]
+    xi = x[ci * UNROLLI:(ci + 1) * UNROLLI]
+    xj = x[cj * UNROLLJ:(cj + 1) * UNROLLJ]
     diff = xi[:, None, :] - xj[None, :, :]
     return float(np.min(np.sum(diff * diff, axis=2)))
 
@@ -174,21 +174,21 @@ def validate_gromacs_inputs(
         raise ValueError("x must have shape (n_clusters * 4, 3)")
     if n_atoms % UNROLLI != 0:
         raise ValueError("atom count must be a multiple of four")
-    if q.shape != (n_atoms,):
+    if q.shape != (n_atoms, ):
         raise ValueError("q must have shape (natoms,)")
-    if atom_type.shape != (n_atoms,):
+    if atom_type.shape != (n_atoms, ):
         raise ValueError("atom_type must have shape (natoms,)")
     if nbfp.shape != (num_types, num_types, 2):
         raise ValueError("nbfp must have shape (num_types, num_types, 2)")
-    if ci_cluster.shape != (nci,):
+    if ci_cluster.shape != (nci, ):
         raise ValueError("ci_cluster must be one-dimensional")
-    if ci_shift.shape != (nci,):
+    if ci_shift.shape != (nci, ):
         raise ValueError("ci_shift length must match ci_cluster")
-    if ci_cj_start.shape != (nci,) or ci_cj_end.shape != (nci,):
+    if ci_cj_start.shape != (nci, ) or ci_cj_end.shape != (nci, ):
         raise ValueError("ci_cj_start/end length must match ci_cluster")
-    if ci_flags.shape != (nci,):
+    if ci_flags.shape != (nci, ):
         raise ValueError("ci_flags length must match ci_cluster")
-    if cj_excl.shape != (ncj,):
+    if cj_excl.shape != (ncj, ):
         raise ValueError("cj_excl length must match cj_cluster")
     if shift_vec.ndim != 2 or shift_vec.shape[1] != 3:
         raise ValueError("shift_vec must have shape (nshift, 3)")
@@ -249,18 +249,12 @@ def validate_gromacs_inputs(
             if mask == FULL_EXCLUSION_MASK:
                 seen_full_mask = True
             elif seen_full_mask:
-                raise ValueError(
-                    "checked exclusion entries must precede full-mask entries"
-                )
+                raise ValueError("checked exclusion entries must precede full-mask entries")
             elif mask == 0:
-                raise ValueError(
-                    "partial exclusion masks must retain at least one interaction"
-                )
+                raise ValueError("partial exclusion masks must retain at least one interaction")
 
             if cj == ci and mask == FULL_EXCLUSION_MASK:
-                raise ValueError(
-                    "self cluster pairs must be checked/masked, not unchecked"
-                )
+                raise ValueError("self cluster pairs must be checked/masked, not unchecked")
 
     return True
 
@@ -320,7 +314,7 @@ def generate_random_gromacs_inputs(
 
     cj_clusters = []
     cj_exclusions = []
-    rlist2 = (1.15 * float(cutoff)) ** 2
+    rlist2 = (1.15 * float(cutoff))**2
     min_pair_distance2 = max(1.0e-6, 1.0e-4 * float(cutoff) * float(cutoff))
 
     for ci in range(n_clusters):
@@ -344,17 +338,12 @@ def generate_random_gromacs_inputs(
 
         if not checked and not unchecked and n_clusters > 1:
             candidates = [
-                cj
-                for cj in range(n_clusters)
-                if cj != ci
-                and _minimum_cluster_pair_distance(x, ci, cj) < rlist2
+                cj for cj in range(n_clusters) if cj != ci and _minimum_cluster_pair_distance(x, ci, cj) < rlist2
                 and _minimum_cluster_pair_distance(x, ci, cj) >= min_pair_distance2
             ]
             if not candidates:
                 candidates = [cj for cj in range(n_clusters) if cj != ci]
-            cj = min(
-                candidates, key=lambda cand: _minimum_cluster_pair_distance(x, ci, cand)
-            )
+            cj = min(candidates, key=lambda cand: _minimum_cluster_pair_distance(x, ci, cand))
             unchecked.append((cj, FULL_EXCLUSION_MASK))
 
         ci_cj_start[ci] = len(cj_clusters)
@@ -683,6 +672,7 @@ def _nbnxm_4x4_qstab_lj_force_arrays(
 
     return f, fshift
 
+
 def _inner_4x4(
     ci,
     ci_sh,
@@ -750,9 +740,7 @@ def _inner_4x4(
                 ri = int(rs)
                 ri = min(max(ri, 0), len(coulomb_table_f) - 2)
                 frac = rs - float(ri)
-                fexcl = (1.0 - frac) * coulomb_table_f[ri] + frac * coulomb_table_f[
-                    ri + 1
-                ]
+                fexcl = (1.0 - frac) * coulomb_table_f[ri] + frac * coulomb_table_f[ri + 1]
                 fcoul = interact * rinvsq - fexcl
                 fcoul *= qq * rinv
 

@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def wavefront2d(a, LEN_2D):
     # array shapes (numpy->dace): a=(LEN_2D,LEN_2D)
     """2D in-place relaxation with left + top + corner reads:

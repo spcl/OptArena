@@ -6,10 +6,10 @@ import triton.language as tl
 
 def generate_config_2d():
     return [
-        triton.Config(kwargs={"BLOCK_SIZE_M": m, "BLOCK_SIZE_N": n}, num_warps=w)
-        for m, n, w in itertools.product(
-            [16, 32, 64, 128], [16, 32, 64, 128], [1, 2, 4, 8]
-        )
+        triton.Config(kwargs={
+            "BLOCK_SIZE_M": m,
+            "BLOCK_SIZE_N": n
+        }, num_warps=w) for m, n, w in itertools.product([16, 32, 64, 128], [16, 32, 64, 128], [1, 2, 4, 8])
     ]
 
 
@@ -23,8 +23,11 @@ def generate_config_1d():
 @triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_lu_div_column(
-    A_ptr, stride_am, stride_an,
-    N, k,
+    A_ptr,
+    stride_am,
+    stride_an,
+    N,
+    k,
     BLOCK_SIZE: tl.constexpr,
 ):
     """
@@ -49,8 +52,11 @@ def _kernel_lu_div_column(
 @triton.autotune(configs=generate_config_2d(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_lu_trailing_update(
-    A_ptr, stride_am, stride_an,
-    N, k,
+    A_ptr,
+    stride_am,
+    stride_an,
+    N,
+    k,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
 ):
@@ -67,8 +73,8 @@ def _kernel_lu_trailing_update(
     mask = rm & cn
 
     a_ptrs = A_ptr + rows[:, None] * stride_am + cols[None, :] * stride_an
-    l_ptrs = A_ptr + rows * stride_am + k * stride_an          # L col k
-    u_ptrs = A_ptr + k * stride_am + cols * stride_an          # U row k
+    l_ptrs = A_ptr + rows * stride_am + k * stride_an  # L col k
+    u_ptrs = A_ptr + k * stride_am + cols * stride_an  # U row k
 
     Ablk = tl.load(a_ptrs, mask=mask, other=0.0)
     Lcol = tl.load(l_ptrs, mask=rows < N, other=0.0)[:, None]
@@ -81,9 +87,13 @@ def _kernel_lu_trailing_update(
 @triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_forward_row(
-    A_ptr, stride_am, stride_an,
-    b_ptr, y_ptr,
-    N, i,
+    A_ptr,
+    stride_am,
+    stride_an,
+    b_ptr,
+    y_ptr,
+    N,
+    i,
     BLOCK_SIZE: tl.constexpr,
 ):
     """
@@ -111,9 +121,13 @@ def _kernel_forward_row(
 @triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True)
 @triton.jit
 def _kernel_backward_row(
-    A_ptr, stride_am, stride_an,
-    y_ptr, x_ptr,
-    N, i,
+    A_ptr,
+    stride_am,
+    stride_an,
+    y_ptr,
+    x_ptr,
+    N,
+    i,
     BLOCK_SIZE: tl.constexpr,
 ):
     """
@@ -147,13 +161,14 @@ def kernel(A: torch.Tensor, b: torch.Tensor):
     for k in range(N):
         # 1) scale column below pivot
         if k + 1 < N:
-            grid_col = lambda meta: (
-                triton.cdiv((N - (k + 1)), meta["BLOCK_SIZE"]),
-            )
+            grid_col = lambda meta: (triton.cdiv((N - (k + 1)), meta["BLOCK_SIZE"]), )
 
             _kernel_lu_div_column[grid_col](
-                A, stride_am, stride_an,
-                N, k,
+                A,
+                stride_am,
+                stride_an,
+                N,
+                k,
             )
 
         # 2) rank-1 update of trailing block
@@ -165,18 +180,25 @@ def kernel(A: torch.Tensor, b: torch.Tensor):
             )
 
             _kernel_lu_trailing_update[grid_upd](
-                A, stride_am, stride_an,
-                N, k,
+                A,
+                stride_am,
+                stride_an,
+                N,
+                k,
             )
 
     # -------- Forward solve Ly=b (unit lower) --------
     y = torch.empty_like(b)
     # we could zero y first but kernels write y[i] directly
     for i in range(N):
-        _kernel_forward_row[(1,)](
-            A, stride_am, stride_an,
-            b, y,
-            N, i,
+        _kernel_forward_row[(1, )](
+            A,
+            stride_am,
+            stride_an,
+            b,
+            y,
+            N,
+            i,
         )
 
     # -------- Backward solve Ux=y --------
@@ -184,10 +206,14 @@ def kernel(A: torch.Tensor, b: torch.Tensor):
     # initialize x with zeros so reading x[i+1:] is safe (kernels fully write xi)
     x.zero_()
     for i in range(N - 1, -1, -1):
-        _kernel_backward_row[(1,)](
-            A, stride_am, stride_an,
-            y, x,
-            N, i,
+        _kernel_backward_row[(1, )](
+            A,
+            stride_am,
+            stride_an,
+            y,
+            x,
+            N,
+            i,
         )
 
     return x, y

@@ -9,5 +9,6 @@ keywords; the output tile y is mutated IN PLACE (the in-place ABI the C path als
 halo or scratch.
 """
 
+
 def kernel_mpi(x, y, LEN_1D, alpha, *, comm, workspace):
     y[...] = y + alpha * x

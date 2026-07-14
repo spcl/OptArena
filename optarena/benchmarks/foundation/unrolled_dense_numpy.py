@@ -6,6 +6,7 @@ either the test's hand-written reference or the @dace.program
 body with dace annotations stripped.
 """
 
+
 def unrolled_dense(a, b, alpha, N):
     for i in range(0, N - 3, 4):
         a[i] = a[i] + alpha * b[i]

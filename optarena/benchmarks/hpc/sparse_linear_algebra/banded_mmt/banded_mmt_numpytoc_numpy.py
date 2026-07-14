@@ -17,8 +17,7 @@
 import numpy as np
 
 
-def banded_mmt(A, a_lbound: int, a_ubound: int,
-               B, b_lbound: int, b_ubound: int, ret_out):
+def banded_mmt(A, a_lbound: int, a_ubound: int, B, b_lbound: int, b_ubound: int, ret_out):
     """Inline ``A @ B @ A^T`` for packed-banded A and B.
 
     Step 1: ``Bt`` -- transpose of B into packed-banded form
@@ -38,7 +37,7 @@ def banded_mmt(A, a_lbound: int, a_ubound: int,
     # square (N, N) buffer is always safe and only a constant factor
     # larger.
     Bt = np.zeros((N, N))
-    bt_start = np.zeros((N,), dtype=np.int64)
+    bt_start = np.zeros((N, ), dtype=np.int64)
     for i in range(N):
         bt_start[i] = max(i - b_ubound, 0)
     for i in range(N):

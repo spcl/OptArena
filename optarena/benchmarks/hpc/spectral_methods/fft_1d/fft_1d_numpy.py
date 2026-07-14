@@ -12,5 +12,5 @@ import numpy as np
 
 
 def fft_1d(x, y, z):
-    y[:] = np.fft.fft(x)            # forward DFT  (validates np.fft.fft)
-    z[:] = np.fft.ifft(y)           # inverse DFT  (validates np.fft.ifft); z == x
+    y[:] = np.fft.fft(x)  # forward DFT  (validates np.fft.fft)
+    z[:] = np.fft.ifft(y)  # inverse DFT  (validates np.fft.ifft); z == x

@@ -59,9 +59,8 @@ def initialize(ni, nj, nk, hord, grid_type, datatype=np.float64):
     # is a tracer/mass mixing ratio, and fvtp2d's q_i / q_j divisions (by
     # area + flux-divergence) and d_sw's mass-weighting need a positive,
     # well-conditioned field.
-    q = (2.0 + 0.5 * np.sin(2.0 * np.pi * xi) * np.cos(2.0 * np.pi * yj)
-         + 0.1 * np.cos(4.0 * np.pi * zk)
-         + 0.02 * rng.standard_normal(shape)).astype(datatype)
+    q = (2.0 + 0.5 * np.sin(2.0 * np.pi * xi) * np.cos(2.0 * np.pi * yj) + 0.1 * np.cos(4.0 * np.pi * zk) +
+         0.02 * rng.standard_normal(shape)).astype(datatype)
 
     # Courant numbers on interfaces kept within (-1, 1): a sheared, sign-changing
     # wind. Both bounds matter -- the magnitude < 1 is the advective-CFL stability
@@ -79,8 +78,7 @@ def initialize(ni, nj, nk, hord, grid_type, datatype=np.float64):
     # Cell area and its reciprocal. Clipped to >= 0.5 so area is STRICTLY POSITIVE
     # (it is a denominator in q_i/q_j and is multiplied by rarea = 1/area
     # throughout); a zero/negative area would make the transport divide blow up.
-    area = (1.0 + 0.1 * np.sin(2.0 * np.pi * xi) * np.sin(2.0 * np.pi * yj)
-            + 0.0 * zk).astype(datatype)
+    area = (1.0 + 0.1 * np.sin(2.0 * np.pi * xi) * np.sin(2.0 * np.pi * yj) + 0.0 * zk).astype(datatype)
     area = np.clip(area, 0.5, None).astype(datatype)
     rarea = (1.0 / area).astype(datatype)
 
@@ -101,6 +99,5 @@ def initialize(ni, nj, nk, hord, grid_type, datatype=np.float64):
     q_y_flux = np.zeros(shape, dtype=datatype)
 
     # Positional bind to the manifest init.output_args order.
-    return (q, crx, cry, x_area_flux, y_area_flux, q_x_flux, q_y_flux,
-            dxa, dya, area, rarea, del6_v, del6_u,
-            NHALO, ni, nj, nk, int(hord), int(grid_type))
+    return (q, crx, cry, x_area_flux, y_area_flux, q_x_flux, q_y_flux, dxa, dya, area, rarea, del6_v, del6_u, NHALO, ni,
+            nj, nk, int(hord), int(grid_type))

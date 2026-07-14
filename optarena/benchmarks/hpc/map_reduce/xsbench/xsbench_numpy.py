@@ -39,7 +39,6 @@ ABSORBTION_XS = 3
 FISSION_XS = 4
 NU_FISSION_XS = 5
 
-
 STARTING_SEED = 1070
 LCG_M = 1 << 63
 LCG_A = 2806196910506780709
@@ -217,9 +216,7 @@ def _production_index_grid(egrid: np.ndarray, nuclide_grid: np.ndarray) -> np.nd
     return index_grid
 
 
-def _material_ids_for_template(
-    template: list[int], n_isotopes: int, count: int
-) -> list[int]:
+def _material_ids_for_template(template: list[int], n_isotopes: int, count: int) -> list[int]:
     ids: list[int] = []
     seen: set[int] = set()
 
@@ -318,9 +315,7 @@ def calculate_micro_xs_unionized(
     xs_vector = np.zeros(NUM_XS_CHANNELS, dtype=np.float64)
     for k in range(NUM_XS_CHANNELS):
         channel = k + 1
-        xs_vector[k] = float(high[channel]) - f * (
-            float(high[channel]) - float(low[channel])
-        )
+        xs_vector[k] = float(high[channel]) - f * (float(high[channel]) - float(low[channel]))
 
     _ = n_isotopes
     return xs_vector
@@ -450,9 +445,7 @@ def generate_random_xsbench_inputs(
     for nuc in range(n_isotopes):
         for grid_idx in range(n_gridpoints):
             for channel in range(6):
-                nuclide_grid[nuc, grid_idx, channel], grid_seed = _lcg_random_double(
-                    grid_seed
-                )
+                nuclide_grid[nuc, grid_idx, channel], grid_seed = _lcg_random_double(grid_seed)
 
         order = np.argsort(nuclide_grid[nuc, :, ENERGY], kind="quicksort")
         nuclide_grid[nuc, :, :] = nuclide_grid[nuc, order, :]

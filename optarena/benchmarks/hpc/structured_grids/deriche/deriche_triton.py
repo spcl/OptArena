@@ -4,20 +4,19 @@ import torch
 
 
 @triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_SIZE": bs}, num_warps=nw)
-        for bs in [64, 128, 256, 512]
-        for nw in [1, 2, 4, 8]
-    ],
+    configs=[triton.Config({"BLOCK_SIZE": bs}, num_warps=nw) for bs in [64, 128, 256, 512] for nw in [1, 2, 4, 8]],
     key=["M", "N"],
-    cache_results=True
-)
+    cache_results=True)
 @triton.jit
 def deriche_cols_forward(
     y1_ptr,
     img_ptr,
-    a1, a2, b1, b2,
-    M, N,
+    a1,
+    a2,
+    b1,
+    b2,
+    M,
+    N,
     BLOCK_SIZE: tl.constexpr,
 ):
     row_idx = tl.program_id(0)
@@ -43,20 +42,19 @@ def deriche_cols_forward(
 
 
 @triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_SIZE": bs}, num_warps=nw)
-        for bs in [64, 128, 256, 512]
-        for nw in [1, 2, 4, 8]
-    ],
+    configs=[triton.Config({"BLOCK_SIZE": bs}, num_warps=nw) for bs in [64, 128, 256, 512] for nw in [1, 2, 4, 8]],
     key=["M", "N"],
-    cache_results=True
-)
+    cache_results=True)
 @triton.jit
 def deriche_cols_backward(
     y2_ptr,
     img_ptr,
-    a3, a4, b1, b2,
-    M, N,
+    a3,
+    a4,
+    b1,
+    b2,
+    M,
+    N,
     BLOCK_SIZE: tl.constexpr,
 ):
     row_idx = tl.program_id(0)
@@ -80,20 +78,19 @@ def deriche_cols_backward(
 
 
 @triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_SIZE": bs}, num_warps=nw)
-        for bs in [64, 128, 256, 512]
-        for nw in [1, 2, 4, 8]
-    ],
+    configs=[triton.Config({"BLOCK_SIZE": bs}, num_warps=nw) for bs in [64, 128, 256, 512] for nw in [1, 2, 4, 8]],
     key=["M", "N"],
-    cache_results=True
-)
+    cache_results=True)
 @triton.jit
 def deriche_rows_forward(
     y1_ptr,
     imgOut_ptr,
-    a5, a6, b1, b2,
-    M, N,
+    a5,
+    a6,
+    b1,
+    b2,
+    M,
+    N,
     BLOCK_SIZE: tl.constexpr,
 ):
     col_idx = tl.program_id(0)
@@ -119,20 +116,19 @@ def deriche_rows_forward(
 
 
 @triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_SIZE": bs}, num_warps=nw)
-        for bs in [64, 128, 256, 512]
-        for nw in [1, 2, 4, 8]
-    ],
+    configs=[triton.Config({"BLOCK_SIZE": bs}, num_warps=nw) for bs in [64, 128, 256, 512] for nw in [1, 2, 4, 8]],
     key=["M", "N"],
-    cache_results=True
-)
+    cache_results=True)
 @triton.jit
 def deriche_rows_backward(
     y2_ptr,
     imgOut_ptr,
-    a7, a8, b1, b2,
-    M, N,
+    a7,
+    a8,
+    b1,
+    b2,
+    M,
+    N,
     BLOCK_SIZE: tl.constexpr,
 ):
     col_idx = tl.program_id(0)
@@ -174,13 +170,13 @@ def kernel(alpha, imgIn: torch.Tensor):
     y1 = torch.empty_like(imgIn)
     y2 = torch.empty_like(imgIn)
 
-    deriche_cols_forward[(M,)](y1, imgIn, a1, a2, b1, b2, M, N)
-    deriche_cols_backward[(M,)](y2, imgIn, a3, a4, b1, b2, M, N)
+    deriche_cols_forward[(M, )](y1, imgIn, a1, a2, b1, b2, M, N)
+    deriche_cols_backward[(M, )](y2, imgIn, a3, a4, b1, b2, M, N)
 
     imgOut = c1 * (y1 + y2)
 
-    deriche_rows_forward[(N,)](y1, imgOut, a5, a6, b1, b2, M, N)
-    deriche_rows_backward[(N,)](y2, imgOut, a7, a8, b1, b2, M, N)
+    deriche_rows_forward[(N, )](y1, imgOut, a5, a6, b1, b2, M, N)
+    deriche_rows_backward[(N, )](y2, imgOut, a7, a8, b1, b2, M, N)
 
     imgOut = c2 * (y1 + y2)
 

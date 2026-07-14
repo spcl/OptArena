@@ -34,5 +34,4 @@ def initialize(N, H, W, datatype=np.float32):
 
     out = np.zeros((N, 10), dtype=datatype)
 
-    return (input, conv1, conv1bias, conv2, conv2bias, fc1w, fc1b, fc2w, fc2b,
-            fc3w, fc3b, out, C_before_fc1)
+    return (input, conv1, conv1bias, conv2, conv2bias, fc1w, fc1b, fc2w, fc2b, fc3w, fc3b, out, C_before_fc1)

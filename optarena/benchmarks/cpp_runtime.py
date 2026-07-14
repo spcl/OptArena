@@ -94,9 +94,8 @@ def load_backend_module(wrapper_file: str, bench: str, backend: str):
         return importlib.import_module(module_name)
     except ImportError as e:
         searched = ", ".join(str(p) for p in candidates)
-        raise ImportError(
-            f"Could not import {module_name}. Build the {bench} cpp backend "
-            f"under one of: {searched}") from e
+        raise ImportError(f"Could not import {module_name}. Build the {bench} cpp backend "
+                          f"under one of: {searched}") from e
 
 
 _SO_CACHE: Dict[pathlib.Path, ctypes.CDLL] = {}
@@ -140,19 +139,20 @@ def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> path
     if so.exists():
         return so
     from optarena.languages import build_kernel_lib_commands
-    sources: List[Tuple[str, pathlib.Path]] = [
-        (lang, p) for p in _native_sources(cpp_backend, short, lang) if p.exists()]
+    sources: List[Tuple[str,
+                        pathlib.Path]] = [(lang, p) for p in _native_sources(cpp_backend, short, lang) if p.exists()]
     if not sources:
-        raise FileNotFoundError(
-            f"{short}: no {lang} sources under {cpp_backend} to build "
-            f"lib{short}_{framework}.so (generation from {short}_numpy.py failed)")
+        raise FileNotFoundError(f"{short}: no {lang} sources under {cpp_backend} to build "
+                                f"lib{short}_{framework}.so (generation from {short}_numpy.py failed)")
     extra = ""
     if framework in FRAMEWORK_FLAGS:
         from optarena import flags
         extra = vars(flags)[FRAMEWORK_FLAGS[framework]]
-    for cmd in build_kernel_lib_commands(
-            sources, so, build_dir=bd,
-            compiler=FRAMEWORK_COMPILER.get(framework), extra_flags=extra):
+    for cmd in build_kernel_lib_commands(sources,
+                                         so,
+                                         build_dir=bd,
+                                         compiler=FRAMEWORK_COMPILER.get(framework),
+                                         extra_flags=extra):
         subprocess.check_call(cmd)
     return so
 
@@ -231,15 +231,13 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str) -> Callable:
             except AttributeError:
                 state["syms"][fptype] = None
         if not any(state["syms"].values()):
-            raise AttributeError(
-                f"lib{short}_{framework}.so exposes neither {short}_fp64 nor "
-                f"{short}_fp32")
+            raise AttributeError(f"lib{short}_{framework}.so exposes neither {short}_fp64 nor "
+                                 f"{short}_fp32")
         state["loaded"] = True
 
     def call(*args):
         _ensure_loaded()
-        is_double = any(isinstance(a, np.ndarray)
-                        and a.dtype == np.dtype(np.float64) for a in args)
+        is_double = any(isinstance(a, np.ndarray) and a.dtype == np.dtype(np.float64) for a in args)
         fptype = "fp64" if is_double else "fp32"
         fcty = ctypes.c_double if is_double else ctypes.c_float
         sym = state["syms"].get(fptype)
@@ -268,6 +266,5 @@ def split_csr(A, *, dtype=None, index_dtype=None):
         dtype = A.data.dtype
     if index_dtype is None:
         index_dtype = np.int64
-    return (np.ascontiguousarray(A.data, dtype=dtype),
-            np.ascontiguousarray(A.indices, dtype=index_dtype),
+    return (np.ascontiguousarray(A.data, dtype=dtype), np.ascontiguousarray(A.indices, dtype=index_dtype),
             np.ascontiguousarray(A.indptr, dtype=index_dtype))

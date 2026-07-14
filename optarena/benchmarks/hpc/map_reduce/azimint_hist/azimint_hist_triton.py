@@ -7,9 +7,7 @@ import itertools
 def get_configs():
     return [
         triton.Config({"BLOCK_SIZE": block_size}, num_warps=num_warps)
-        for block_size, num_warps in itertools.product(
-            [32, 64, 128, 256, 512, 1024], [1, 2, 4, 8]
-        )
+        for block_size, num_warps in itertools.product([32, 64, 128, 256, 512, 1024], [1, 2, 4, 8])
     ]
 
 
@@ -103,10 +101,10 @@ def azimint_hist(data: torch.Tensor, radius: torch.Tensor, npt: int):
 
     N = data.shape[0]
 
-    grid_hist = lambda meta: (triton.cdiv(N, meta["BLOCK_SIZE"]),)
+    grid_hist = lambda meta: (triton.cdiv(N, meta["BLOCK_SIZE"]), )
     azimint_hist_kernel[grid_hist](data, radius, histw, histu, N, npt, rmin, rmax)
     result = torch.zeros(npt, dtype=data.dtype, device=data.device)
-    grid_div = lambda meta: (triton.cdiv(npt, meta["BLOCK_SIZE"]),)
+    grid_div = lambda meta: (triton.cdiv(npt, meta["BLOCK_SIZE"]), )
     azimint_div_kernel[grid_div](histw, histu, result, npt)
 
     return result

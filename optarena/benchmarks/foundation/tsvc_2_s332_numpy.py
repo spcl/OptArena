@@ -7,6 +7,7 @@ plain numpy + pure-Python loops. Used as the harness oracle for
 the Foundation track.
 """
 
+
 def s332(a, result, threshold, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), result=(1,)
     index = -2

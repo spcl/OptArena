@@ -49,8 +49,7 @@ def _build_rect(spec, rows, cols, nnz, dtype, rng, slot):
 
     if dist == "uniform":
         density = min(1.0, nnz / (rows * cols))
-        m = sp.random(rows, cols, density=density, format="coo",
-                      dtype=dtype, random_state=rng)
+        m = sp.random(rows, cols, density=density, format="coo", dtype=dtype, random_state=rng)
     elif dist == "banded":
         bandwidth = spec.get("bandwidth")
         if bandwidth is None:
@@ -64,8 +63,7 @@ def _build_rect(spec, rows, cols, nnz, dtype, rng, slot):
         diag_rows = np.arange(diag_len)
         off_n = max(0, int(spec.get("off_diagonal_fraction", 0.1) * nnz))
         off_density = min(1.0, off_n / (rows * cols))
-        off = sp.random(rows, cols, density=off_density, format="coo",
-                        dtype=dtype, random_state=rng)
+        off = sp.random(rows, cols, density=off_density, format="coo", dtype=dtype, random_state=rng)
         m_rows = np.concatenate([diag_rows, off.row])
         m_cols = np.concatenate([diag_rows, off.col])
         m_vals = np.concatenate([diag_vals, off.data])
@@ -73,9 +71,8 @@ def _build_rect(spec, rows, cols, nnz, dtype, rng, slot):
     elif dist == "suitesparse":
         key = f"matrix_{slot}"
         if key not in spec:
-            raise ValueError(
-                f"suitesparse spec for spmm needs both 'matrix_A' and "
-                f"'matrix_B'; missing {key!r} in {spec!r}.")
+            raise ValueError(f"suitesparse spec for spmm needs both 'matrix_A' and "
+                             f"'matrix_B'; missing {key!r} in {spec!r}.")
         from optarena.helpers.sparse.generators import make_suitesparse
         m = make_suitesparse(spec[key], dtype=dtype)
     else:

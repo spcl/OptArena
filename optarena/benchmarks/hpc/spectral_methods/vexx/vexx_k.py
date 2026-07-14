@@ -47,13 +47,11 @@ _JBLOCK = 7
 # Positional output order of ``initialize_soa`` == the ``vexx`` kernel signature
 # (the manifest's ``init.output_args`` / ``input_args``). baseline/soa_inputs.py
 # builds an equivalent SoA problem (same keys/shapes) for the C++ cross-check.
-_VEXX_SOA_ARGS = (
-    "psi", "hpsi", "exxbuff", "x_occupation", "coulomb_fac", "dfftt_nl", "igk_exx",
-    "index_xk", "index_xkq", "xk", "xkq_collect", "g", "ibands", "nibands", "all_start",
-    "all_end", "egrp_pairs", "iexx_istart", "exxalfa", "omega", "tpiba2", "exxdiv",
-    "eps_qdiv", "gau_scrlen", "erf_scrlen", "erfc_scrlen", "yukawa", "current_k",
-    "current_ik", "nqs", "n", "m", "npwx", "npol", "nrxxs", "ngm", "nks", "n1", "n2",
-    "n3", "nbnd", "my_egrp_id", "max_pairs", "jblock", "negrp", "iexx_start")
+_VEXX_SOA_ARGS = ("psi", "hpsi", "exxbuff", "x_occupation", "coulomb_fac", "dfftt_nl", "igk_exx", "index_xk",
+                  "index_xkq", "xk", "xkq_collect", "g", "ibands", "nibands", "all_start", "all_end", "egrp_pairs",
+                  "iexx_istart", "exxalfa", "omega", "tpiba2", "exxdiv", "eps_qdiv", "gau_scrlen", "erf_scrlen",
+                  "erfc_scrlen", "yukawa", "current_k", "current_ik", "nqs", "n", "m", "npwx", "npol", "nrxxs", "ngm",
+                  "nks", "n1", "n2", "n3", "nbnd", "my_egrp_id", "max_pairs", "jblock", "negrp", "iexx_start")
 
 
 def initialize_soa(ngrid, nbnd, m, datatype=np.complex128, **_config):
@@ -83,7 +81,7 @@ def initialize_soa(ngrid, nbnd, m, datatype=np.complex128, **_config):
     # G-sphere inside the (non-aliasing) kinetic cutoff; ``dfftt_nl`` maps each
     # plane wave to its C-order FFT-grid cell (matching the kernel's reshape).
     hmax = ngrid // 2 - 1
-    cutoff2 = hmax ** 2
+    cutoff2 = hmax**2
     nl_list, g2_list, mill = [], [], []
     rh = range(-hmax, hmax + 1)
     for hx in rh:
@@ -103,20 +101,20 @@ def initialize_soa(ngrid, nbnd, m, datatype=np.complex128, **_config):
 
     psi = (rng.standard_normal((npw, m)) + 1j * rng.standard_normal((npw, m))).astype(cdtype)
     hpsi = (rng.standard_normal((npw, m)) + 1j * rng.standard_normal((npw, m))).astype(cdtype)
-    exxbuff = (rng.standard_normal((nnr, nbnd)) + 1j * rng.standard_normal(
-        (nnr, nbnd))).astype(cdtype)[:, :, None].copy()
+    exxbuff = (rng.standard_normal((nnr, nbnd)) + 1j * rng.standard_normal((nnr, nbnd))).astype(cdtype)[:, :,
+                                                                                                        None].copy()
     x_occupation = np.ones((nbnd, nks), dtype=np.float64)
 
-    dfftt_nl = nl_c + 1                                            # 1-based (ngm,)
+    dfftt_nl = nl_c + 1  # 1-based (ngm,)
     igk_exx = np.arange(1, n + 1, dtype=np.int64).reshape(n, nks)  # identity gki
-    index_xkq = np.ones((nks, 1), dtype=np.int64)                 # nqs=1 -> ikq=1
-    index_xk = np.ones(nks, dtype=np.int64)                       # ik=1
-    xk = np.zeros((3, nks), dtype=np.float64)                     # Gamma
-    xkq_collect = np.zeros((3, nks), dtype=np.float64)            # q-shift 0
+    index_xkq = np.ones((nks, 1), dtype=np.int64)  # nqs=1 -> ikq=1
+    index_xk = np.ones(nks, dtype=np.int64)  # ik=1
+    xk = np.zeros((3, nks), dtype=np.float64)  # Gamma
+    xkq_collect = np.zeros((3, nks), dtype=np.float64)  # q-shift 0
     g = np.zeros((3, ngm), dtype=np.float64)
     g[:, :ngm] = np.array(mill, dtype=np.float64).T
 
-    ibands = np.arange(1, m + 1, dtype=np.int64).reshape(m, 1)     # (my_n, negrp)
+    ibands = np.arange(1, m + 1, dtype=np.int64).reshape(m, 1)  # (my_n, negrp)
     nibands = np.array([m], dtype=np.int64)
     all_start = np.array([1], dtype=np.int64)
     all_end = np.array([nbnd], dtype=np.int64)
@@ -129,17 +127,52 @@ def initialize_soa(ngrid, nbnd, m, datatype=np.complex128, **_config):
     iexx_istart = np.array([1], dtype=np.int64)
 
     values = {
-        "psi": psi, "hpsi": hpsi, "exxbuff": exxbuff, "x_occupation": x_occupation,
-        "coulomb_fac": coulomb_fac, "dfftt_nl": dfftt_nl, "igk_exx": igk_exx,
-        "index_xk": index_xk, "index_xkq": index_xkq, "xk": xk, "xkq_collect": xkq_collect,
-        "g": g, "ibands": ibands, "nibands": nibands, "all_start": all_start,
-        "all_end": all_end, "egrp_pairs": egrp_pairs, "iexx_istart": iexx_istart,
-        "exxalfa": 0.25, "omega": 1.0, "tpiba2": 1.0, "exxdiv": 0.0, "eps_qdiv": 1e-8,
-        "gau_scrlen": 0.0, "erf_scrlen": 0.0, "erfc_scrlen": 0.0, "yukawa": 0.0,
-        "current_k": 1, "current_ik": 1, "nqs": 1, "n": n, "m": m, "npwx": npwx,
-        "npol": 1, "nrxxs": nrxxs, "ngm": ngm, "nks": nks, "n1": n1, "n2": n2, "n3": n3,
-        "nbnd": nbnd, "my_egrp_id": 0, "max_pairs": max_pairs, "jblock": nbnd,
-        "negrp": 1, "iexx_start": 1,
+        "psi": psi,
+        "hpsi": hpsi,
+        "exxbuff": exxbuff,
+        "x_occupation": x_occupation,
+        "coulomb_fac": coulomb_fac,
+        "dfftt_nl": dfftt_nl,
+        "igk_exx": igk_exx,
+        "index_xk": index_xk,
+        "index_xkq": index_xkq,
+        "xk": xk,
+        "xkq_collect": xkq_collect,
+        "g": g,
+        "ibands": ibands,
+        "nibands": nibands,
+        "all_start": all_start,
+        "all_end": all_end,
+        "egrp_pairs": egrp_pairs,
+        "iexx_istart": iexx_istart,
+        "exxalfa": 0.25,
+        "omega": 1.0,
+        "tpiba2": 1.0,
+        "exxdiv": 0.0,
+        "eps_qdiv": 1e-8,
+        "gau_scrlen": 0.0,
+        "erf_scrlen": 0.0,
+        "erfc_scrlen": 0.0,
+        "yukawa": 0.0,
+        "current_k": 1,
+        "current_ik": 1,
+        "nqs": 1,
+        "n": n,
+        "m": m,
+        "npwx": npwx,
+        "npol": 1,
+        "nrxxs": nrxxs,
+        "ngm": ngm,
+        "nks": nks,
+        "n1": n1,
+        "n2": n2,
+        "n3": n3,
+        "nbnd": nbnd,
+        "my_egrp_id": 0,
+        "max_pairs": max_pairs,
+        "jblock": nbnd,
+        "negrp": 1,
+        "iexx_start": 1,
     }
     return tuple(values[k] for k in _VEXX_SOA_ARGS)
 
@@ -333,9 +366,9 @@ def initialize(ngrid,
     # whole init output flat-array marshallable for the benchmark harness.
     maxbox = max(1, nrxxs // 8)
     tabxx_box = np.stack([np.sort(rng.choice(nrxxs, size=maxbox, replace=False)).astype(np.int64)
-                          for _ in range(nat)])                              # (nat, maxbox)
+                          for _ in range(nat)])  # (nat, maxbox)
     tabxx_qr = np.stack([(rng.standard_normal((maxbox, nij)) * 0.05).astype(np.float64)
-                         for _ in range(nat)])                              # (nat, maxbox, nij)
+                         for _ in range(nat)])  # (nat, maxbox, nij)
 
     # ---- scalar physics parameters (g2_convolution / Coulomb factor) ----
     # provenance: q-e/PW/src/exx_base.f90:75 (exxalfa), :748 (g2_convolution),
