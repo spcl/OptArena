@@ -114,7 +114,7 @@ def _source_leaks_hidden(src: str) -> bool:
 
     Apptainer ``%files`` does NOT honor ``.dockerignore``, so copying the repo
     root (``.``) or any ANCESTOR of ``hidden_tests`` (``optarena``,
-    ``optarena/agent_bench``, ...) bakes the answers in even though the line never
+    ``optarena/harness``, ...) bakes the answers in even though the line never
     contains the literal ``hidden_tests``.
     """
     src = src.strip().strip('"').strip("'").rstrip("/")
@@ -130,7 +130,7 @@ def _source_leaks_hidden(src: str) -> bool:
 def scan_def(path: Path, violations: list[str]) -> None:
     """Reject %files-section lines that would copy any hidden_tests path in --
     either by naming it directly or by copying an ancestor directory (``.`` /
-    ``optarena`` / ``optarena/agent_bench``), since %files ignores .dockerignore.
+    ``optarena`` / ``optarena/harness``), since %files ignores .dockerignore.
 
     The trusted judge image (carrying ``TRUSTED_JUDGE_MARKER``) is exempt: it is
     the scorer, never handed to an agent, and legitimately holds the answers."""

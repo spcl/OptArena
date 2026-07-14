@@ -546,7 +546,7 @@ class Framework(object):
     # No kernel self-times: the emitted C/Fortran source carries no timing
     # side-channel, so every kernel -- reference/generated or agent-supplied --
     # is timed by this host-side bracket, and in C by a harness-GENERATED
-    # wrapper that brackets the pure function (see optarena/bindings).
+    # wrapper that brackets the pure function (see optarena/support/bindings).
     # -----------------------------------------------------------------------
 
     #: Whether this framework OPTIMIZES the kernel into a faster artifact -- by

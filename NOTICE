@@ -55,7 +55,7 @@ OpenDwarfs, pyFAI, NetworkX, SciPy, hmmlearn, the NAS Parallel Benchmarks, and
 others) are credited in the Acknowledgements section of README.md and retain
 their original, GPLv3-compatible license headers in the respective source files
 (e.g. the BSD notices in optarena/benchmarks/.../arc_distance_numpy.py and
-optarena/infrastructure/timeout_decorator.py).
+optarena/frameworks/timeout_decorator.py).
 
 ================================================================================
 Terminal-Bench 2.0 derived kernels

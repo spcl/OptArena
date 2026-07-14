@@ -9,8 +9,8 @@
 # baked into every image. The whole agent_bench/ tree (scoring, baselines,
 # task specs) is also excluded from the tier images -- those images only host a
 # bind-mounted /work at runtime and must not carry the harness/answers.
-optarena/agent_bench/hidden_tests/
-optarena/agent_bench/
+optarena/harness/hidden_tests/
+optarena/harness/
 
 # Local artifacts / caches.
 **/__pycache__/
