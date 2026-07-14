@@ -440,6 +440,13 @@ def _edge_value(hi: int, kind: str) -> int:
     return min(v, int(hi)) if hi and int(hi) >= 1 else v
 
 
+def respec_ranges(parameters: Dict[str, Any], fuzzed: Dict[str, Any], interval) -> Dict[str, Any]:
+    """A fuzzed-preset spec where each RANGE param is replaced by ``interval(lo, hi)`` and
+    non-range params pass through unchanged -- the shared edge/large interval rewrite."""
+    edged = {nm: (interval(v[0], v[1]) if is_range(v) else v) for nm, v in fuzzed.items()}
+    return {**parameters, FUZZED_PRESET: edged}
+
+
 def edge_shapes(parameters: Dict[str, Any], config: Dict[str, Any] = None, constraints=None):
     """Correctness EDGE probes for one config namespace.
 
@@ -453,17 +460,11 @@ def edge_shapes(parameters: Dict[str, Any], config: Dict[str, Any] = None, const
     """
     fixed = dict(config or {})
     fuzzed = resolve_ranges(parameters)
-    ranges = {n: v for n, v in fuzzed.items() if is_range(v)}
     out, seen = [], set()
     for kind in EDGE_KINDS:
-        # Override each interval with a degenerate [v, v] so the resolver returns
-        # the edge value, while derive/construct/in still compute off those roots.
-        spec = dict(parameters)
-        edged = dict(fuzzed)
-        for name, rng in ranges.items():
-            v = _edge_value(rng[1], kind)
-            edged[name] = [v, v]
-        spec[FUZZED_PRESET] = edged
+        # Override each interval with a degenerate [v, v] so the resolver returns the
+        # edge value, while derive/construct/in still compute off those roots.
+        spec = respec_ranges(parameters, fuzzed, lambda lo, hi: [_edge_value(hi, kind)] * 2)
         try:
             sample = _resolve_against(spec, fixed, 0, "uniform", constraints)
         except ValueError:
@@ -498,14 +499,9 @@ def large_shapes(parameters: Dict[str, Any],
     mode = str(mode if mode is not None else perf_mode())
     fixed = dict(config or {})
     fuzzed = resolve_ranges(parameters)
-    ranges = {nm: v for nm, v in fuzzed.items() if is_range(v)}
     # Bias each interval to its upper half so sampled shapes are genuinely large.
-    big_spec = dict(parameters)
-    big = dict(fuzzed)
-    for nm, rng in ranges.items():
-        lo, hi = int(rng[0]), int(rng[1])
-        big[nm] = [lo + (hi - lo) // 2, hi]
-    big_spec[FUZZED_PRESET] = big
+    big_spec = respec_ranges(parameters, fuzzed,
+                             lambda lo, hi: [int(lo) + (int(hi) - int(lo)) // 2, int(hi)])
 
     # NB: the ``config`` parameter shadows the config module, so the seeds +
     # default n are read via module-scope helpers.
