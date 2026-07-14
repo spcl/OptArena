@@ -1,21 +1,29 @@
 #!/bin/bash
-# CSCS Alps campaign: agent node + vLLM node(s) + a MULTI-NODE judge pool.
+# CSCS Alps campaign: agent pool + vLLM node(s) + a MULTI-NODE judge pool -- the
+# 3-tier agent / reference / inference topology, all in one SLURM allocation.
 #
 # Topology (all in one SLURM allocation):
-#   node[0]        AGENT      -- runs the optarena agent loop; talks to vLLM over HTTP.
+#   node[0]        AGENT POOL -- runs AGENT_WORKERS concurrent optarena agent workers
+#                               that "think" (query vLLM over HTTP). No GPU work here,
+#                               so the agents never idle a timing GPU.
 #   node[1..V]     vLLM       -- serves the model (tensor/pipeline parallel across V nodes).
-#   node[V+1..N-1] JUDGE      -- the device pool the judge benchmarks kernels on; each
-#                               node's GPUs become judge slots. One kernel per slot; the
-#                               judge work-steals across ALL judge nodes' GPUs.
+#   node[V+1..N-1] JUDGE      -- the device pool the judge "measures" on (reference +
+#                               candidate timing); each node's GPUs become judge slots.
+#                               One kernel per slot; the judge work-steals across ALL
+#                               judge nodes' GPUs.
 #
-# The judge is multi-node: OPTARENA_JUDGE_NODES_EXPANDED is filled with the judge
-# hostnames (via `scontrol show hostnames`), so judge_scheduler.JudgeConfig.from_config()
-# builds a slot per (judge node, GPU) and dispatches each grade to a free slot (remote
-# grades go out via `srun --nodelist=<node>`; see judge_scheduler.srun_wrap).
+# Both pools are driven from judge_scheduler: OPTARENA_JUDGE_NODES_EXPANDED feeds
+# JudgeConfig (a slot per (judge node, GPU); remote grades via `srun --nodelist=<node>`,
+# see judge_scheduler.srun_wrap), and OPTARENA_AGENT_NODES_EXPANDED /
+# OPTARENA_AGENT_WORKERS_PER_NODE feed AgentPoolConfig, so TwoStageScheduler pipelines
+# think (agent pool) -> grade (judge pool) with the two pools running concurrently.
 #
-# Submit:  sbatch --nodes=$N scripts/cscs/run_campaign.sbatch
+# Submit:  sbatch -A <account> --nodes=$N scripts/cscs/run_campaign.sbatch
+#   `-A <account>` is MANDATORY on Alps (or export SBATCH_ACCOUNT before submit).
 # Tune via env (export before sbatch, or --export): VLLM_NODES, MODEL_ID, TP_SIZE,
-#   PP_SIZE, JUDGE_GPUS_PER_NODE, KERNELS, BASELINE, VLLM_PORT.
+#   PP_SIZE, JUDGE_GPUS_PER_NODE, AGENT_WORKERS, KERNELS, BASELINE, VLLM_PORT.
+# The EDF (env.toml) selects the aarch64 (Grace-Hopper) image + CXI hook; see
+# scripts/cscs/env.toml.example and docs/RUNTIME.md.
 #SBATCH --job-name=optarena-campaign
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -33,6 +41,7 @@ PP_SIZE="${PP_SIZE:-1}"
 VLLM_NODES="${VLLM_NODES:-1}"          # how many nodes vLLM spans (PP_SIZE across them)
 VLLM_PORT="${VLLM_PORT:-8000}"
 JUDGE_GPUS_PER_NODE="${JUDGE_GPUS_PER_NODE:-4}"
+AGENT_WORKERS="${AGENT_WORKERS:-8}"    # concurrent agent (think) workers on the agent node
 KERNELS="${KERNELS:-all}"
 BASELINE="${BASELINE:-track}"          # per-track default (foundation->c-autopar, ml/hpc->numpy)
 VLLM_WAIT_S="${VLLM_WAIT_S:-600}"
@@ -75,9 +84,12 @@ srun --nodes=1 --ntasks=1 --nodelist="${AGENT_NODE}" --environment="${ENV_TOML}"
       sleep 15
     done
 
-    # Agent -> vLLM over HTTP (OpenAIAgent); judge -> the judge-node GPU pool.
+    # Agent pool -> vLLM over HTTP (OpenAIAgent); judge -> the judge-node GPU pool.
+    # TwoStageScheduler pipelines think (agent pool) -> grade (judge pool).
     export VLLM_BASE_URL='${VLLM_URL}'
     export OPTARENA_OPENAI_MODEL='${MODEL_ID}'
+    export OPTARENA_AGENT_NODES_EXPANDED='${AGENT_NODE}'
+    export OPTARENA_AGENT_WORKERS_PER_NODE='${AGENT_WORKERS}'
     export OPTARENA_JUDGE_NODES_EXPANDED='${JUDGE_EXPANDED}'
     export OPTARENA_JUDGE_GPUS_PER_NODE='${JUDGE_GPUS_PER_NODE}'
 
