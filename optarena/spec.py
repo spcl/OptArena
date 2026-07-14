@@ -28,11 +28,23 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from enum import Enum
+
 from optarena import config, paths
 
-#: Size presets a benchmark can be run at (the CLI ``-p`` / ``--preset`` choices).
-#: The ``fuzzed`` preset is a separate opt-in (see ``optarena run --preset``).
-PRESET_CHOICES = ("S", "M", "L", "XL", "fuzzed")
+
+class Preset(str, Enum):
+    """Size preset a benchmark runs at (the CLI ``-p`` / ``--preset`` choices). ``fuzzed``
+    is a separate opt-in and may carry a ``:seed`` suffix (see :func:`parse_preset`)."""
+    S = "S"
+    M = "M"
+    L = "L"
+    XL = "XL"
+    FUZZED = "fuzzed"
+
+
+#: The preset vocabulary as a tuple; the single source of truth is :class:`Preset`.
+PRESET_CHOICES = tuple(p.value for p in Preset)
 
 
 def parse_preset(preset: str) -> Tuple[str, Optional[int]]:

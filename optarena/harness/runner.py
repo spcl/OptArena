@@ -18,6 +18,7 @@ guarded so one failing task is a *scored row*, never an aborted sweep:
 """
 import os
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
 from optarena import config
@@ -28,6 +29,19 @@ from optarena.harness.scoring import Score, resolve_kernel_timeout, score
 from optarena.harness.task import Task
 from optarena.frameworks.forked import run_forked
 from optarena.spec import BenchSpec
+
+
+class RunStatus(str, Enum):
+    """The outcome recorded on a :class:`RunRow`.``status``."""
+    OK = "ok"  # a correct, verified attempt
+    INCORRECT = "incorrect"  # ran + graded, but wrong vs the reference
+    OVERFIT = "overfit"  # correct on public inputs, wrong on held-out (the overfit gate)
+    UNVERIFIED = "unverified"  # correct but failed the judge's independent re-verify
+    AGENT_ERROR = "agent_error"  # the agent produced nothing gradeable
+    BUILD_ERROR = "build_error"  # the submission did not compile
+    SCORE_ERROR = "score_error"  # the run ended without a score
+    TIMEOUT = "timeout"  # the per-kernel budget elapsed
+    ERROR = "error"  # any other failure
 
 
 @dataclass(frozen=True)

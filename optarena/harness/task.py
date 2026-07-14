@@ -31,16 +31,42 @@ never fail, on a combination a kernel does not support). ``distributed`` is opt-
 """
 import itertools
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterable, List, Optional, Sequence
 
 from optarena.precision import Precision
 from optarena.spec import BenchSpec, KERNELS
 
-SOURCE_MODES = ("restricted", "any")
-DEFAULT_LANGUAGES = ("c", "cpp", "fortran")
-RESIDENCIES = ("host", "device", "distributed")
+
+class SourceMode(str, Enum):
+    """How the agent delivers its implementation for a task."""
+    RESTRICTED = "restricted"  # a single SOURCE file in the task language; the judge compiles it
+    ANY = "any"  # a prebuilt C-ABI .so in any language
+
+
+class Residency(str, Enum):
+    """Where a task's arrays live / how it runs."""
+    HOST = "host"
+    DEVICE = "device"  # GPU (only valid for a GPU_LANGUAGES language)
+    DISTRIBUTED = "distributed"  # multi-node MPI
+
+
+class Language(str, Enum):
+    """A submission language. c/cpp/fortran run on the host; cuda/hip on the GPU."""
+    C = "c"
+    CPP = "cpp"
+    FORTRAN = "fortran"
+    CUDA = "cuda"
+    HIP = "hip"
+
+
+#: The vocabularies as tuples; the single source of truth is the enum above.
+SOURCE_MODES = tuple(m.value for m in SourceMode)
+RESIDENCIES = tuple(r.value for r in Residency)
 #: Languages whose kernels run on the GPU (so ``device`` residency is meaningful).
-GPU_LANGUAGES = ("cuda", "hip")
+GPU_LANGUAGES = (Language.CUDA.value, Language.HIP.value)
+#: Non-GPU (host) languages -- the default cross-product set.
+DEFAULT_LANGUAGES = tuple(lang.value for lang in Language if lang.value not in GPU_LANGUAGES)
 
 
 @dataclass(frozen=True)
