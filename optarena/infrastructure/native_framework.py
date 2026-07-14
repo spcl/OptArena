@@ -1,10 +1,14 @@
-"""Framework binding for the native (C / C++ / Fortran) backends.
+"""Framework binding for the native (C / C++ / Fortran) compiled backends.
 
-One :class:`CppBackendFramework` serves every native backend (cc/llvm/fortran/
-polly/pluto): all share the same generated ``<bench>_cpp.py`` wrapper
+One :class:`NativeFramework` serves the base-language native flavors (cc/llvm/
+fortran/polly): all share the same generated ``<bench>_cpp.py`` wrapper
 (postfix=``cpp``) and select the wrapper's ``kernel_<framework>`` entry point by
 the framework name -- ``kernel_cc`` (C, gcc), ``kernel_llvm`` (C++, clang),
-``kernel_fortran`` (Fortran, gfortran), ``kernel_polly``, ``kernel_pluto``.
+``kernel_fortran`` (Fortran, gfortran), ``kernel_polly`` (C++ + clang's Polly, a
+compile-flag variant of the C++ flavor on the SAME source). Pluto is factored out
+into :class:`PlutoFramework` (a subclass, in ``pluto_framework.py``): it is a
+distinct polyhedral source-to-source toolchain (polycc) that compiles a DIFFERENT
+generated source (``<bench>_pluto_nb.cpp``), not merely a compiler flag.
 
 The wrapper + its precision-monomorphic sources (``<short>_<fptype>.<ext>``) are
 generated on demand from ``<short>_numpy.py`` (gitignored, none committed); each
@@ -34,17 +38,19 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 _ABI_ORDER_CACHE: Dict[str, Optional[List[str]]] = {}
 
 
-class CppBackendFramework(Framework):
-    """The native (C / C++ / Fortran) backend framework. One class serves every
-    native backend -- cc/llvm/fortran/polly/pluto -- which all share the generated
+class NativeFramework(Framework):
+    """The native (C / C++ / Fortran) compiled backend. One class serves the
+    base-language flavors -- cc/llvm/fortran/polly -- which share the generated
     ``<bench>_cpp.py`` wrapper and differ only by the ``kernel_<framework>`` entry
-    point they dispatch to, derived from the framework name."""
+    point they dispatch to, derived from the framework name. Pluto compiles a
+    separately-transformed source and is the :class:`PlutoFramework` subclass."""
 
     def __init__(self, fname: str):
         super().__init__(fname)
         #: The wrapper attribute this framework dispatches to (``kernel_cc`` /
-        #: ``kernel_llvm`` / ``kernel_fortran`` / ``kernel_polly`` /
-        #: ``kernel_pluto``), derived from the framework name.
+        #: ``kernel_llvm`` / ``kernel_fortran`` / ``kernel_polly``, or
+        #: ``kernel_pluto`` for the :class:`PlutoFramework` subclass), derived from
+        #: the framework name.
         self.kernel_attr = f"kernel_{fname}"
 
     def version(self) -> str:

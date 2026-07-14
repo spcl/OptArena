@@ -156,17 +156,20 @@ class TorchCudaEventTiming:
 #: -- internal infrastructure config, so it lives in code, not data files).
 #: Each entry is one FLAVOR of a framework ``base``: the ``base`` field groups
 #: flavors of the same backend (``dace_cpu``/``dace_gpu`` share base ``dace``;
-#: ``tvm``/``tvm_cpu`` share ``tvm``; ``cc``/``llvm``/``fortran``/``polly``/
-#: ``pluto`` share ``native``), and the base -- not the flavor name -- selects
-#: the :class:`Framework` subclass via :func:`_framework_class`, so ONE class
-#: serves a whole flavor family. ``arch`` is cpu/gpu; ``postfix`` selects the
+#: ``tvm``/``tvm_cpu`` share ``tvm``; ``cc``/``llvm``/``fortran``/``polly`` share
+#: base ``native``), and the base -- not the flavor name -- selects the
+#: :class:`Framework` subclass via :func:`_framework_class`, so ONE class serves a
+#: whole flavor family. ``pluto`` is its OWN base (:class:`PlutoFramework`): unlike
+#: ``polly`` (a clang compile-flag variant of the C++ flavor on the same source),
+#: Pluto is a distinct polyhedral source-to-source toolchain that compiles a
+#: different generated source. ``arch`` is cpu/gpu; ``postfix`` selects the
 #: ``<module>_<postfix>.py`` impl file; ``prefix`` is the conventional import
 #: alias; ``precisions`` is the set of :class:`~optarena.precision.Precision`
 #: values the flavor can execute (the sweep driver records ``status="skip"`` for
-#: any precision not in it, via :meth:`Framework.supports`). The native flavors
-#: additionally carry the ``language`` (c/cpp/fortran) and ``compiler`` (gcc/
-#: clang/gfortran) they compile with -- the native backend's configurable options
-#: -- plus a ``flags`` preset for the polyhedral flavors (polly/pluto).
+#: any precision not in it, via :meth:`Framework.supports`). The native/pluto
+#: flavors additionally carry the ``language`` (c/cpp/fortran) and ``compiler``
+#: (gcc/clang/gfortran) they compile with -- the native backend's configurable
+#: options -- plus a ``flags`` preset for the polyhedral flavors (polly/pluto).
 FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
     "numpy": {
         "base": "numpy",
@@ -228,8 +231,10 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
     # Native backend: one base ``native``, one flavor per (language, compiler).
     # ONE source per (kernel, language, precision), generated on demand from the
     # numpy reference + gitignored; each flavor builds its own lib<short>_<fw>.so.
-    # polly/pluto reuse the C++ (clang) flavor with a polyhedral ``flags`` preset
-    # (optarena.flags) on the same generated C++ source.
+    # ``polly`` reuses the C++ (clang) flavor with a polyhedral ``flags`` preset
+    # (optarena.flags) on the SAME generated C++ source. ``pluto`` is a separate
+    # base (:class:`PlutoFramework`) -- a polyhedral source-to-source toolchain that
+    # compiles a DIFFERENT generated source, not just a compile flag.
     "cc": {
         "base": "native",
         "full_name": "C (gcc)",
@@ -272,7 +277,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "precisions": IEEE_PRECISIONS,
     },
     "pluto": {
-        "base": "native",
+        "base": "pluto",
         "full_name": "C++ Pluto (clang)",
         "prefix": "pluto",
         "postfix": "cpp",
@@ -319,20 +324,21 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
 
 def framework_flavors(base: str) -> List[str]:
     """The flat framework names that are flavors of ``base`` (e.g.
-    ``framework_flavors("native")`` -> ``["cc", "llvm", "fortran", "polly",
-    "pluto"]``). The inverse of the ``base`` grouping in :data:`FRAMEWORK_META`."""
+    ``framework_flavors("native")`` -> ``["cc", "llvm", "fortran", "polly"]``).
+    The inverse of the ``base`` grouping in :data:`FRAMEWORK_META`."""
     return [name for name, meta in FRAMEWORK_META.items() if meta["base"] == base]
 
 
 def _framework_class(fname: str):
     """Map a framework name to its :class:`Framework` subclass (class object, not
     a string) via its ``base`` (:data:`FRAMEWORK_META`) -- so one class serves a
-    whole flavor family (dace_cpu+dace_gpu -> DaceFramework; cc/llvm/fortran/polly/
-    pluto -> CppBackendFramework; tvm+tvm_cpu -> TVMFramework). The per-framework
-    modules import THIS module, so the import is done lazily to dodge the circular
-    import."""
+    whole flavor family (dace_cpu+dace_gpu -> DaceFramework; cc/llvm/fortran/polly
+    -> NativeFramework; tvm+tvm_cpu -> TVMFramework). Pluto is its own base
+    (PlutoFramework) -- a distinct polyhedral toolchain, not a native flavor. The
+    per-framework modules import THIS module, so the import is done lazily to dodge
+    the circular import."""
     from optarena.infrastructure import (Framework, NumbaFramework, CupyFramework, JaxFramework, PythranFramework,
-                                         DaceFramework, CppBackendFramework, TritonFramework, TVMFramework)
+                                         DaceFramework, NativeFramework, PlutoFramework, TritonFramework, TVMFramework)
     base_class = {
         "numpy": Framework,
         "numba": NumbaFramework,
@@ -340,7 +346,8 @@ def _framework_class(fname: str):
         "jax": JaxFramework,
         "pythran": PythranFramework,
         "dace": DaceFramework,
-        "native": CppBackendFramework,
+        "native": NativeFramework,
+        "pluto": PlutoFramework,
         "triton": TritonFramework,
         "tvm": TVMFramework,
     }
@@ -482,7 +489,7 @@ class Framework(object):
         functional framework (jax/tvm/triton, whose arrays are immutable) declares
         only its inputs and RETURNS its outputs (the validator binds those returns
         to ``output_args`` when the count matches). Native C/C++/Fortran enforce
-        the positional C-ABI instead -- see ``CppBackendFramework.call_args``.
+        the positional C-ABI instead -- see ``NativeFramework.call_args``.
 
         ``resolved`` maps each input arg name to its value (a fresh mutable copy
         for array args, the shared value otherwise); ``bdata`` carries the size
