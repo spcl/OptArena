@@ -1,7 +1,9 @@
-/* Original C++ source for OptArena kernel quasi_affine_reduce_odd. Upstream: Vectra Artifacts (Work/VectraArtifacts) tsvc microkernels. Timing instrumentation removed. License: see upstream. Not the scoring oracle -- the numpy reference remains the correctness oracle. */
+/* Original C++ source for OptArena kernel quasi_affine_reduce_odd. Upstream: Vectra Artifacts (Work/VectraArtifacts)
+ * tsvc microkernels. Timing instrumentation removed. License: see upstream. Not the scoring oracle -- the numpy
+ * reference remains the correctness oracle. */
 
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 
 extern "C" {
 
