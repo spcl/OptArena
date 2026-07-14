@@ -33,7 +33,7 @@ from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.metric import geomean, score_task_fuzzed
 from optarena.agent_bench.scoring import BASELINE_CHOICES
 from optarena.agent_bench.task import Task
-from optarena.agent_bench.timing import pin_threads
+from optarena.agent_bench.timing import measurement_repeat, pin_threads
 
 
 @contextlib.contextmanager
@@ -91,7 +91,7 @@ def grade(kernel: str,
     fields record the decision."""
     baseline = baseline or config.get("measurement.baseline", "c")
     datatype = datatype or config.get("service.datatype", "float64")
-    repeat = repeat if repeat is not None else config.get("measurement.repeat", 20)
+    repeat = repeat if repeat is not None else measurement_repeat()
     c_max = c_max if c_max is not None else config.get("measurement.c_max", 100.0)
 
     mode = "restricted" if source is not None else "any"

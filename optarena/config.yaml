@@ -58,7 +58,9 @@ service:
   input_mode: source       # POST /oracle accepts: source | library | either
   preset: fuzzed           # data-size preset the judge scores at
   datatype: float64
-  repeat: 5                # timed reps; best (min) kept
+  # NOTE: the timed-rep count is NOT here -- it is the SHARED `measurement.repeat`
+  # key below (one source of truth read by the judge, Harbor grader, and API, so the
+  # measurement paths cannot drift on rigor).
 
 # Measurement rigor for the speedup score -- how a single timing is taken, so a
 # native run and a Harbor run measure IDENTICALLY (parity). The ranked metric is a

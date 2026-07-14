@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.task import Task
+from optarena.agent_bench.timing import measurement_repeat
 
 if TYPE_CHECKING:  # the grading stack is imported lazily at call time (native only), so the
     from optarena.agent_bench.scoring import Score  # return-type forward-ref resolves for tooling only
@@ -110,7 +111,7 @@ class RunConfig:
     input_mode: InputMode = InputMode.SOURCE  # server-only: what POST /oracle accepts
     preset: str = "S"
     datatype: str = "float64"
-    repeat: int = 5
+    repeat: int = field(default_factory=measurement_repeat)  # timed reps; the shared measurement.repeat
     judge_url: Optional[str] = None  # client-only: container mode target; None -> $JUDGE_URL / localhost
     rtol: Optional[float] = None  # client-only: None -> tolerances_for(datatype) at grade time
     atol: Optional[float] = None
