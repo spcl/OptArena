@@ -8,17 +8,15 @@
 #     containers/amd.def      containers/amd.Dockerfile
 # and subsumes the baked verifier containers/judge.def (see the ROLE note at the bottom).
 #
-# The OCI image is the single source of truth: apptainer builds its SIF FROM it, the CSCS
-# Container-Engine imports/references the same OCI, docker/podman run it directly. One recipe,
-# consumed four ways (design doc docs/DESIGN_container_launch_and_submission.md sec 7b / sec 12):
+# The OCI image is the single source of truth: apptainer builds its SIF FROM it and podman runs
+# it directly -- the only two supported backends (see docs/LAUNCH.md). One recipe, two ways:
 #
 #   podman build -f containers/optarena.Dockerfile --build-arg HW=cpu    -t optarena:cpu    .
 #   podman build -f containers/optarena.Dockerfile --build-arg HW=nvidia -t optarena:nvidia .
 #   podman build -f containers/optarena.Dockerfile --build-arg HW=amd    -t optarena:amd    .
 #   # Alps (aarch64 GH200): add --platform linux/arm64 --build-arg BASE_IMAGE=<CSCS public GPU base>
-#   docker save optarena:cpu -o optarena-cpu.tar                        # then, daemon-agnostic (as CI):
+#   podman save optarena:cpu -o optarena-cpu.tar                        # then, daemon-agnostic (as CI):
 #   apptainer build optarena-cpu.sif docker-archive:optarena-cpu.tar    # SIF from the SAME OCI (no .def)
-#   enroot import -o optarena-cpu.sqsh dockerd://optarena:cpu           # CE squashfs from the SAME OCI
 #
 # UNVERIFIED: not build-run in this dev env (no podman/apptainer). Build on real infra before merge;
 # see the pre-merge checklist at the bottom of this file.
@@ -37,7 +35,7 @@
 
 # BASE_IMAGE: the default ubuntu:26.04 keeps the x86_64 CI cpu build + local builds byte-identical
 # to the retired cpu.Dockerfile. On Alps override with the CSCS public GPU base (aarch64 GH200,
-# CUDA/GPU stack preinstalled): --build-arg BASE_IMAGE=<cscs-public-gpu-base>. See design sec 0/7b.
+# CUDA/GPU stack preinstalled): --build-arg BASE_IMAGE=<cscs-public-gpu-base>. See docs/LAUNCH.md.
 ARG BASE_IMAGE=ubuntu:26.04
 FROM ${BASE_IMAGE}
 

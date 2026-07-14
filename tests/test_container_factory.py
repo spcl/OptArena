@@ -1,7 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Unit tests for the container-launch factory (optarena/containers.py) -- argv assembly,
-backend resolution, the Harbor provider name, and the CE launcher. Pure argv assertions:
+backend resolution (apptainer | podman), and the Harbor provider name. Pure argv assertions:
 no real container, GPU, or LLM, so this runs on any CI runner.
 
 The bash<->Python golden parity test lives in test_container_launch_parity.py."""
@@ -22,33 +22,33 @@ def clean_backend_env(monkeypatch):
     yield
 
 
-def test_load_backends_lists_the_four_exec_wrappers():
+def test_load_backends_lists_the_two_exec_wrappers():
     spellings, passthrough = containers.load_backends()
-    assert set(spellings) == {"apptainer", "docker", "podman", "udocker"}
+    assert set(spellings) == {"apptainer", "podman"}
     assert "ANTHROPIC_API_KEY" in passthrough
     assert spellings["apptainer"].verb == ("exec", )
-    assert spellings["docker"].verb == ("run", "--rm", "--network", "host")
+    assert spellings["podman"].verb == ("run", "--rm", "--network", "host")
 
 
 def test_resolve_backend_precedence(monkeypatch):
     assert containers.resolve_backend("podman") == "podman"  # explicit wins
-    monkeypatch.setenv("OPTARENA_RUNTIME_BACKEND", "docker")
-    assert containers.resolve_backend() == "docker"  # canonical env next
+    monkeypatch.setenv("OPTARENA_RUNTIME_BACKEND", "podman")
+    assert containers.resolve_backend() == "podman"  # canonical env next
     monkeypatch.delenv("OPTARENA_RUNTIME_BACKEND")
     assert containers.resolve_backend() == "apptainer"  # config/code default
 
 
 def test_resolve_backend_ignores_the_legacy_bash_var(monkeypatch):
     # The decouple fix: $OPTARENA_CONTAINER_RUNTIME is the shell launcher's own knob and
-    # must NOT steer the Python path (else a Harbor run would crash for a user who set it
-    # for a local bash run). Only $OPTARENA_RUNTIME_BACKEND is shared.
+    # must NOT steer the Python path. Only $OPTARENA_RUNTIME_BACKEND is shared.
     monkeypatch.setenv("OPTARENA_CONTAINER_RUNTIME", "podman")
     assert containers.resolve_backend() == "apptainer"
 
 
 def test_resolve_backend_rejects_unknown():
-    with pytest.raises(ValueError):
-        containers.resolve_backend("singularity")  # dropped as a selectable backend
+    for dropped in ("singularity", "docker", "udocker", "ce"):
+        with pytest.raises(ValueError):
+            containers.resolve_backend(dropped)
 
 
 def test_local_run_command_apptainer_cpu():
@@ -62,11 +62,11 @@ def test_local_run_command_apptainer_cpu():
     ]
 
 
-def test_local_run_command_docker_nvidia_gpu_tokens():
-    argv = containers.local_run_command(["run"], backend="docker", hardware="nvidia", repo_root="/r")
-    # docker run --rm --network host --gpus all ...
-    assert argv[:6] == ["docker", "run", "--rm", "--network", "host", "--gpus"]
-    assert "all" in argv
+def test_local_run_command_podman_nvidia_gpu_tokens():
+    argv = containers.local_run_command(["run"], backend="podman", hardware="nvidia", repo_root="/r")
+    # podman run --rm --network host --device nvidia.com/gpu=all ...
+    assert argv[:5] == ["podman", "run", "--rm", "--network", "host"]
+    assert "--device" in argv and "nvidia.com/gpu=all" in argv
     assert argv[-2:] == ["optarena:nvidia", "run"]
 
 
@@ -75,27 +75,19 @@ def test_local_run_command_podman_amd_gpu_tokens():
     assert "/dev/kfd" in argv and "--group-add" in argv and "keep-groups" in argv
 
 
-def test_udocker_gpu_token_is_empty_by_design():
-    # udocker enables NVIDIA at SETUP time (`udocker setup --nvidia`), never as a run flag,
-    # so the fold adds no GPU token -- correct for a properly-set-up udocker.
-    cpu = containers.local_run_command(["x"], backend="udocker", hardware="cpu", repo_root="/r")
-    nv = containers.local_run_command(["x"], backend="udocker", hardware="nvidia", repo_root="/r")
-    assert len(nv) == len(cpu)  # nvidia adds no GPU token (only the hw-dependent image/env differ)
-    assert not any(t in nv for t in ("--gpus", "--nv", "--rocm", "--device"))
-
-
-def test_local_run_command_rejects_ce():
-    with pytest.raises(ValueError):
-        containers.local_run_command(["x"], backend="ce")
+def test_local_run_command_rejects_dropped_backend():
+    for dropped in ("docker", "udocker", "ce"):
+        with pytest.raises(ValueError):
+            containers.local_run_command(["x"], backend=dropped)
 
 
 def test_default_image_sif_tag_and_overrides(monkeypatch):
     assert containers.default_image("apptainer", "cpu", repo_root="/r") == "/r/optarena-cpu.sif"
-    assert containers.default_image("docker", "nvidia") == "optarena:nvidia"
+    assert containers.default_image("podman", "nvidia") == "optarena:nvidia"
     monkeypatch.setenv("OPTARENA_SIF", "/scratch/my.sif")
     assert containers.default_image("apptainer", "cpu", repo_root="/r") == "/scratch/my.sif"
     monkeypatch.setenv("OPTARENA_DOCKER_IMAGE", "reg/img:tag")
-    assert containers.default_image("docker", "cpu") == "reg/img:tag"
+    assert containers.default_image("podman", "cpu") == "reg/img:tag"
 
 
 def test_collect_env_order_is_pinned(monkeypatch):
@@ -110,25 +102,13 @@ def test_collect_env_order_is_pinned(monkeypatch):
     assert keys.count("OPTARENA_IMAGE") == 1  # no duplicate
 
 
+def test_collect_env_rejects_a_newline_value(monkeypatch):
+    monkeypatch.setenv("OPTARENA_BAD", "line1\nline2")
+    with pytest.raises(ValueError):
+        containers.collect_env("cpu")
+
+
 def test_harbor_env_for_maps_and_raises():
     assert containers.harbor_env_for("apptainer") == "singularity"
-    assert containers.harbor_env_for("docker") == "docker"
-    for backend in ("podman", "udocker", "ce"):
-        with pytest.raises(ValueError):
-            containers.harbor_env_for(backend)
-
-
-def test_ce_launcher_default_and_alps_form():
-    from optarena.agent_bench.judge_scheduler import DEFAULT_JUDGE_LAUNCHER
-    assert containers.ce_launcher() == DEFAULT_JUDGE_LAUNCHER  # plain judge launcher
-    assert containers.ce_launcher() == ("srun", "--nodelist", "{node}", "--gpus", "1", "-n", "1")
-    alps = containers.ce_launcher(environment="/e.toml", overlap=True)
-    assert alps[-2:] == ("--overlap", "--environment=/e.toml")
-
-
-def test_require_ce_environment():
-    containers.require_ce_environment(["srun", "--environment=/e.toml"])  # glued: ok
-    containers.require_ce_environment(["srun", "--environment", "/e.toml"])  # space: ok
-    containers.require_ce_environment(["srun"], image="/e.toml")  # explicit image: ok
     with pytest.raises(ValueError):
-        containers.require_ce_environment(["srun", "--nodelist", "n0"])  # neither: raise
+        containers.harbor_env_for("podman")  # podman is launched directly, not via Harbor

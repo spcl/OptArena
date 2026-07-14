@@ -2,16 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Container launch factory + the unprivileged Apptainer installer.
 
-One factory turns a ``(backend, image, command)`` into a launch argv. The per-backend
-flag SPELLINGS live in the language-neutral ``container_backends.txt`` (this directory),
-read here by Python and by ``scripts/run_agent_in_container.sh`` in pure bash -- one
-source of truth for both the Python callers and the python-less HPC login host. See
-``docs/DESIGN_container_launch_and_submission.md``.
+One factory (:func:`local_run_command`) turns a ``(backend, image, command)`` into a launch
+argv. Only apptainer + podman are supported -- both are what CSCS launches, and both consume
+the ONE universal OCI image (apptainer builds a SIF from it; podman runs the OCI tag). The
+per-backend flag SPELLINGS live in the language-neutral ``container_backends.txt`` (this
+directory), read here by Python and by ``scripts/run_agent_in_container.sh`` in pure bash --
+one source of truth for both the Python callers and the python-less HPC login host.
 
-Two shapes: an EXEC-WRAPPER (apptainer/docker/podman/udocker) built by
-:func:`local_run_command`, and the CSCS Container Engine, whose image is a flag
-(``--environment=<edf>``) not a positional -- built by :func:`ce_launcher`. Harbor is an
-orchestrator, not a wrapper; :func:`harbor_env_for` only supplies its provider name.
+Harbor is an orchestrator, not a wrapper; :func:`harbor_env_for` only supplies its provider
+name (apptainer -> singularity).
 
 Apptainer itself is a Go binary (not pip-installable); :func:`install_apptainer` runs its
 official unprivileged install into a user prefix, exposed as the ``optarena-install-apptainer``
@@ -32,9 +31,8 @@ APPTAINER_INSTALLER = "https://raw.githubusercontent.com/apptainer/apptainer/mai
 #: The single-source spelling file, read by BOTH this module and the bash launcher.
 BACKENDS_PATH = pathlib.Path(__file__).parent / "container_backends.txt"
 
-#: The selectable backends. ``ce`` is a valid selection but is launched by
-#: :func:`ce_launcher` (not an exec-wrapper fold row, so not in :data:`SPELLINGS`).
-KNOWN_BACKENDS = ("apptainer", "docker", "podman", "udocker", "ce")
+#: The selectable backends -- apptainer + podman, both exec-wrapper rows in the spelling file.
+KNOWN_BACKENDS = ("apptainer", "podman")
 
 
 @dataclass(frozen=True)
@@ -157,11 +155,8 @@ def local_run_command(inner: Sequence[str],
                       repo_root: Optional[str] = None) -> List[str]:
     """THE factory: the full launch argv for running ``inner`` inside the image under an
     exec-wrapper backend -- ``prefix + [image] + inner`` in the fixed fold order the bash
-    launcher mirrors. ``backend`` defaults to :func:`resolve_backend`; ``ce`` is rejected
-    (use :func:`ce_launcher`)."""
+    launcher mirrors. ``backend`` defaults to :func:`resolve_backend` (apptainer | podman)."""
     chosen = resolve_backend(backend)
-    if chosen not in SPELLINGS:
-        raise ValueError(f"{chosen!r} is not a local exec-wrapper backend; use ce_launcher() for CE")
     spelling = SPELLINGS[chosen]
     repo = repo_root or os.getcwd()
     argv: List[str] = [chosen, *spelling.verb, *spelling.gpu.get(hardware, ())]
@@ -174,45 +169,15 @@ def local_run_command(inner: Sequence[str],
 
 
 def harbor_env_for(backend: Optional[str] = None) -> str:
-    """Harbor's ``--env`` provider name for the resolved backend
-    (``apptainer -> singularity``, ``docker -> docker``). Raises for a backend Harbor
-    cannot drive (``podman`` / ``udocker`` / ``ce`` -- Harbor provides only docker +
-    singularity), so the caller never emits an invalid provider."""
+    """Harbor's ``--env`` provider name for the resolved backend (``apptainer -> singularity``).
+    Raises for ``podman`` (Harbor drives singularity + docker only), so the caller never emits
+    an invalid provider -- a podman run is launched directly, not through Harbor."""
     chosen = resolve_backend(backend)
-    name = SPELLINGS[chosen].harbor_env if chosen in SPELLINGS else ""
+    name = SPELLINGS[chosen].harbor_env
     if not name:
-        raise ValueError(f"{chosen!r} is not a Harbor backend (Harbor provides docker + singularity)")
+        raise ValueError(f"{chosen!r} is not a Harbor backend (Harbor provides singularity + docker); "
+                         "run it directly via local_run_command / scripts/run_agent_in_container.sh")
     return name
-
-
-def ce_launcher(environment: Optional[str] = None,
-                gpus: str = "1",
-                ntasks: str = "1",
-                overlap: bool = False,
-                node: str = "{node}") -> Tuple[str, ...]:
-    """The CSCS Container Engine srun prefix (image is the ``--environment=<edf>`` flag,
-    not a positional). ``{node}`` is left un-substituted by default so
-    ``judge_scheduler.srun_wrap`` keeps sole ownership of the per-slot replacement. With
-    no args this is the plain judge launcher; ``environment`` adds the glued CE flag."""
-    argv: List[str] = ["srun", "--nodelist", node, "--gpus", gpus, "-n", ntasks]
-    if overlap:
-        argv.append("--overlap")
-    if environment:
-        argv.append(f"--environment={environment}")
-    return tuple(argv)
-
-
-def require_ce_environment(prefix: Sequence[str], image: Optional[str] = None) -> None:
-    """Fail loud if a CE launch would carry neither an ``--environment=<edf>`` (glued or
-    space form) nor an explicit ``image`` -- i.e. it would grade on the bare host instead
-    of inside the CE image."""
-    if image:
-        return
-    for token in prefix:
-        if token == "--environment" or token.startswith("--environment="):
-            return
-    raise ValueError("CE launch carries no --environment=<edf> and no explicit image; "
-                     "the grade would run on the bare host, not inside the CE image")
 
 
 def install_apptainer(prefix="~/.local"):

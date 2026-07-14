@@ -41,7 +41,7 @@ def controlled_env(backend):
     return env
 
 
-@pytest.mark.parametrize("backend", ["apptainer", "docker", "podman", "udocker"])
+@pytest.mark.parametrize("backend", ["apptainer", "podman"])
 @pytest.mark.parametrize("hardware", ["cpu", "nvidia", "amd"])
 def test_bash_and_python_fold_identical_argv(backend, hardware, monkeypatch):
     env = controlled_env(backend)

@@ -100,15 +100,13 @@ backend_ready() {
   image="$(resolve_image "$backend" "$hw")"
   case "$backend" in
     apptainer) [ -f "$image" ] ;;
-    docker)    docker image inspect "$image" >/dev/null 2>&1 ;;
     podman)    podman image exists "$image" ;;
-    udocker)   udocker inspect "$image" >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }
 
 # Backend selection: the shared canonical knob wins, then the legacy bash-only alias,
-# else auto-probe (apptainer -> podman -> docker) by image availability.
+# else auto-probe (apptainer -> podman) by image availability.
 RUNTIME="${OPTARENA_RUNTIME_BACKEND:-${OPTARENA_CONTAINER_RUNTIME:-}}"
 INNER=(python -m optarena.cli agent "${INNER_ARGS[@]}")
 
@@ -120,20 +118,21 @@ if [ "$PRINT" -eq 1 ]; then
 fi
 
 if [ -n "$RUNTIME" ]; then
-  case "$RUNTIME" in apptainer|docker|podman|udocker) ;; *) echo "error: unknown backend $RUNTIME" >&2; exit 2 ;; esac
+  case "$RUNTIME" in apptainer|podman) ;; *) echo "error: unknown backend $RUNTIME (apptainer|podman)" >&2; exit 2 ;; esac
   backend_ready "$RUNTIME" "$HW" || {
     echo "error: backend $RUNTIME selected but its ${HW} image was not found" >&2; exit 1
   }
   SELECTED="$RUNTIME"
 else
   SELECTED=""
-  for cand in apptainer podman docker; do
+  for cand in apptainer podman; do
     if backend_ready "$cand" "$HW"; then SELECTED="$cand"; break; fi
   done
   if [ -z "$SELECTED" ]; then
-    echo "error: no image found. Build one first:" >&2
-    echo "  apptainer build optarena-${HW}.sif containers/${HW}.def" >&2
-    echo "  (or) podman build -f containers/${HW}.Dockerfile -t optarena:${HW} ." >&2
+    echo "error: no image found. Build one from the universal OCI recipe first:" >&2
+    echo "  podman build -f containers/optarena.Dockerfile --build-arg HW=${HW} -t optarena:${HW} ." >&2
+    echo "  (apptainer) podman save optarena:${HW} -o optarena-${HW}.tar && \\" >&2
+    echo "              apptainer build optarena-${HW}.sif docker-archive:optarena-${HW}.tar" >&2
     exit 1
   fi
 fi

@@ -107,17 +107,16 @@ def main(argv=None) -> int:
         return 0
 
     jobs_dir = Path(args.jobs_dir) if args.jobs_dir else (_ADAPTER_DIR / "runs")
-    # Harbor drives docker + apptainer/singularity only (its --env has no enroot/CSCS
-    # Container-Engine backend), so map the resolved runtime.backend to Harbor's provider
-    # name. For the CE (Alps), Harbor cannot launch it -- use the script-based campaign
-    # (scripts/cscs/run_campaign.sbatch) instead; guide the user rather than emit a bad --env.
+    # Harbor drives singularity (= apptainer) only here, so map the resolved runtime.backend to
+    # Harbor's provider name. podman is launched directly (not through Harbor) -- guide the user
+    # to the direct launcher rather than emit a bad --env.
     try:
         harbor_env = containers.harbor_env_for()
     except ValueError as exc:
         print(
-            f"\n{exc}\nHarbor runs docker + apptainer/singularity only. For the CSCS Container "
-            f"Engine on Alps, use the script-based campaign:\n"
-            f"  sbatch -A <account> --nodes=<N> scripts/cscs/run_campaign.sbatch\n",
+            f"\n{exc}\nHarbor runs singularity (apptainer). To run under podman, launch directly:\n"
+            f"  OPTARENA_RUNTIME_BACKEND=podman scripts/run_agent_in_container.sh ... "
+            f"(see docs/LAUNCH.md)\n",
             file=sys.stderr)
         return 3
     # `harbor run -p <dir>` loads the generated task dirs as a dataset directly, so no
