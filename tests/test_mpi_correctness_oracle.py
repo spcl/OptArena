@@ -92,7 +92,7 @@ def _run(language, source, launcher, grid, layout, *, is_python, cc_override=Non
     desc = Descriptor.from_submission(sub, binding, ranks=int(np.prod(grid)))
     a_in, _ = _oracle()
     data = {"A": a_in, "B": np.zeros((M, N)), "M": M, "N": N, "a": A_VAL, "c": C_VAL}
-    with Sandbox(Task(kernel="elem"), binding) as sb:
+    with Sandbox(binding) as sb:
         built = sb.build_mpi(sub, desc, cc_override=cc_override)
         assert built.ok, built.log
         artifact = built.exe if not is_python else built.lib

@@ -27,7 +27,6 @@ from typing import List, Optional, Tuple
 
 from optarena import languages
 from optarena.harness.envelope import Submission
-from optarena.harness.task import Task
 from optarena.support.bindings.contract import Binding
 from optarena.support.bindings.mpi_driver import gen_mpi_driver, mpi_symbol
 from optarena.flags import Mode
@@ -121,8 +120,7 @@ class Sandbox:
     removed on exit -- callers must read results out before leaving the block.
     """
 
-    def __init__(self, task: Task, binding: Binding):
-        self.task = task
+    def __init__(self, binding: Binding):
         self.binding = binding
         self._tmp: Optional[tempfile.TemporaryDirectory] = None
         self.root: Optional[pathlib.Path] = None

@@ -32,7 +32,7 @@ from optarena.harness import mpi_call, mpi_sizing, timing
 from optarena.harness.mpi_descriptor import Descriptor
 from optarena.harness.native_call import _call_isolated
 from optarena.harness.grading import BASELINE_CHOICES  # noqa: F401 -- re-exported for harbor_grade
-from optarena.harness.grading import (ORACLE_CHOICES, ReferencePlan, _c_reference_submission, _data_seeded, _grade,
+from optarena.harness.grading import (ORACLE_CHOICES, ReferencePlan, _data_seeded, _grade,
                                           _grade_against, _numpy_reference, _run_c_reference, _time_numpy,
                                           _time_numpy_samples, _wants, baseline_compiled, baseline_uses_numpy,
                                           build_reference_lib, reference_plan, resolve_baseline, run_compiled_reference)
@@ -242,7 +242,7 @@ def independent_verify(submission: Submission,
     determinism_ok = reverify_ok = dual_oracle_ok = False
     dual_oracle_applied = False
     try:
-        with Sandbox(task, binding) as sb:
+        with Sandbox(binding) as sb:
             built = sb.build(submission, mode=Mode.SINGLE_CORE)
             if not built.ok:
                 return VerifyResult(False, False, False, False, False, suspect, "harden: rebuild failed")
@@ -519,7 +519,7 @@ def score(submission: Submission,
     primary = _primary_baseline(baselines)
     baseline_ns = baselines.get(primary, 0)
 
-    with Sandbox(task, binding) as sb:
+    with Sandbox(binding) as sb:
         built = sb.build(submission, mode=mode)
         if not built.ok:
             return Score(False,
@@ -653,7 +653,7 @@ def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, bin
     np_re = _numpy_reference(spec, redata)
 
     try:
-        with Sandbox(task, binding) as sb:
+        with Sandbox(binding) as sb:
             built = sb.build_mpi(submission, descriptor)
             if not built.ok:
                 return VerifyResult(False, False, False, False, False, suspect, "harden: mpi rebuild failed")
@@ -741,7 +741,7 @@ def _build_run_mpi(task: Task, binding, submission: Submission, descriptor, cand
     ``(gathered_outputs, native_ns)``. Raises :class:`_MpiBuildError` on a build failure and
     ``RuntimeError``/``ValueError`` on a launch/run crash -- the two failure classes the callers
     grade differently. The Sandbox is scoped to this call so nothing leaks across sweep points."""
-    with Sandbox(task, binding) as sb:
+    with Sandbox(binding) as sb:
         built = sb.build_mpi(submission, descriptor)
         if not built.ok:
             raise _MpiBuildError(built.log[-2000:])
@@ -934,7 +934,7 @@ def score_scaling(submission: Submission,
     # The anchor build is rank-independent (a plain single-node kernel), so build it ONCE and reuse
     # the library across every P; only its input SIZE and timing vary per node count.
     a_task = Task(task.kernel, "restricted", single_node_anchor.language, residency="host")
-    with Sandbox(a_task, binding) as asb:
+    with Sandbox(binding) as asb:
         abuilt = asb.build(single_node_anchor, mode=Mode.SINGLE_CORE)
         if not abuilt.ok:
             return replace(empty, notes=(f"single-node anchor build failed: {abuilt.log[-500:]}", ))
@@ -1091,7 +1091,7 @@ def score_cells(submission: Submission,
         return outs, samples, peak
 
     results: List[CellScore] = []
-    with Sandbox(task, binding) as sb:
+    with Sandbox(binding) as sb:
         built = sb.build(submission, mode=mode)
         if not built.ok:
             log = built.log[-2000:]
@@ -1108,9 +1108,9 @@ def score_cells(submission: Submission,
         if plan.need_seq_c:
             try:
                 ctask = replace(task, language="c", source_mode="restricted", residency="host")
-                c_ctx = Sandbox(ctask, binding)
+                c_ctx = Sandbox(binding)
                 csb = c_ctx.__enter__()
-                cbuilt = csb.build(_c_reference_submission(task), mode=Mode.SINGLE_CORE)
+                cbuilt = csb.build(reference_submission(task, "c"), mode=Mode.SINGLE_CORE)
                 c_lib = cbuilt.lib if cbuilt.ok else None
             except Exception:  # noqa: BLE001 -- C reference unavailable -> numpy fallback per cell
                 c_lib = None
@@ -1125,7 +1125,7 @@ def score_cells(submission: Submission,
         if plan.bl_is_autopar:
             try:
                 atask = replace(task, language=plan.bl_lang, source_mode="restricted", residency="host")
-                bl_ctx = Sandbox(atask, binding)
+                bl_ctx = Sandbox(binding)
                 absb = bl_ctx.__enter__()
                 ok, lib, _log = build_reference_lib(absb.root,
                                                     spec,

@@ -155,7 +155,7 @@ def test_oversubscribe_leaves_srun_to_the_scheduler():
 def test_build_mpi_any_delivery_unsupported():
     b = _yax_binding()
     sub = Submission(language="c", library="/tmp/does-not-matter.so")
-    with Sandbox(Task(kernel="yax"), b) as sb:
+    with Sandbox(b) as sb:
         res = sb.build_mpi(sub, _descriptor())
     assert not res.ok and "not supported" in res.log
 
@@ -163,7 +163,7 @@ def test_build_mpi_any_delivery_unsupported():
 def test_build_mpi_python_delivery_stashes_module():
     b = _yax_binding()
     sub = Submission(language="python", source="def kernel_mpi(*a, **k): pass\n")
-    with Sandbox(Task(kernel="yax"), b) as sb:
+    with Sandbox(b) as sb:
         res = sb.build_mpi(sub, _descriptor())
         assert res.ok and res.exe is None and res.lib is not None
         assert res.lib.read_text().startswith("def kernel_mpi")
@@ -175,7 +175,7 @@ def test_build_mpi_device_rejects_non_gpu_kernel():
     # wrong build. Needs no compiler.
     b = _yax_binding()
     sub = Submission(language="c", source=_C_KERNEL)
-    with Sandbox(Task(kernel="yax"), b) as sb:
+    with Sandbox(b) as sb:
         res = sb.build_mpi(sub, _descriptor(locations={"x": "device", "y": "device"}))
     assert not res.ok and "cuda/hip" in res.log
 
@@ -194,7 +194,7 @@ def test_build_mpi_and_run_round_trip(tmp_path):
     x = np.arange(N, dtype=np.float64) + 1.0
     data = {"x": x, "y": np.zeros(N), "N": N, "a": 3.0}
 
-    with Sandbox(Task(kernel="yax"), b) as sb:
+    with Sandbox(b) as sb:
         built = sb.build_mpi(sub, desc, cc_override=cc_override_for(cc))
         assert built.ok, built.log
         assert built.exe is not None and built.exe.exists()

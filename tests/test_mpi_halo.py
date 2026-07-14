@@ -152,7 +152,7 @@ def _run(kernel, ndim, *, language, launcher, cc_override, N, TSTEPS, R):
     task = Task(kernel=kernel, language=language, residency="distributed")
     sub = Submission(language=language, source=reference_mpi_source(task))
     data = {"A": A0, "B": B0, "N": N, "TSTEPS": TSTEPS}
-    with Sandbox(task, binding) as sb:
+    with Sandbox(binding) as sb:
         built = sb.build_mpi(sub, desc, cc_override=cc_override)
         assert built.ok, built.log
         artifact = built.lib if language == "python" else built.exe

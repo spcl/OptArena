@@ -321,12 +321,6 @@ def reference_submission(task: Task, language: str = "c") -> Submission:
     return Submission(language=language, source=reference_source(reference_task(task, language)))
 
 
-def _c_reference_submission(task: Task) -> Submission:
-    """The sequential-C reference submission (back-compat wrapper for
-    :func:`reference_submission` with ``language='c'``)."""
-    return reference_submission(task, "c")
-
-
 def c_reference_available(task: Task) -> bool:
     """Whether the sequential-C reference can be EMITTED for ``task``'s kernel -- the
     precondition for using a COMPILED reference (C or ``*-autopar``) as the speedup
@@ -421,7 +415,7 @@ def run_compiled_reference(spec: BenchSpec,
     ``warmup`` warmup reps run first and are DISCARDED from the returned samples (0 by default; the
     timed callers pass :func:`timing.warmup_count` so the baseline is warmed like the submission)."""
     rtask = reference_task(task, language)
-    with Sandbox(rtask, binding) as csb:
+    with Sandbox(binding) as csb:
         try:
             ok, lib, log = build_reference_lib(csb.root,
                                                spec,
