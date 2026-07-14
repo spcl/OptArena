@@ -27,9 +27,12 @@ run, and a Pluto pass under one interface lets the scorer treat them uniformly.
   point ``VLLM_BASE_URL`` at the serving node. Same endpoint Harbor reaches via
   LiteLLM ``hosted_vllm/<model>``.
 """
+import json
 import os
 import pathlib
 import tempfile
+import urllib.error
+import urllib.request
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
@@ -38,6 +41,7 @@ from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.task import Task
 from optarena.agent_bench.usage import TokenUsage
 from optarena.spec import BenchSpec
+from optarena.websearch import post_request
 
 #: language -> the glob for the NumpyToX reference source (the fp64 leg; the
 #: ``_pluto_input`` C variant is excluded by requiring the bare ``_fp64`` suffix).
@@ -252,6 +256,25 @@ def openai_usage(body: dict) -> TokenUsage:
                       cached_tokens=int(details.get("cached_tokens", 0) or 0))
 
 
+def http_chat_json(url: str, payload: dict, headers: dict, timeout: float, unreachable_msg: str) -> dict:
+    """POST ``payload`` as JSON to ``url`` and return the parsed JSON response --
+    the shared HTTP transport for the stdlib-only chat agents (Ollama and any
+    OpenAI-compatible endpoint).
+
+    Reuses :func:`optarena.websearch.post_request` to build the request (JSON body
+    + ``Content-Type: application/json`` merged with ``headers``). A connection
+    failure becomes ``RuntimeError(unreachable_msg)`` -- chained from the underlying
+    ``urllib`` error so the traceback keeps the transport detail -- giving the agent
+    an actionable hint instead of a bare stack trace.
+    """
+    request = post_request(url, payload, headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise RuntimeError(unreachable_msg) from exc
+
+
 #: Keep the model on-task: return only the JSON envelope, implement the kernel.
 #: Shared by every model-backed agent (Claude / local HF / Ollama).
 _SYSTEM_PROMPT = ("You are an expert performance engineer optimizing numerical kernels. "
@@ -380,9 +403,6 @@ class OllamaAgent(Agent):
         self._complete_fn = complete_fn
 
     def _ollama_complete(self, prompt: str, budget: Optional[int]) -> str:
-        import json
-        import urllib.error
-        import urllib.request
         num_predict = budget_tokens(budget, self.max_tokens)
         payload = {
             "model": self.model_id,
@@ -401,16 +421,10 @@ class OllamaAgent(Agent):
                 "content": prompt
             }],
         }
-        req = urllib.request.Request(f"{self.host}/api/chat",
-                                     data=json.dumps(payload).encode("utf-8"),
-                                     headers={"Content-Type": "application/json"},
-                                     method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"OllamaAgent could not reach {self.host} ({exc}); start the server and "
-                               "pull the model with scripts/install_ollama.sh") from exc
+        body = http_chat_json(
+            f"{self.host}/api/chat", payload, {}, self.timeout,
+            f"OllamaAgent could not reach {self.host}; start the server and "
+            "pull the model with scripts/install_ollama.sh")
         u = ollama_usage(body)
         self.record_usage(u.input_tokens, u.output_tokens)
         return body.get("message", {}).get("content", "")
@@ -456,9 +470,6 @@ class OpenAIAgent(Agent):
         self._complete_fn = complete_fn
 
     def _openai_complete(self, prompt: str, budget: Optional[int]) -> str:
-        import json
-        import urllib.error
-        import urllib.request
         payload = {
             "model": self.model_id,
             "max_tokens": budget_tokens(budget, self.max_tokens),
@@ -471,19 +482,10 @@ class OpenAIAgent(Agent):
                 "content": prompt
             }],
         }
-        req = urllib.request.Request(f"{self.base_url}/chat/completions",
-                                     data=json.dumps(payload).encode("utf-8"),
-                                     headers={
-                                         "Content-Type": "application/json",
-                                         "Authorization": f"Bearer {self.api_key}"
-                                     },
-                                     method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"OpenAIAgent could not reach {self.base_url} ({exc}); start a vLLM server "
-                               "(vllm serve <model>) or set OPENAI_BASE_URL/VLLM_BASE_URL") from exc
+        body = http_chat_json(
+            f"{self.base_url}/chat/completions", payload, {"Authorization": f"Bearer {self.api_key}"}, self.timeout,
+            f"OpenAIAgent could not reach {self.base_url}; start a vLLM server "
+            "(vllm serve <model>) or set OPENAI_BASE_URL/VLLM_BASE_URL")
         u = openai_usage(body)
         self.record_usage(u.input_tokens, u.output_tokens, u.cached_tokens)
         choices = body.get("choices") or [{}]

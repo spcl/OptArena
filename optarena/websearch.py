@@ -178,7 +178,10 @@ def _get_request(url: str, params: dict, headers: dict) -> urllib.request.Reques
     return urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}", headers=headers, method="GET")
 
 
-def _post_request(url: str, body: dict, headers: dict) -> urllib.request.Request:
+def post_request(url: str, body: dict, headers: dict) -> urllib.request.Request:
+    """Build a JSON POST ``Request`` to ``url`` (``body`` as the JSON payload,
+    ``Content-Type: application/json`` merged with ``headers``). Shared by the
+    per-provider request builders here and the chat agents' HTTP transport."""
     data = json.dumps(body).encode("utf-8")
     return urllib.request.Request(url,
                                   data=data,
@@ -204,7 +207,7 @@ def _http_json(request: urllib.request.Request, timeout: float) -> dict:
 
 # ------------------------------------------------------- per-provider requests --
 def _req_tavily(q, key, cse_id, cfg):
-    return _post_request("https://api.tavily.com/search", {
+    return post_request("https://api.tavily.com/search", {
         "query": q,
         "max_results": cfg.max_results,
         "include_answer": True
@@ -212,7 +215,7 @@ def _req_tavily(q, key, cse_id, cfg):
 
 
 def _req_serper(q, key, cse_id, cfg):
-    return _post_request("https://google.serper.dev/search", {"q": q, "num": cfg.max_results}, {"X-API-KEY": key})
+    return post_request("https://google.serper.dev/search", {"q": q, "num": cfg.max_results}, {"X-API-KEY": key})
 
 
 def _req_brave(q, key, cse_id, cfg):
@@ -226,7 +229,7 @@ def _req_brave(q, key, cse_id, cfg):
 
 
 def _req_exa(q, key, cse_id, cfg):
-    return _post_request("https://api.exa.ai/search", {"query": q, "numResults": cfg.max_results}, {"x-api-key": key})
+    return post_request("https://api.exa.ai/search", {"query": q, "numResults": cfg.max_results}, {"x-api-key": key})
 
 
 def _req_google_cse(q, key, cse_id, cfg):
@@ -266,7 +269,7 @@ def _req_jina(q, key, cse_id, cfg):
 
 
 def _req_perplexity(q, key, cse_id, cfg):
-    return _post_request("https://api.perplexity.ai/chat/completions", {
+    return post_request("https://api.perplexity.ai/chat/completions", {
         "model": "sonar",
         "messages": [{
             "role": "user",
