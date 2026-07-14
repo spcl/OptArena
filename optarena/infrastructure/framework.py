@@ -122,6 +122,36 @@ class Timer:
         self.state: Any = None
 
 
+class TorchCudaEventTiming:
+    """Device-only GPU timing via torch CUDA events, shared by the torch-backed
+    GPU adapters (Triton, APPy). CuPy uses its own ``cupy.cuda.Event`` API and does
+    NOT mix this in. A pure mixin: it overrides only the create/start/stop timer
+    methods, so an adapter that lists it before :class:`Framework` gets device-event
+    timing in place of the host-clock default."""
+
+    def create_timer(self, program: Any) -> "Timer":
+        """Allocate a start/stop torch CUDA event pair for device-side timing."""
+        import torch
+        timer = Timer(program)
+        timer.state = (torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True))
+        return timer
+
+    def start_timer(self, timer: "Timer") -> None:
+        timer.t0 = time.perf_counter()
+        timer.state[0].record()
+
+    def stop_timer(self, timer: "Timer") -> "TimingResult":
+        """Record + sync the stop event; native = device-measured ms, python = host
+        wall-clock (both bracketing the same call)."""
+        import torch
+        start_ev, stop_ev = timer.state
+        stop_ev.record()
+        torch.cuda.synchronize()
+        python_t = (time.perf_counter() - timer.t0) * 1.0e3  # s -> ms
+        native_t = start_ev.elapsed_time(stop_ev)  # already ms
+        return TimingResult(python=python_t, native=native_t)
+
+
 #: Per-framework descriptors (replaces the old ``framework_info/*.json`` corpus
 #: -- internal infrastructure config, so it lives in code, not data files).
 #: ``arch`` is cpu/gpu; ``postfix`` selects the ``<module>_<postfix>.py`` impl
