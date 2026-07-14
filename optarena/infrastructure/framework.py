@@ -265,7 +265,7 @@ def _framework_class(fname: str):
     is done lazily here to avoid a circular import."""
     from optarena.infrastructure import (Framework, NumbaFramework, CupyFramework, JaxFramework, PythranFramework,
                                          DaceFramework, CppBackendFramework, TritonFramework, TVMFramework,
-                                         TVMCPUFramework, APPyFramework)
+                                         APPyFramework)
     classes = {
         "numpy": Framework,
         "numba": NumbaFramework,
@@ -281,7 +281,7 @@ def _framework_class(fname: str):
         "pluto": CppBackendFramework,
         "triton": TritonFramework,
         "tvm": TVMFramework,
-        "tvm_cpu": TVMCPUFramework,
+        "tvm_cpu": TVMFramework,
         "appy": APPyFramework,
     }
     return classes[fname]
