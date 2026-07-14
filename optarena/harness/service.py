@@ -139,7 +139,7 @@ def service_prompt(kernel: str, language: str, judge_url: str, cfg: Optional[Run
 def _submission_from_body(body: dict, language: str, cfg: RunConfig) -> Submission:
     """Build + policy-check a :class:`Submission` from a ``/oracle`` request body.
 
-    Enforces ``input_mode``: ``py-binding`` / ``source`` / ``py-binding`` reject a prebuilt ``.so``,
+    Enforces ``input_mode``: ``source`` / ``py-binding`` reject a prebuilt ``.so``,
     ``library`` rejects source, and ``any`` allows both. Raises ``ValueError``
     (-> 400) on a policy or shape violation.
     """
@@ -198,7 +198,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parts = urlparse(self.path).path.strip("/").split("/")
-        route = parts[0] if parts else ""
+        route = parts[0]  # str.split("/") is never empty, so parts[0] is always safe
         if route == "health":
             return self._send(
                 200, {
@@ -239,7 +239,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parts = urlparse(self.path).path.strip("/").split("/")
-        route = parts[0] if parts else ""
+        route = parts[0]  # str.split("/") is never empty, so parts[0] is always safe
         if route not in ("oracle", "submit", "score"):
             return self._send(404, {"error": f"unknown route {self.path!r}"})
         try:

@@ -159,9 +159,6 @@ class KernelTask:
     def repo_dir_path(self) -> str:
         return self._path("repo")
 
-    def repo_source_rel(self, language: str) -> str:
-        return f"{self.subdir}/repo/src/{self.subdir}.{_ext(language)}"
-
     def repo_source_path(self, language: str) -> str:
         return self._path(f"repo/src/{self.subdir}.{_ext(language)}")
 

@@ -406,8 +406,6 @@ def _variant_diff(cfg) -> str:
     """One-line ``field=value`` summary of how a resolved ``PromptConfig`` differs
     from the config-default baseline (empty when identical, e.g. the ``default``
     variant). Used by ``--list-variants`` to show what each preset actually changes."""
-    import dataclasses
-
     from optarena.harness.prompts import PromptConfig
     base = dataclasses.asdict(PromptConfig.from_config())
     cur = dataclasses.asdict(cfg)

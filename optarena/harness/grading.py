@@ -306,12 +306,7 @@ def reference_task(task: Task, language: str = "c") -> Task:
     return replace(task, language=language, source_mode="restricted", residency="host")
 
 
-def c_reference_task(task: Task) -> Task:
-    """``task`` reshaped for the sequential-C reference (restricted-C, host residency)."""
-    return reference_task(task, "c")
-
-
-def reference_submission(spec: BenchSpec, task: Task, language: str = "c") -> Submission:
+def reference_submission(task: Task, language: str = "c") -> Submission:
     """The NumpyToX **compiled reference** for this kernel in ``language`` as a
     restricted submission.
 
@@ -326,10 +321,10 @@ def reference_submission(spec: BenchSpec, task: Task, language: str = "c") -> Su
     return Submission(language=language, source=reference_source(reference_task(task, language)))
 
 
-def _c_reference_submission(spec: BenchSpec, task: Task) -> Submission:
+def _c_reference_submission(task: Task) -> Submission:
     """The sequential-C reference submission (back-compat wrapper for
     :func:`reference_submission` with ``language='c'``)."""
-    return reference_submission(spec, task, "c")
+    return reference_submission(task, "c")
 
 
 def c_reference_available(task: Task) -> bool:
@@ -339,7 +334,7 @@ def c_reference_available(task: Task) -> bool:
     not-yet-translatable kernel returns ``False`` so callers can fall back to the
     numpy baseline instead of erroring."""
     try:
-        reference_submission(BenchSpec.load(task.kernel), task, "c")
+        reference_submission(task, "c")
         return True
     except Exception:  # noqa: BLE001 -- any emit failure means "no compiled baseline here"
         return False

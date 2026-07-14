@@ -257,19 +257,13 @@ class BlasReductionOptimizer(LibraryOptimizer):
         return self._library_submission(task, source, extra_compile=cflags, extra_link=libs)
 
 
-def have_tvm() -> bool:
+def backend_importable(module: str) -> bool:
+    """Whether ``module`` imports here -- the autotuner backend's availability gate."""
+    import importlib
     try:
-        import tvm  # noqa: F401
+        importlib.import_module(module)
         return True
     except Exception:  # noqa: BLE001 -- any import error means "not usable here"
-        return False
-
-
-def have_triton() -> bool:
-    try:
-        import triton  # noqa: F401
-        return True
-    except Exception:  # noqa: BLE001
         return False
 
 
@@ -314,7 +308,7 @@ class TVMAutotunerOptimizer(AutotunerOptimizer):
     """
 
     name = "tvm"
-    backend_available = staticmethod(have_tvm)
+    backend_available = staticmethod(lambda: backend_importable("tvm"))
     install_hint = "pip install apache-tvm"
 
     def _tuned_source(self, task: Task, binding) -> str:
@@ -332,7 +326,7 @@ class TritonOptimizer(AutotunerOptimizer):
     """
 
     name = "triton"
-    backend_available = staticmethod(have_triton)
+    backend_available = staticmethod(lambda: backend_importable("triton"))
     install_hint = "pip install triton (and a CUDA/HIP GPU)"
 
     def _tuned_source(self, task: Task, binding) -> str:

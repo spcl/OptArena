@@ -648,13 +648,9 @@ def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, bin
     comparator. The C dual-oracle does not apply (the reference is already the whole-domain NumPy
     oracle), so it is recorded as not-applied."""
     ranks = int(config.get("mpi.ranks", 4))
-    launcher = list(config.get("mpi.launcher", ["mpiexec.mpich", "-n"]))
-    mode = str(config.get("mpi.mode", "strong"))
-    k_repeats = int(config.get("mpi.k_repeats", 5))
-    timeout = float(config.get("mpi.launch_timeout_s", 120))
-    env = dict(config.get("mpi.env", {}) or {})
-    public_seed = int(config.get("seeds.public_tests", 42))
-    default_location = str(config.get("mpi.residency", "host"))
+    cfg = _mpi_launch_cfg()  # the shared mpi.* / seed resolution -- one source of truth
+    launcher, mode, k_repeats, timeout, env = cfg.launcher, cfg.mode, cfg.k_repeats, cfg.timeout, cfg.env
+    public_seed, default_location = cfg.seed, cfg.default_location
     try:
         descriptor = Descriptor.from_submission(submission,
                                                 binding,
@@ -1131,7 +1127,7 @@ def score_cells(submission: Submission,
                 ctask = replace(task, language="c", source_mode="restricted", residency="host")
                 c_ctx = Sandbox(ctask, binding)
                 csb = c_ctx.__enter__()
-                cbuilt = csb.build(_c_reference_submission(spec, task), mode=Mode.SINGLE_CORE)
+                cbuilt = csb.build(_c_reference_submission(task), mode=Mode.SINGLE_CORE)
                 c_lib = cbuilt.lib if cbuilt.ok else None
             except Exception:  # noqa: BLE001 -- C reference unavailable -> numpy fallback per cell
                 c_lib = None
