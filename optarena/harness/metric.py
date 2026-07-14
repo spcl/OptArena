@@ -41,16 +41,12 @@ from optarena.spec import BenchSpec
 
 _UNCLASSIFIED = "unclassified"
 
-#: Neutral fallback speedup denominator for a DIRECT ``score_task_fuzzed`` call with
-#: no baseline: the SEQUENTIAL C reference (the consistent "all implementations start
-#: from a fully serial C" baseline), numpy fallback per-task when a kernel cannot be
-#: emitted to C. The scorer is nonetheless track-AWARE: :func:`score_task_fuzzed`
-#: resolves whatever baseline it is handed through
-#: :func:`~optarena.harness.grading.resolve_baseline`, so the user-facing default
-#: -- the ``track`` sentinel every deployed entry point sends (config
-#: ``measurement.baseline`` / ``service.baseline``, the CLI, the API) -- becomes the
-#: per-track default (foundation -> ``c-autopar``, ml / hpc -> ``numpy``). Recorded
-#: honestly in ``TaskScore.baseline``.
+#: Neutral fallback speedup denominator for a DIRECT ``score_task_fuzzed`` call with no
+#: baseline: the SEQUENTIAL C reference (numpy fallback per-task when a kernel cannot be
+#: emitted to C). ``score_task_fuzzed`` resolves whatever baseline it is handed via
+#: :func:`~optarena.harness.grading.resolve_baseline`, so the user-facing ``auto`` default
+#: (config ``measurement.baseline``, the CLI, the API) becomes the per-track default
+#: (foundation -> ``c-autopar``, ml / hpc -> ``numpy``); recorded in ``TaskScore.baseline``.
 _DEFAULT_BASELINE = "c"
 
 
