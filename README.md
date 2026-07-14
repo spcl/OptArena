@@ -774,6 +774,7 @@ This README is the single guide; these files go deeper on specific topics.
 | Doc | What it covers |
 |---|---|
 | [`docs/WRITING_AN_AGENT.md`](docs/WRITING_AN_AGENT.md) | **Start here to write an agent/optimizer** -- the native Python API, an `Agent` subclass, or a container agent. |
+| [`docs/LAUNCH.md`](docs/LAUNCH.md) | Launching on a cluster -- the three container roles, static round-robin endpoints, and the CSCS Alps submit quickstart. |
 | [`docs/AGENTS_AND_TOOL_ACCESS.md`](docs/AGENTS_AND_TOOL_ACCESS.md) | How agent harnesses (Harbor/Terminal-Bench, AlgoTune) expect agents, and how OptArena's tool access maps onto them. |
 | [`docs/canonical_numpy_form.md`](docs/canonical_numpy_form.md) | Writing a NumPy reference that lowers cleanly through the NumPy→C translator. |
 | [`docs/tvm_authoring.md`](docs/tvm_authoring.md) | Hand-writing a TVM implementation (TOPI ops + mandatory autotuning). |
