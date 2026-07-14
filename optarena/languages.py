@@ -20,6 +20,7 @@ This module owns the second edit plus the runtime helpers:
   substitute the compile-command template. It returns the argv; it does NOT run
   it (the caller owns process launching).
 """
+import functools
 import pathlib
 import shlex
 import shutil
@@ -49,8 +50,13 @@ LANG_EXT: Dict[str, str] = {
 }
 
 
+@functools.lru_cache(maxsize=1)
 def _load_compilers() -> Dict[str, dict]:
-    """Parse ``compilers.yaml`` into ``{compiler_name: block}``."""
+    """Parse ``compilers.yaml`` into ``{compiler_name: block}``.
+
+    Memoized: the table is a static process-wide config (never written at runtime)
+    that every build call reads, so it is parsed once. Callers treat the result as
+    read-only (they only look blocks up, never mutate them)."""
     return yaml.safe_load(COMPILERS_YAML.read_text())
 
 
@@ -503,7 +509,7 @@ def run_build_commands(cmds: List[List[str]], cwd) -> Tuple[bool, str]:
     spawned (``OSError`` -- e.g. the compiler is not installed) or exits nonzero;
     ``log`` is the joined ``$ argv`` / stdout / stderr transcript either way. The ONE
     build-invocation loop shared by :meth:`Sandbox.build`,
-    :func:`agent_bench.grading.build_reference_lib`, and the ABI optimizer build, so
+    :func:`harness.grading.build_reference_lib`, and the ABI optimizer build, so
     the three cannot drift on capture / OSError / returncode handling. Callers keep
     their own artifact-existence check and result shape."""
     log: List[str] = []

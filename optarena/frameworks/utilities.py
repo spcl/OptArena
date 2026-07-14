@@ -39,7 +39,7 @@ def resolve_outputs(result, inplace_values, output_args):
 def compare_arrays(ref, val, rtol=1e-5, atol=1e-8):
     """Core element comparator for ONE array pair -- the SINGLE source of truth for
     "are these two arrays equal enough", shared by the harness :func:`validate` and
-    the judge's ``agent_bench.grading._grade`` so the two grading paths cannot drift.
+    the judge's ``harness.grading._grade`` so the two grading paths cannot drift.
 
     Returns ``(ok, max_rel_error, detail)``; ``detail`` is ``""`` on a match, else a
     short reason. The check is:

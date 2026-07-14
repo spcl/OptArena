@@ -313,7 +313,7 @@ def cmd_agent(args) -> int:
         config.set_override("prompt.native", True)
     variant = "native" if args.native else None
 
-    # The distributed static path (agent_bench.pipeline.run_static): W agent workers, each
+    # The distributed static path (harness.pipeline.run_static): W agent workers, each
     # STATICALLY assigned (round-robin) to one vLLM endpoint (think) + one judge endpoint
     # (authoritative HTTP grade). --native is the explicit in-process single-box path, so it
     # always keeps the serial loop below; a plain single-box run with no endpoints stays serial.
@@ -629,7 +629,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--output", default="results/agentbench.jsonl", help="JSONL output file (appended)")
     r.set_defaults(func=cmd_run)
 
-    # --- agent_bench verbs (the auto-tuner loop) ---------------------------
+    # --- harness verbs (the auto-tuner loop) ---------------------------
     a = sub.add_parser("agent", help="run an agent over tasks and grade each")
     a.add_argument("agent", help="agent name (stub / claude)")
     a.add_argument("--kernels", default="all", help="comma-separated kernel keys, or 'all' (default)")

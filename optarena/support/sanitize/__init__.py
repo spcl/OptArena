@@ -3,7 +3,7 @@
 Stable optarena-facing import path. The implementation is the single canonical
 sanitizer in :mod:`numpyto_common.sanitize` (it lives in the standalone
 numpytranslators package so that package can sanitize its own emitted output without
-depending on optarena); this module re-exports it for hf_export + agent_bench.
+depending on optarena); this module re-exports it for hf_export + harness.
 """
 from numpyto_common.sanitize import build_name_map, mangle, strip_comments, tree_sitter_available
 
