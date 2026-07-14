@@ -62,7 +62,7 @@ def test_non_llm_agent_costs_zero_tokens():
 
 
 # --- the SDK -> TokenUsage capture seam (untested otherwise: every agent test
-#     injects complete_fn, bypassing the real _anthropic_complete/_ollama_complete) ---
+#     injects complete_fn, bypassing the real _backend) ---
 
 
 class _FakeAnthropicUsage:

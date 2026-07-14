@@ -33,7 +33,7 @@ import pathlib
 import tempfile
 import urllib.error
 import urllib.request
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Callable, Optional
 
 from optarena import paths
@@ -69,15 +69,24 @@ class Agent(ABC):
 
     name: str = "agent"
 
-    @abstractmethod
     def solve(self, task: Task, prompt: str = "", budget: "Optional[object]" = None) -> Submission:
-        """Return the agent's implementation for ``task``.
+        """Return the agent's implementation for ``task`` (the model-agent body).
 
-        ``budget`` is the unified optimize budget -- a
-        :class:`optarena.optimize.OptimizeBudget` (use :func:`budget_tokens` to read
-        the agent's token ceiling from it) or a bare ``int`` token count;
-        ``None`` uses the agent's default. ``prompt`` is the assembled task
-        prompt (a reference-echoing stub ignores it)."""
+        Assemble the prompt if the runner did not pass one, run the injected
+        ``complete_fn`` (else the agent's :meth:`_backend`), and parse the reply into a
+        :class:`Submission`. ``budget`` is the unified optimize budget -- a
+        :class:`optarena.optimize.OptimizeBudget` (use :func:`budget_tokens` to read the
+        token ceiling) or a bare ``int``; ``None`` uses the agent's default. A non-model
+        agent (StubAgent / an optimizer) overrides this."""
+        if not prompt:
+            from optarena.harness.prompts import build_prompt
+            prompt = build_prompt(task)
+        reply = self._complete_fn(prompt) if self._complete_fn is not None else self._backend(prompt, budget)
+        return Submission.from_response(reply, default_language=task.language)
+
+    def _backend(self, prompt: str, budget: "Optional[object]") -> str:
+        """The model call for a model agent (Claude / HF / Ollama / OpenAI). Non-model
+        agents override :meth:`solve` and never reach here."""
         raise NotImplementedError
 
     @property
@@ -90,18 +99,6 @@ class Agent(ABC):
         """Accumulate one LLM call's token counts. The single sink for both the
         self-report path (the SDK's own usage) and a future MITM proxy."""
         self.__dict__["_usage"] = self.usage + TokenUsage(input_tokens, output_tokens, cached_tokens)
-
-    def _dispatch_solve(self, task: Task, prompt: str, budget: "Optional[object]",
-                        backend: Callable[[str, "Optional[object]"], str]) -> Submission:
-        """Shared model-agent ``solve`` body: assemble the prompt if the runner did
-        not pass one, run the injected ``complete_fn`` (else the agent's ``backend``),
-        and parse the reply into a :class:`Submission`."""
-        if not prompt:
-            from optarena.harness.prompts import build_prompt
-            prompt = build_prompt(task)
-        reply = self._complete_fn(prompt) if self._complete_fn is not None else backend(prompt, budget)
-        return Submission.from_response(reply, default_language=task.language)
-
 
 def budget_tokens(budget: "object", default: int) -> int:
     """Resolve an agent token ceiling from the unified budget: a
@@ -310,7 +307,7 @@ class ClaudeAgent(Agent):
                                    "(pip install -r requirements/nvidia.txt) or an "
                                    "injected complete_fn")
 
-    def _anthropic_complete(self, prompt: str, budget: Optional[int]) -> str:
+    def _backend(self, prompt: str, budget: Optional[int]) -> str:
         import anthropic
         client = anthropic.Anthropic()
         max_tokens = budget_tokens(budget, self.max_tokens)
@@ -324,9 +321,6 @@ class ClaudeAgent(Agent):
         u = anthropic_usage(message.usage)
         self.record_usage(u.input_tokens, u.output_tokens, u.cached_tokens)
         return "".join(block.text for block in message.content if block.type == "text")
-
-    def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
-        return self._dispatch_solve(task, prompt, budget, self._anthropic_complete)
 
 
 class LocalHFAgent(Agent):
@@ -357,7 +351,7 @@ class LocalHFAgent(Agent):
                                    "(pip install -r requirements/agent-local.txt) or an "
                                    "injected complete_fn")
 
-    def _hf_complete(self, prompt: str, budget: Optional[int]) -> str:
+    def _backend(self, prompt: str, budget: Optional[int]) -> str:
         if self._model is None:  # load weights once, then reuse
             from transformers import AutoModelForCausalLM, AutoTokenizer
             self._tok = AutoTokenizer.from_pretrained(self.model_id)
@@ -368,9 +362,6 @@ class LocalHFAgent(Agent):
         max_new = budget_tokens(budget, self.max_tokens)
         out = self._model.generate(**inputs, max_new_tokens=max_new)
         return self._tok.decode(out[0][inputs.input_ids.shape[-1]:], skip_special_tokens=True)
-
-    def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
-        return self._dispatch_solve(task, prompt, budget, self._hf_complete)
 
 
 class OllamaAgent(Agent):
@@ -402,7 +393,7 @@ class OllamaAgent(Agent):
         self.timeout = timeout
         self._complete_fn = complete_fn
 
-    def _ollama_complete(self, prompt: str, budget: Optional[int]) -> str:
+    def _backend(self, prompt: str, budget: Optional[int]) -> str:
         num_predict = budget_tokens(budget, self.max_tokens)
         payload = {
             "model": self.model_id,
@@ -428,9 +419,6 @@ class OllamaAgent(Agent):
         u = ollama_usage(body)
         self.record_usage(u.input_tokens, u.output_tokens)
         return body.get("message", {}).get("content", "")
-
-    def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
-        return self._dispatch_solve(task, prompt, budget, self._ollama_complete)
 
 
 class OpenAIAgent(Agent):
@@ -469,7 +457,7 @@ class OpenAIAgent(Agent):
         self.timeout = timeout
         self._complete_fn = complete_fn
 
-    def _openai_complete(self, prompt: str, budget: Optional[int]) -> str:
+    def _backend(self, prompt: str, budget: Optional[int]) -> str:
         payload = {
             "model": self.model_id,
             "max_tokens": budget_tokens(budget, self.max_tokens),
@@ -490,6 +478,3 @@ class OpenAIAgent(Agent):
         self.record_usage(u.input_tokens, u.output_tokens, u.cached_tokens)
         choices = body.get("choices") or [{}]
         return choices[0].get("message", {}).get("content", "")
-
-    def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
-        return self._dispatch_solve(task, prompt, budget, self._openai_complete)
