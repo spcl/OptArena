@@ -10,11 +10,11 @@ def contour_integral(NR, NM, slab_per_bc, Ham, int_pts, Y, P0, P1):
         for n in range(slab_per_bc + 1):
             zz = np.power(z, slab_per_bc / 2 - n)
             Tz += zz * Ham[n]
-        if NR == NM:
-            X = np.linalg.inv(Tz)
-        else:
-            X = np.linalg.solve(Tz, Y)
+        # np.linalg.solve is the general, well-conditioned form for every NR/NM (the square
+        # NR == NM case is just solve against the identity-shaped Y); the earlier
+        # ``if NR == NM: inv`` special case only rebound X to a divergent (NR, NR) shape.
+        X = np.linalg.solve(Tz, Y)
         if abs(z) < 1.0:
-            X = -X
+            X[:] = -X
         P0 += X
         P1 += z * X
