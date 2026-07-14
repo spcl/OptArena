@@ -110,8 +110,8 @@ def _default_rb(spec: BenchSpec) -> ResolvedBench:
 def _group_dir(spec: BenchSpec) -> str:
     """The directory a microkernel is bundled under in ``group='dir'`` mode: the
     folder that holds the kernel dirs (``hpc/structured_grids``), i.e. the parent of
-    the kernel's own folder. Falls back to the track for a track-root kernel."""
-    return str(pathlib.PurePosixPath(spec.relative_path).parent) or spec.track
+    the kernel's own folder (``.`` for a track-root kernel)."""
+    return str(pathlib.PurePosixPath(spec.relative_path).parent)
 
 
 @dataclass(frozen=True)

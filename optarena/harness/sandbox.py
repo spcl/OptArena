@@ -100,6 +100,20 @@ def split_build(tokens: List[str]) -> Tuple[List[str], List[str]]:
     return compile_tokens, link_tokens
 
 
+def finalize_build(cmds, cwd, artifact, *, as_exe: bool) -> "BuildResult":
+    """Run the compile/link ``cmds`` in ``cwd`` (the ONE build loop shared with
+    grading.build_reference_lib and the ABI optimizer build) and check the produced
+    ``artifact``. ``as_exe`` picks the return shape (an executable vs a ``.so``) and the
+    error wording. Returns a :class:`BuildResult`."""
+    failed, log = languages.run_build_commands(cmds, cwd)
+    if failed:
+        return BuildResult(False, None, log)
+    if not artifact.exists():
+        kind = "executable" if as_exe else ".so"
+        return BuildResult(False, None, f"compile reported success but produced no {kind}\n" + log)
+    return BuildResult(True, None, log, exe=artifact) if as_exe else BuildResult(True, artifact, log)
+
+
 class Sandbox:
     """A throwaway workdir that turns ONE submission into ``lib<short>.so``.
 
@@ -122,16 +136,6 @@ class Sandbox:
         if self._tmp is not None:
             self._tmp.cleanup()
         return False
-
-    def _run_build_commands(self, cmds) -> Tuple[bool, str]:
-        """Run the compile/link argv sequence, capturing a combined log.
-
-        Delegates to :func:`optarena.languages.run_build_commands` -- the ONE build
-        loop shared with grading.build_reference_lib and the ABI optimizer build.
-        Returns ``(failed, log)``; callers do their own artifact-existence check and
-        success ``BuildResult``.
-        """
-        return languages.run_build_commands(cmds, self.root)
 
     def build(self, submission: Submission, *, mode: Mode = Mode.SINGLE_CORE) -> BuildResult:
         """Compile (restricted) or copy in (any) the submission's ``.so``."""
@@ -177,12 +181,7 @@ class Sandbox:
         except (KeyError, FileNotFoundError) as e:
             return BuildResult(False, None, f"no compiler for {submission.language}: {e}")
 
-        failed, log = self._run_build_commands(cmds)
-        if failed:
-            return BuildResult(False, None, log)
-        if not lib.exists():
-            return BuildResult(False, None, "compile reported success but produced no .so\n" + log)
-        return BuildResult(True, lib, log)
+        return finalize_build(cmds, self.root, lib, as_exe=False)
 
     def build_mpi(self,
                   submission: Submission,
@@ -266,9 +265,4 @@ class Sandbox:
         except (KeyError, FileNotFoundError, ValueError) as e:
             return BuildResult(False, None, f"no MPI compiler for {submission.language}: {e}")
 
-        failed, log = self._run_build_commands(cmds)
-        if failed:
-            return BuildResult(False, None, log)
-        if not exe.exists():
-            return BuildResult(False, None, "compile reported success but produced no executable\n" + log)
-        return BuildResult(True, None, log, exe=exe)
+        return finalize_build(cmds, self.root, exe, as_exe=True)

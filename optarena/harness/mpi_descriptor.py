@@ -80,7 +80,7 @@ class Grid:
 
     @property
     def nranks(self) -> int:
-        return math.prod(self.dims) if self.dims else 1
+        return math.prod(self.dims)
 
     def coords_of(self, rank: int) -> Tuple[int, ...]:
         """Row-major rank -> grid coordinates."""
@@ -138,7 +138,7 @@ def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> 
 def _axis_index_lists(shape: Sequence[int], dist: ArrayDist, grid: Grid, coords: Sequence[int]) -> List[np.ndarray]:
     if len(dist.axes) != len(shape):
         raise ValueError(f"ArrayDist has {len(dist.axes)} axes but the array has {len(shape)} dimension(s)")
-    return [owned_indices(shape[d], dist.axes[d], grid, coords) for d in range(len(shape))]
+    return [owned_indices(n, ax, grid, coords) for n, ax in zip(shape, dist.axes)]
 
 
 def local_shape(shape: Sequence[int], dist: ArrayDist, grid: Grid, rank: int) -> Tuple[int, ...]:
@@ -523,7 +523,7 @@ class Descriptor:
         """The :class:`ArrayDist` used to scatter/gather ``name``. A ``global_shape`` with <= 1
         element is a wrapped scalar (length-1 reduction output or 0-d value): forced to
         ``replicated`` so it is broadcast to every rank and gathered from rank 0."""
-        if global_shape is not None and math.prod(tuple(global_shape)) <= 1:
+        if global_shape is not None and math.prod(global_shape) <= 1:
             return ArrayDist(replicated=True)
         return self.arrays[name]
 

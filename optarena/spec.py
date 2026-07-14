@@ -609,7 +609,7 @@ class BenchSpec:
         """
         # Accept either the outer ``{"benchmark": {...}, "track": ...}``
         # shape or the inner block directly.
-        outer = raw.get("benchmark") if "benchmark" in raw else None
+        outer = raw.get("benchmark")
         bench = outer if outer is not None else raw
         # AgentBench fields can live at either the outer level (for new
         # kernels that ship them) or, for ergonomic JSON authoring, at
@@ -695,7 +695,7 @@ class BenchSpec:
                                  f"signature; declare 'input_args' explicitly.")
         # Union of every size symbol across all parameter tuples; used both to
         # classify inputs on the inferred path and to check reserved ABI names.
-        param_syms = set().union(*(set(p) for p in bench["parameters"].values())) if bench["parameters"] else set()
+        param_syms = set().union(*bench["parameters"].values())
         # Resolve the (optional) array list: declared, else inferred from init.
         if bench.get("array_args") is not None:
             array_args = tuple(bench["array_args"])

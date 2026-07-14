@@ -31,7 +31,7 @@ def mpi_symbol(binding: Binding) -> str:
     """The distinct MPI entry symbol ``<base>_mpi`` (never collides with the single-node
     ``<base>_fp64``), so single-node stubs/callers are unaffected."""
     c = binding.symbols["c"]
-    base = c[:-len("_fp64")] if c.endswith("_fp64") else c
+    base = c.removesuffix("_fp64")
     return f"{base}_mpi"
 
 
@@ -148,8 +148,6 @@ def gen_mpi_driver(binding: Binding, grid_dims: Sequence[int], *, device_arrays:
     ptrs = binding.pointers
     scalars = binding.scalars
     n_ptr = len(ptrs)
-    grid = list(grid_dims)
-
     elem_sizes = [np.dtype(a.dtype).itemsize for a in ptrs]
     type_codes = [TYPE_CODES[a.dtype] for a in ptrs]
     out_indices = [i for i, a in enumerate(ptrs) if a.role == "output"]
@@ -257,16 +255,16 @@ def gen_mpi_driver(binding: Binding, grid_dims: Sequence[int], *, device_arrays:
 #define N_PTR    {n_ptr}
 #define N_OUT    {n_out}
 #define N_SCALAR {len(scalars)}
-#define GRID_NDIM {len(grid)}
+#define GRID_NDIM {len(grid_dims)}
 #define WS_ALIGN 256
 
 /* Agent-provided kernel (ABI §12). */
 {kernel_extern_decl};
 
-{_c_int_array("g_dims", grid)}
+{_c_int_array("g_dims", grid_dims)}
 {_c_int_array("g_elem_size", elem_sizes)}
 {_c_int_array("g_type_code", type_codes)}
-{_c_int_array("g_out_index", out_indices if out_indices else [0])}
+{_c_int_array("g_out_index", out_indices)}
 {dev_mask_decl}
 #define RDI(base, off) (*(int64_t *)((base) + (size_t)(off)))
 

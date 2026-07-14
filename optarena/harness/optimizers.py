@@ -153,6 +153,13 @@ class LibraryOptimizer(Agent):
         weakref.finalize(sub, shutil.rmtree, str(lib.parent), ignore_errors=True)
         return sub
 
+    def _deliver(self, task: Task, source: str) -> Submission:
+        """Return ``source`` as a restricted-mode source submission, or (ABI ``any`` mode)
+        build + submit the ``.so`` -- the delivery tail every LibraryOptimizer shares."""
+        if task.source_mode == "restricted":
+            return Submission(language=task.language, source=source)
+        return self._library_submission(task, source)
+
 
 class NoOpOptimizer(LibraryOptimizer):
     """Identity agent: submit the NumpyToX reference, unchanged.
@@ -166,9 +173,7 @@ class NoOpOptimizer(LibraryOptimizer):
 
     def solve(self, task: Task, prompt: str = "", budget: Optional[int] = None) -> Submission:
         source = reference_source(task)
-        if task.source_mode == "restricted":
-            return Submission(language=task.language, source=source)
-        return self._library_submission(task, source)
+        return self._deliver(task, source)
 
 
 class NoOpMPIOptimizer(Agent):
@@ -292,9 +297,7 @@ class AutotunerOptimizer(LibraryOptimizer):
             raise NotImplementedError(f"{self.name} optimizer needs its backend: {self.install_hint}")
         binding = binding_from_spec(BenchSpec.load(task.kernel))
         source = self._tuned_source(task, binding)
-        if task.source_mode == "restricted":
-            return Submission(language=task.language, source=source)
-        return self._library_submission(task, source)
+        return self._deliver(task, source)
 
 
 class TVMAutotunerOptimizer(AutotunerOptimizer):

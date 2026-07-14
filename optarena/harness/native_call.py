@@ -66,7 +66,7 @@ def _ptr_cdecl(dtype) -> str:
 
 #: cffi pointer type for the reserved scratch buffer (§11) -- a fixed constant,
 #: computed once and reused by both the host and device call paths.
-WORKSPACE_PTYPE = _ptr_cdecl(np.dtype(WORKSPACE_DTYPE))
+WORKSPACE_PTYPE = _ptr_cdecl(WORKSPACE_DTYPE)
 
 
 def _workspace_bytes(expr: Optional[str], binding: Binding, data: Dict) -> int:
@@ -166,7 +166,7 @@ def _call_native_impl(lib_path,
     buffers: Dict = {}
     for a in binding.args:
         if a.kind == "ptr":
-            buffers[a.name] = xp.asarray(np.ascontiguousarray(np.array(data[a.name], copy=True)))
+            buffers[a.name] = xp.asarray(np.array(data[a.name], copy=True, order="C"))
 
     # Every language passes scalars BY VALUE (one uniform C-ABI -- fortran uses the
     # ``value`` attribute, so there is no per-language marshalling here). Pointer args
@@ -184,10 +184,10 @@ def _call_native_impl(lib_path,
             # value: a scalar declared double whose seeded value happens to be
             # whole-numbered must still be passed as double (the int/float
             # argument register classes differ in the x86-64 SysV ABI).
-            params.append("int64_t")  # scalars are ALWAYS host (by value)
+            params.append("int64_t")
             c_args.append(int(data[a.name]))
         else:
-            params.append("double")  # scalars are ALWAYS host (by value)
+            params.append("double")
             c_args.append(float(data[a.name]))
 
     # §11 reserved scratch pair, the trailing args, allocated HERE (untimed) through the
@@ -413,7 +413,7 @@ def _native_call_worker(device,
         # comes from /proc (Linux only) -- on macOS there is no /proc (vmsize reads 0, so
         # the cap would lose its baseline) AND RLIMIT_AS is not reliably enforced, so the
         # cap is Linux-only. Elsewhere the fork/spawn isolation still contains a crash.
-        if memory_bytes and memory_bytes > 0 and osinfo.IS_LINUX:
+        if memory_bytes > 0 and osinfo.IS_LINUX:
             cap = _current_vmsize_bytes() + memory_bytes
             resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
         if lang == "python":
