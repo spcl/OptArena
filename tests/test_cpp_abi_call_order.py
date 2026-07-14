@@ -2,7 +2,7 @@
 emitted **ABI order** (references sorted, then scalars sorted), not in the
 ``input_args`` order.
 
-``_CppBackendFramework.call_args`` reads that order from the binding JSON (the
+``CppBackendFramework.call_args`` reads that order from the binding JSON (the
 single ABI source of truth NumpyToC writes alongside the C source) and pulls
 each value from ``resolved`` (the timed mutable copies + input scalars) or
 ``bdata`` (the integer shape symbols). This pins that mapping without a compile:
@@ -10,13 +10,13 @@ the override's logic is independent of how the binding got onto disk.
 """
 import types
 
-from optarena.infrastructure.cpp_backend_framework import _CppBackendFramework
+from optarena.infrastructure.cpp_backend_framework import CppBackendFramework
 
 
 def _framework():
     # Bypass Framework.__init__ (needs a config) -- call_args only touches
     # self._abi_order + its arguments.
-    return _CppBackendFramework.__new__(_CppBackendFramework)
+    return CppBackendFramework.__new__(CppBackendFramework)
 
 
 def test_call_args_follows_binding_abi_order():

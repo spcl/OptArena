@@ -1,11 +1,10 @@
-"""Framework bindings for the native (C / C++ / Fortran) backends.
+"""Framework binding for the native (C / C++ / Fortran) backends.
 
-Concrete subclasses share the same generated ``<bench>_cpp.py`` wrapper
-(postfix=``cpp``) and each selects its own ``kernel_<framework>`` entry point:
-
-- :class:`CcFramework` -- ``kernel_cc`` (C, gcc)
-- :class:`LlvmFramework` -- ``kernel_llvm`` (C++, clang)
-- :class:`FortranFramework` -- ``kernel_fortran`` (Fortran, gfortran)
+One :class:`CppBackendFramework` serves every native backend (cc/llvm/fortran/
+polly/pluto): all share the same generated ``<bench>_cpp.py`` wrapper
+(postfix=``cpp``) and select the wrapper's ``kernel_<framework>`` entry point by
+the framework name -- ``kernel_cc`` (C, gcc), ``kernel_llvm`` (C++, clang),
+``kernel_fortran`` (Fortran, gfortran), ``kernel_polly``, ``kernel_pluto``.
 
 The wrapper + its precision-monomorphic sources (``<short>_<fptype>.<ext>``) are
 generated on demand from ``<short>_numpy.py`` (gitignored, none committed); each
@@ -35,13 +34,18 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 _ABI_ORDER_CACHE: Dict[str, Optional[List[str]]] = {}
 
 
-class _CppBackendFramework(Framework):
-    """Shared plumbing for the three CPP-backed frameworks."""
+class CppBackendFramework(Framework):
+    """The native (C / C++ / Fortran) backend framework. One class serves every
+    native backend -- cc/llvm/fortran/polly/pluto -- which all share the generated
+    ``<bench>_cpp.py`` wrapper and differ only by the ``kernel_<framework>`` entry
+    point they dispatch to, derived from the framework name."""
 
-    #: Subclasses set this to the name of the wrapper attribute they
-    #: dispatch to (one of ``kernel_cc``, ``kernel_llvm``,
-    #: ``kernel_fortran``).
-    _kernel_attr: str = "kernel_llvm"
+    def __init__(self, fname: str):
+        super().__init__(fname)
+        #: The wrapper attribute this framework dispatches to (``kernel_cc`` /
+        #: ``kernel_llvm`` / ``kernel_fortran`` / ``kernel_polly`` /
+        #: ``kernel_pluto``), derived from the framework name.
+        self.kernel_attr = f"kernel_{fname}"
 
     def version(self) -> str:
         return "external"
@@ -83,9 +87,9 @@ class _CppBackendFramework(Framework):
             m=bench.info["module_name"],
         )
         module = importlib.import_module(module_str)
-        impl = vars(module).get(self._kernel_attr)
+        impl = vars(module).get(self.kernel_attr)
         if impl is None:
-            raise AttributeError(f"{module_str} is missing {self._kernel_attr}(). Make sure "
+            raise AttributeError(f"{module_str} is missing {self.kernel_attr}(). Make sure "
                                  f"the wrapper exposes kernel_{{cc,llvm,fortran}}.")
         return [(impl, "default")]
 
@@ -130,23 +134,3 @@ class _CppBackendFramework(Framework):
         if order is None:
             return super().call_args(bench, impl, resolved, bdata)
         return [resolved[n] if n in resolved else bdata[n] for n in order], {}
-
-
-class LlvmFramework(_CppBackendFramework):
-    """C++ build (clang) of the generated kernel source."""
-    _kernel_attr = "kernel_llvm"
-
-
-class FortranFramework(_CppBackendFramework):
-    """Fortran build (gfortran) of the generated kernel source."""
-    _kernel_attr = "kernel_fortran"
-
-
-class PollyFramework(_CppBackendFramework):
-    """C++ build with LLVM Polly auto-parallelization (clang + ``POLLY_PAR``)."""
-    _kernel_attr = "kernel_polly"
-
-
-class PlutoFramework(_CppBackendFramework):
-    """C++ build with the Pluto OpenMP flag preset (clang + ``PLUTO_PAR``)."""
-    _kernel_attr = "kernel_pluto"

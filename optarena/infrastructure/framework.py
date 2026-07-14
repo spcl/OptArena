@@ -264,8 +264,8 @@ def _framework_class(fname: str):
     not a string). The per-framework modules import THIS module, so the import
     is done lazily here to avoid a circular import."""
     from optarena.infrastructure import (Framework, NumbaFramework, CupyFramework, JaxFramework, PythranFramework,
-                                         DaceFramework, LlvmFramework, CcFramework, FortranFramework, PollyFramework,
-                                         PlutoFramework, TritonFramework, TVMFramework, TVMCPUFramework, APPyFramework)
+                                         DaceFramework, CppBackendFramework, TritonFramework, TVMFramework,
+                                         TVMCPUFramework, APPyFramework)
     classes = {
         "numpy": Framework,
         "numba": NumbaFramework,
@@ -274,11 +274,11 @@ def _framework_class(fname: str):
         "pythran": PythranFramework,
         "dace_cpu": DaceFramework,
         "dace_gpu": DaceFramework,
-        "cc": CcFramework,
-        "llvm": LlvmFramework,
-        "fortran": FortranFramework,
-        "polly": PollyFramework,
-        "pluto": PlutoFramework,
+        "cc": CppBackendFramework,
+        "llvm": CppBackendFramework,
+        "fortran": CppBackendFramework,
+        "polly": CppBackendFramework,
+        "pluto": CppBackendFramework,
         "triton": TritonFramework,
         "tvm": TVMFramework,
         "tvm_cpu": TVMCPUFramework,
@@ -420,7 +420,7 @@ class Framework(object):
         functional framework (jax/tvm/triton, whose arrays are immutable) declares
         only its inputs and RETURNS its outputs (the validator binds those returns
         to ``output_args`` when the count matches). Native C/C++/Fortran enforce
-        the positional C-ABI instead -- see ``_CppBackendFramework.call_args``.
+        the positional C-ABI instead -- see ``CppBackendFramework.call_args``.
 
         ``resolved`` maps each input arg name to its value (a fresh mutable copy
         for array args, the shared value otherwise); ``bdata`` carries the size

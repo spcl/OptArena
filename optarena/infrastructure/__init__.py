@@ -16,4 +16,3 @@ from .triton_framework import *
 from .tvm_cpu_framework import *
 from .tvm_framework import *
 from .cpp_backend_framework import *
-from .cc_framework import CcFramework
