@@ -159,10 +159,11 @@ def pick_data_distribution(fuzz_spec: Dict[str, Any], iteration: int = 0) -> str
     (manifest or config) when no list is given. Returns ``""`` if nothing is set
     (the caller keeps its own default).
     """
-    dists = (fuzz_spec or {}).get("data_distributions")
+    fuzz_spec = fuzz_spec or {}
+    dists = fuzz_spec.get("data_distributions")
     if isinstance(dists, (list, tuple)) and dists:
         return str(dists[int(iteration) % len(dists)])
-    return str((fuzz_spec or {}).get("data_distribution", "") or "")
+    return str(fuzz_spec.get("data_distribution", "") or "")
 
 
 _UNRESOLVED = object()

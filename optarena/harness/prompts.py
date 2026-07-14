@@ -176,7 +176,7 @@ def prompt_env(template_dir=None) -> jinja2.Environment:
     loaders = [jinja2.FileSystemLoader(str(_PROMPTS_DIR))]
     if user_dir:
         loaders.insert(0, jinja2.FileSystemLoader(str(user_dir)))
-    loader = jinja2.ChoiceLoader(loaders) if len(loaders) > 1 else loaders[0]
+    loader = jinja2.ChoiceLoader(loaders)
     return jinja2.Environment(loader=loader,
                               autoescape=False,
                               trim_blocks=True,

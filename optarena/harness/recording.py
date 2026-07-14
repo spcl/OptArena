@@ -278,7 +278,9 @@ def _commit_sha() -> Optional[str]:
     """Best-effort current git commit (provenance); ``None`` outside a repo."""
     try:
         out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5)
-        return out.stdout.strip() or None if out.returncode == 0 else None
+        if out.returncode != 0:
+            return None
+        return out.stdout.strip() or None
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -323,7 +325,7 @@ def record(score: Score,
         # it elsewhere can pass ``prompt_hash`` directly instead.
         if prompt is not None and prompt_hash is None:
             prompt_hash = store_prompt(conn, prompt, spec.short_name, variant=variant, language=language,
-                                       source_mode=source_mode, store_dir=str(prompt_store_dir(path)))
+                                       source_mode=source_mode, store_dir=prompt_store_dir(path))
 
         verified = bool(score.build_ok and score.correct and (verify is None or verify.ok))
         if verified:
@@ -392,7 +394,7 @@ def record_trajectory(task: Task,
         execution = _execution()
         if prompt is not None and prompt_hash is None:
             prompt_hash = store_prompt(conn, prompt, spec.short_name, variant=variant, language=language,
-                                       source_mode=source_mode, store_dir=str(prompt_store_dir(path)))
+                                       source_mode=source_mode, store_dir=prompt_store_dir(path))
         conn.executemany(
             """INSERT INTO calls(
                 run_id, ts, benchmark, preset, datatype, language, source_mode, optimizer,
