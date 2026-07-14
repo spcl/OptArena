@@ -42,6 +42,7 @@ entry is required):
 """
 import os
 import queue as _queue
+import shlex
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
@@ -68,6 +69,32 @@ class DeviceSlot:
         return f"{self.node or 'local'}:{self.kind}{self.index}"
 
 
+#: Env vars the sbatch template exports with the SLURM-expanded hostnames (via
+#: ``scontrol show hostnames``); the single source for each pool's nodelist name.
+JUDGE_NODES_ENV = "OPTARENA_JUDGE_NODES_EXPANDED"
+AGENT_NODES_ENV = "OPTARENA_AGENT_NODES_EXPANDED"
+
+#: Default srun template for a REMOTE judge slot (``{node}`` substituted per slot).
+#: On Alps the campaign overrides ``judge.launcher`` to add ``--environment <edf>`` so the
+#: remote grade runs INSIDE the Container-Engine image (else it runs outside the toolchain).
+DEFAULT_JUDGE_LAUNCHER = ("srun", "--nodelist", "{node}", "--gpus", "1", "-n", "1")
+
+#: Shared frozen fallback slots (a pool with no configured slot runs one local slot).
+LOCAL_CPU_SLOT = DeviceSlot("cpu", 0, None)
+LOCAL_AGENT_SLOT = DeviceSlot("agent", 0, None)
+
+
+class NodePool:
+    """Mixin for a pool config carrying a ``nodelist`` -- supplies the node count so
+    :class:`JudgeConfig` and :class:`AgentPoolConfig` do not each restate it."""
+
+    nodelist: Tuple[str, ...]
+
+    @property
+    def nodes(self) -> int:
+        return len(self.nodelist) or 1
+
+
 def local_gpu_count() -> int:
     """Visible GPUs on this host (0 when cupy or a driver is absent -> a host-only
     judge, which is correct on a CPU box)."""
@@ -89,18 +116,32 @@ def _expand_nodelist(config_key: str, env_key: str) -> Tuple[str, ...]:
 def _nodelist_from_config() -> Tuple[str, ...]:
     """Hostnames for a multi-node judge (``judge.nodelist`` /
     ``OPTARENA_JUDGE_NODES_EXPANDED``)."""
-    return _expand_nodelist("judge.nodelist", "OPTARENA_JUDGE_NODES_EXPANDED")
+    return _expand_nodelist("judge.nodelist", JUDGE_NODES_ENV)
+
+
+def resolve_launcher() -> Tuple[str, ...]:
+    """The srun template for a REMOTE judge slot: ``judge.launcher`` from config (a yaml
+    list), or ``OPTARENA_JUDGE_LAUNCHER`` (a shell-split string), else
+    :data:`DEFAULT_JUDGE_LAUNCHER`. Alps sets it to carry ``--environment <edf>`` so the
+    dispatched grade runs inside the Container-Engine image, not the bare host."""
+    raw = config.get("judge.launcher", None)
+    if isinstance(raw, str):
+        return tuple(shlex.split(raw)) or DEFAULT_JUDGE_LAUNCHER
+    if raw:
+        return tuple(raw)
+    return DEFAULT_JUDGE_LAUNCHER
 
 
 @dataclass(frozen=True)
-class JudgeConfig:
+class JudgeConfig(NodePool):
     """Resolved device-pool shape for the judge."""
 
     gpus_per_node: int
     cpu_slots_per_node: int
     nodelist: Tuple[str, ...] = field(default_factory=tuple)
-    #: srun template for a remote slot; ``{node}`` is substituted per slot.
-    launcher: Tuple[str, ...] = ("srun", "--nodelist", "{node}", "--gpus", "1", "-n", "1")
+    #: srun template for a remote slot; ``{node}`` is substituted per slot (see
+    #: :func:`resolve_launcher` -- config-driven so Alps can add ``--environment``).
+    launcher: Tuple[str, ...] = DEFAULT_JUDGE_LAUNCHER
 
     @classmethod
     def from_config(cls) -> "JudgeConfig":
@@ -108,11 +149,10 @@ class JudgeConfig:
         gpus = int(gpus) if gpus is not None else local_gpu_count()
         cpu_slots = config.get("judge.cpu_slots_per_node", None)
         cpu_slots = int(cpu_slots) if cpu_slots is not None else (0 if gpus else 1)
-        return cls(gpus_per_node=gpus, cpu_slots_per_node=cpu_slots, nodelist=_nodelist_from_config())
-
-    @property
-    def nodes(self) -> int:
-        return len(self.nodelist) or 1
+        return cls(gpus_per_node=gpus,
+                   cpu_slots_per_node=cpu_slots,
+                   nodelist=_nodelist_from_config(),
+                   launcher=resolve_launcher())
 
     def slots(self) -> List[DeviceSlot]:
         """Expand the pool into concrete slots (GPU slots first per node, then CPU
@@ -125,7 +165,7 @@ class JudgeConfig:
                 out.append(DeviceSlot("gpu", g, node))
             for c in range(self.cpu_slots_per_node):
                 out.append(DeviceSlot("cpu", c, node))
-        return out or [DeviceSlot("cpu", 0, None)]
+        return out or [LOCAL_CPU_SLOT]
 
 
 def srun_wrap(slot: DeviceSlot, argv: List[str], launcher: Tuple[str, ...]) -> List[str]:
@@ -171,6 +211,21 @@ def _work_pool(slots: List[DeviceSlot], pull: Callable[[], Any], handle: Callabl
         t.join()
 
 
+def drain_pull(q: "_queue.Queue") -> Any:
+    """A non-blocking pull for a drain-to-empty pool: the next queued item, or
+    :data:`_POOL_DONE` once the queue is empty (the worker then exits)."""
+    try:
+        return q.get_nowait()
+    except _queue.Empty:
+        return _POOL_DONE
+
+
+def finalize_results(results: List[Optional[Tuple[str, Any]]]) -> List[Tuple[str, Any]]:
+    """Every item gets a ``(status, value)``: an item never scheduled (still ``None``)
+    becomes a scored error -- the belt-and-braces guarantee shared by both schedulers."""
+    return [r if r is not None else ("err", RuntimeError("item not scheduled")) for r in results]
+
+
 class JudgeScheduler:
     """Work-stealing dispatcher over a fixed pool of :class:`DeviceSlot`.
 
@@ -182,7 +237,7 @@ class JudgeScheduler:
     death."""
 
     def __init__(self, slots: List[DeviceSlot], log: Optional[Callable[[str], None]] = None):
-        self.slots = list(slots) or [DeviceSlot("cpu", 0, None)]
+        self.slots = list(slots) or [LOCAL_CPU_SLOT]
         self._log = log or (lambda _m: None)
 
     @classmethod
@@ -201,12 +256,6 @@ class JudgeScheduler:
         for i, it in enumerate(items):
             work.put((i, it))
 
-        def pull() -> Any:
-            try:
-                return work.get_nowait()
-            except _queue.Empty:
-                return _POOL_DONE
-
         def handle(payload: Tuple[int, Any], slot: DeviceSlot) -> None:
             i, it = payload
             try:
@@ -215,12 +264,12 @@ class JudgeScheduler:
                 results[i] = ("err", exc)
 
         self._log(f"judge: {len(items)} items over {len(self.slots)} slots ({[s.label for s in self.slots]})")
-        _work_pool(self.slots, pull, handle)
-        return [r if r is not None else ("err", RuntimeError("item not scheduled")) for r in results]
+        _work_pool(self.slots, lambda: drain_pull(work), handle)
+        return finalize_results(results)
 
 
 @dataclass(frozen=True)
-class AgentPoolConfig:
+class AgentPoolConfig(NodePool):
     """Resolved shape of the AGENT (think) pool -- the nodes that run the LLM
     optimizer workers, separate from the judge's timing slots. Mirrors
     :class:`JudgeConfig` so the two pools are configured the same way."""
@@ -231,12 +280,7 @@ class AgentPoolConfig:
     @classmethod
     def from_config(cls) -> "AgentPoolConfig":
         workers = int(config.get("agent.workers_per_node", 1))
-        return cls(workers_per_node=max(1, workers),
-                   nodelist=_expand_nodelist("agent.nodelist", "OPTARENA_AGENT_NODES_EXPANDED"))
-
-    @property
-    def nodes(self) -> int:
-        return len(self.nodelist) or 1
+        return cls(workers_per_node=max(1, workers), nodelist=_expand_nodelist("agent.nodelist", AGENT_NODES_ENV))
 
     def slots(self) -> List[DeviceSlot]:
         """Expand into concrete ``agent`` slots (``workers_per_node`` per node).
@@ -244,7 +288,7 @@ class AgentPoolConfig:
         workers co-locate with the judge)."""
         nodes = list(self.nodelist) or [None]
         out = [DeviceSlot("agent", w, node) for node in nodes for w in range(self.workers_per_node)]
-        return out or [DeviceSlot("agent", 0, None)]
+        return out or [LOCAL_AGENT_SLOT]
 
 
 class TwoStageScheduler:
@@ -266,8 +310,8 @@ class TwoStageScheduler:
                  agent_slots: List[DeviceSlot],
                  grade_slots: List[DeviceSlot],
                  log: Optional[Callable[[str], None]] = None):
-        self.agent_slots = list(agent_slots) or [DeviceSlot("agent", 0, None)]
-        self.grade_slots = list(grade_slots) or [DeviceSlot("cpu", 0, None)]
+        self.agent_slots = list(agent_slots) or [LOCAL_AGENT_SLOT]
+        self.grade_slots = list(grade_slots) or [LOCAL_CPU_SLOT]
         self._log = log or (lambda _m: None)
 
     @classmethod
@@ -292,12 +336,6 @@ class TwoStageScheduler:
 
         # THINK pool (agent slots): pull an item, produce a candidate, hand it to the
         # grade queue. A think error finalizes the item as err and skips its grade.
-        def think_pull() -> Any:
-            try:
-                return think_q.get_nowait()
-            except _queue.Empty:
-                return _POOL_DONE
-
         def think_handle(payload: Tuple[int, Any], slot: DeviceSlot) -> None:
             i, it = payload
             try:
@@ -333,11 +371,13 @@ class TwoStageScheduler:
         # Both pools run concurrently: each _work_pool call blocks on its own worker
         # threads, so drive them from two driver threads and join both.
         drivers = [
-            threading.Thread(target=_work_pool, args=(self.agent_slots, think_pull, think_handle), name="agent-pool"),
+            threading.Thread(target=_work_pool,
+                             args=(self.agent_slots, lambda: drain_pull(think_q), think_handle),
+                             name="agent-pool"),
             threading.Thread(target=_work_pool, args=(self.grade_slots, grade_pull, grade_handle), name="grade-pool"),
         ]
         for d in drivers:
             d.start()
         for d in drivers:
             d.join()
-        return [r if r is not None else ("err", RuntimeError("item not scheduled")) for r in results]
+        return finalize_results(results)

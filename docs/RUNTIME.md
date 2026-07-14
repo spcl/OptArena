@@ -165,7 +165,7 @@ so no resource does two jobs at once:
 
 | Pool | Runs | Resource | Talks to |
 |------|------|----------|----------|
-| **inference** | multi-node vLLM (Ray + one `vllm serve`, TP×PP over Slingshot) | GPUs, all for serving | serves `:8000/v1` |
+| **inference** | vLLM — single-node TP by default (Ray multi-node only for a model too big for one node) | GPUs, all for serving | serves `:8000/v1` |
 | **agent** | `AGENT_WORKERS` concurrent agent workers — "think" | Grace cores (no GPU) | inference `VLLM_BASE_URL` |
 | **judge** | `JudgeScheduler` + reference oracle + candidate timing — "measure" | GPUs = timing slots; cores = CPU frameworks + oracle | dispatches think→agent, grade→own slots |
 
@@ -192,7 +192,10 @@ exported or `agent.workers_per_node>1`; `--pipeline on|off` forces it, and `--na
 stays on the serial in-process path. A **remote** judge slot grades by `srun`-dispatching
 `optarena grade-submission` (the same `grade_once` body, request/result as JSON over the
 `pipeline.exchange_dir` shared FS) onto that node; a **local** slot grades in process with
-the GPU pinned via the work-pool thread-local.
+the GPU pinned via the work-pool thread-local. The srun template is `judge.launcher` (env
+`OPTARENA_JUDGE_LAUNCHER`, `{node}` substituted per slot); on Alps it **must** carry
+`--environment=<edf>` so the dispatched grade runs inside the Container-Engine image, not the
+bare host — the sbatch sets it.
 
 `scripts/cscs/run_campaign.sbatch` lays this out: `node[0]` = agent pool, `node[1..V]` =
 vLLM, `node[V+1..]` = judge. It fills the pool nodelists from `scontrol show hostnames`
@@ -200,13 +203,18 @@ into the env vars each config reads (all overridable, no `config.yaml` entry req
 
 - `OPTARENA_AGENT_NODES_EXPANDED`, `OPTARENA_AGENT_WORKERS_PER_NODE` → `AgentPoolConfig`
 - `OPTARENA_JUDGE_NODES_EXPANDED`, `OPTARENA_JUDGE_GPUS_PER_NODE` → `JudgeConfig`
+- `OPTARENA_JUDGE_LAUNCHER` → `JudgeConfig.launcher` (remote-grade srun template; Alps adds `--environment`)
 - `VLLM_BASE_URL` → the agents' `OpenAIAgent` endpoint
 
 Submit with `sbatch -A <account> --nodes=$N …` (`-A` is mandatory on Alps). The EDF that
 each `srun --environment=` selects is `scripts/cscs/env.toml.example` (copy to `env.toml`):
-it pins the **aarch64** (Grace-Hopper) image and the CXI / aws-ofi-nccl hooks so
-multi-node vLLM NCCL runs over Slingshot. Sizing: Qwen3-Coder-30B fits one 96 GB GH200
-GPU (TP=1); larger models raise `TP_SIZE`/`PP_SIZE`/`VLLM_NODES`.
+it pins the **aarch64** (Grace-Hopper) image and the CXI / aws-ofi-nccl hooks (the NCCL hook
+is required for any *multi-node* vLLM — it rides Slingshot). Sizing: the default is
+**single-node TP=4** — Qwen3-Coder-30B fits one GH200 node (4×96 GB), so no Ray, no
+cross-node NCCL. A model too big for one node uses `VLLM_NODES>1`: a real Ray cluster (head +
+workers) then ONE `vllm serve --distributed-executor-backend ray` (pipeline-parallel across
+the nodes). The sbatch waits for the `/v1/models` endpoint and **fails fast** if the vLLM
+step dies before it is ready.
 
 **Local / CI (no Slurm, no GPU).** The scheduler logic is hermetic: `TwoStageScheduler`
 and `JudgeScheduler` take slot lists directly and drive plain `think`/`grade` closures,

@@ -124,21 +124,23 @@ def gradable(submission: Optional[Submission]) -> bool:
 
 
 def grade_request_to_json(submission: Submission, task: Task, params: Dict[str, Any]) -> Dict[str, Any]:
-    """The ``grade-submission`` request payload: the submission + the task identity + the
-    grading params, all JSON-native, so a remote judge node reconstructs the exact grade."""
-    return {
-        "submission": submission.to_json(),
-        "kernel": task.kernel,
-        "source_mode": task.source_mode,
-        "language": task.language,
-        "residency": task.residency,
-        "params": dict(params),
-    }
+    """The ``grade-submission`` request payload: the FULL task (via :meth:`Task.to_json` --
+    precision + image included, so the remote grade is field-identical to the local one),
+    the submission, and the grading params, all JSON-native."""
+    return {**task.to_json(), "submission": submission.to_json(), "params": dict(params)}
 
 
 def task_from_request(req: Dict[str, Any]) -> Task:
-    """Rebuild the :class:`Task` a ``grade-submission`` request names."""
-    return Task(req["kernel"], req["source_mode"], req["language"], residency=req.get("residency", "host"))
+    """Rebuild the :class:`Task` a ``grade-submission`` request names (its extra
+    ``submission`` / ``params`` keys are ignored by :meth:`Task.from_json`)."""
+    return Task.from_json(req)
+
+
+def grade_request_from_json(req: Dict[str, Any]) -> Tuple[Submission, Task, Dict[str, Any]]:
+    """Decode a request into ``(submission, task, params)`` -- the inverse of
+    :func:`grade_request_to_json`, so the request schema is defined in ONE place. The remote
+    ``grade-submission`` CLI leg calls this instead of hand-unpacking the payload."""
+    return Submission.from_obj(req["submission"]), task_from_request(req), req["params"]
 
 
 def grade_result_to_json(graded: Graded) -> Dict[str, Any]:
@@ -298,14 +300,15 @@ def pipeline_enabled(explicit: Optional[str]) -> bool:
     """Whether the ``agent`` run should take the two-stage pipeline path.
 
     ``explicit`` is the ``--pipeline`` flag: ``"on"`` / ``"off"`` force it; ``"auto"`` (the
-    default) turns it on only inside a 3-tier campaign -- when the sbatch has exported an
-    agent/judge nodelist (``OPTARENA_AGENT_NODES_EXPANDED`` / ``OPTARENA_JUDGE_NODES_EXPANDED``)
-    or ``agent.workers_per_node`` is > 1. A plain single-box run stays on the unchanged serial
-    path, so existing behaviour is untouched unless a pool is configured."""
+    default) turns it on only inside a 3-tier campaign -- when an agent/judge nodelist is
+    configured (the sbatch's ``OPTARENA_{AGENT,JUDGE}_NODES_EXPANDED`` exports OR a
+    ``config.yaml`` ``agent.nodelist`` / ``judge.nodelist``) or ``agent.workers_per_node`` is
+    > 1. Reuses the pool resolvers (not a raw env read), so a config-file pool auto-enables
+    too. A plain single-box run stays on the unchanged serial path, so existing behaviour is
+    untouched unless a pool is configured."""
     if explicit == "on":
         return True
     if explicit == "off":
         return False
-    if os.environ.get("OPTARENA_AGENT_NODES_EXPANDED") or os.environ.get("OPTARENA_JUDGE_NODES_EXPANDED"):
-        return True
-    return AgentPoolConfig.from_config().workers_per_node > 1
+    agent = AgentPoolConfig.from_config()
+    return bool(JudgeConfig.from_config().nodelist or agent.nodelist) or agent.workers_per_node > 1

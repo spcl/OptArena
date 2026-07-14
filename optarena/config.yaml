@@ -257,6 +257,11 @@ judge:
   gpus_per_node: null      # GPU slots per node (null -> auto-detect local GPUs)
   cpu_slots_per_node: null # CPU slots per node (null -> 1 when no GPU, else 0)
   nodelist: ""             # comma-separated hostnames for a multi-node judge (""=local)
+  launcher: null           # srun template for a REMOTE judge slot ({node} substituted per
+                           # slot); null -> default (srun --nodelist {node} --gpus 1 -n 1).
+                           # A yaml list, or a shell string via OPTARENA_JUDGE_LAUNCHER. On
+                           # Alps the campaign sets it to add "--environment <edf>" so the
+                           # dispatched grade runs INSIDE the Container-Engine image.
 
 # Numerical-correctness oracle / per-kernel sweep runner (tests/numerical_oracle.py).
 # Subsumes the old tests/oracle_config.yaml. Per-kernel overrides under

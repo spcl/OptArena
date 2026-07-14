@@ -171,19 +171,7 @@ def test_timeout_scales_with_kernel_count(tmp_path):
     assert cfg.verifier.timeout_sec == A._PER_KERNEL_TIMEOUT_S * n
 
 
-# --- container backends + job config ---------------------------------------------
-
-
-def test_container_backends():
-    from optarena import containers
-    assert containers.harbor_env_type("docker") == "docker"
-    assert containers.harbor_env_type("singularity") == "singularity"
-    with pytest.raises(ValueError):
-        containers.harbor_env_type("udocker")  # local backend, not a Harbor provider
-    assert containers.local_run_command("img.sif", "echo", name="apptainer") == ["apptainer", "run", "img.sif", "echo"]
-    assert containers.local_run_command("optarena:cpu", name="udocker") == ["udocker", "run", "optarena:cpu"]
-    with pytest.raises(ValueError):
-        containers.backend("not_a_backend")
+# --- job config ------------------------------------------------------------------
 
 
 def test_timing_lock_noop_when_unset(monkeypatch):

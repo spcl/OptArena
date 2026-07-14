@@ -253,18 +253,19 @@ class JudgeHandler(BaseHTTPRequestHandler):
         before it earns a leaderboard row; anything else is logged to the attempts
         audit. A DB/verify error never breaks the score response."""
         from optarena.agent_bench import recording
+        from optarena.agent_bench.pipeline import verify_settings
         from optarena.agent_bench.scoring import independent_verify
         try:
             verify = None
             if config.get("record.harden", True) and result.build_ok and result.correct:
+                # The re-verify knobs come from the ONE resolver the pipeline's judge also uses
+                # (verify_settings), so the service's harden gate cannot drift from it.
                 verify = independent_verify(submission,
                                             task,
                                             result,
                                             preset=preset,
                                             datatype=self.cfg.datatype,
-                                            reverify_seed=int(config.get("seeds.reverify", 777)),
-                                            dual_oracle=bool(config.get("record.dual_oracle", True)),
-                                            suspect_above=float(config.get("record.speedup_suspect_above", 1000.0)))
+                                            **verify_settings())
             table, detail = recording.record(result,
                                              submission,
                                              task,

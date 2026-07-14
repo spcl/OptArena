@@ -4,9 +4,11 @@
 import threading
 import time
 
+from optarena import config
 from optarena.agent_bench import native_call
-from optarena.agent_bench.judge_scheduler import (AgentPoolConfig, DeviceSlot, JudgeConfig, JudgeScheduler,
-                                                  TwoStageScheduler, srun_wrap)
+from optarena.agent_bench.judge_scheduler import (DEFAULT_JUDGE_LAUNCHER, AgentPoolConfig, DeviceSlot, JudgeConfig,
+                                                  JudgeScheduler, TwoStageScheduler, finalize_results, resolve_launcher,
+                                                  srun_wrap)
 
 
 def test_slots_gpu_then_cpu_per_node():
@@ -216,3 +218,43 @@ def test_two_stage_empty_items():
     assert TwoStageScheduler([DeviceSlot("agent", 0)], [DeviceSlot("cpu", 0)]).run([],
                                                                                    think=lambda it, s: it,
                                                                                    grade=lambda c, it, s: c) == []
+
+
+# --- C1: the remote judge launcher is config-driven (Alps adds --environment) -----------
+
+
+def test_resolve_launcher_default():
+    for k in ("judge.launcher", ):
+        config.clear_override(k)
+    assert resolve_launcher() == DEFAULT_JUDGE_LAUNCHER
+
+
+def test_resolve_launcher_from_config_list():
+    config.set_override("judge.launcher", ["srun", "--nodelist", "{node}", "--environment", "edf", "-n", "1"])
+    try:
+        assert resolve_launcher() == ("srun", "--nodelist", "{node}", "--environment", "edf", "-n", "1")
+    finally:
+        config.clear_override("judge.launcher")
+
+
+def test_resolve_launcher_from_env_string(monkeypatch):
+    # A shell string (how the sbatch exports OPTARENA_JUDGE_LAUNCHER) is shell-split.
+    monkeypatch.setenv("OPTARENA_JUDGE_LAUNCHER", "srun --nodelist {node} --overlap --environment optarena")
+    assert resolve_launcher() == ("srun", "--nodelist", "{node}", "--overlap", "--environment", "optarena")
+
+
+def test_from_config_uses_resolved_launcher_and_srun_wrap_carries_environment(monkeypatch):
+    monkeypatch.setattr("optarena.agent_bench.judge_scheduler.local_gpu_count", lambda: 0)
+    monkeypatch.setenv("OPTARENA_JUDGE_LAUNCHER", "srun --nodelist {node} --gpus 1 -n 1 --environment optarena")
+    cfg = JudgeConfig.from_config()
+    argv = srun_wrap(DeviceSlot("gpu", 2, "nid007"), ["python", "-m", "optarena.cli", "grade-submission"], cfg.launcher)
+    # {node} substituted, and --environment survives onto the dispatched grade (else it would
+    # run OUTSIDE the Container-Engine image -- the C1 bug).
+    assert "nid007" in argv and "--environment" in argv and "optarena" in argv
+    assert argv[argv.index("--environment") + 1] == "optarena"
+
+
+def test_finalize_results_fills_unscheduled():
+    assert finalize_results([("ok", 1), None])[0] == ("ok", 1)
+    status, value = finalize_results([("ok", 1), None])[1]
+    assert status == "err" and isinstance(value, RuntimeError)

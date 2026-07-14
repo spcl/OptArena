@@ -15,6 +15,7 @@ descriptor table and
 adapter, which also advertises its :attr:`Framework.SUPPORTED_PRECISIONS`.
 """
 import argparse
+import dataclasses
 import json
 import pathlib
 import time
@@ -247,6 +248,15 @@ def _agent_summary(rows) -> Tuple[int, float]:
     return len(correct), (geomean(speedups) if speedups else 0.0)
 
 
+def write_agent_row(f, row) -> None:
+    """Append one agent :class:`RunRow` to the JSONL sink, dropping ``prompt`` (it lives in
+    the content-addressed store, not the row). Shared by the serial and pipeline write paths
+    so the on-disk row shape is single-sourced."""
+    dumped = dataclasses.asdict(row)
+    dumped.pop("prompt", None)
+    f.write(json.dumps(dumped) + "\n")
+
+
 def cmd_agent(args) -> int:
     """Run one agent over the task cross-product, grading each (JSONL out).
 
@@ -266,8 +276,6 @@ def cmd_agent(args) -> int:
     is host-framed (no ``/app`` container paths), and the recorded ``execution`` is
     pinned to ``native``.
     """
-    from dataclasses import asdict
-
     from optarena import config
     from optarena.agent_bench import native, timing
     from optarena.agent_bench.pipeline import pipeline_enabled, run_pipeline
@@ -280,6 +288,14 @@ def cmd_agent(args) -> int:
         raise SystemExit(f"unknown agent {args.agent!r}; choices: {sorted(registry)}")
     agent = registry[args.agent]()
     args.preset = resolve_preset(args.preset)  # 'fuzzed:seed' -> base 'fuzzed' + a seeds.fuzz override
+    # One grading-param set, splatted into BOTH the pipeline and the serial path so the two
+    # can never drift on which knobs the grade sees.
+    grade_params = dict(preset=args.preset,
+                        datatype=args.datatype,
+                        repeat=args.repeat,
+                        oracle=args.oracle,
+                        baseline=args.baseline,
+                        max_rounds=args.repair_rounds)
     tasks = expand_tasks(kernels=_csv_or_none(args.kernels),
                          languages=_csv_or_none(args.languages),
                          residencies=_residencies(args.residency))
@@ -307,36 +323,17 @@ def cmd_agent(args) -> int:
     if use_pipeline:
         if args.save_submissions or args.record:
             print("[pipeline] --save-submissions / --record are not wired in pipeline mode; writing graded rows only")
-        rows = run_pipeline(lambda: registry[args.agent](),
-                            tasks,
-                            preset=args.preset,
-                            datatype=args.datatype,
-                            repeat=args.repeat,
-                            oracle=args.oracle,
-                            baseline=args.baseline,
-                            max_rounds=args.repair_rounds,
-                            log=print)
+        rows = run_pipeline(lambda: registry[args.agent](), tasks, **grade_params, log=print)
         with out.open("a") as f:
             for row in rows:
-                dumped = asdict(row)
-                dumped.pop("prompt", None)  # the prompt lives in the content-addressed store, not the JSONL row
-                f.write(json.dumps(dumped) + "\n")
+                write_agent_row(f, row)
     else:
         try:
             with out.open("a") as f:
                 for t in tasks:
-                    row, submission = solve_task(agent,
-                                                 t,
-                                                 preset=args.preset,
-                                                 datatype=args.datatype,
-                                                 repeat=args.repeat,
-                                                 oracle=args.oracle,
-                                                 baseline=args.baseline,
-                                                 max_rounds=args.repair_rounds)
+                    row, submission = solve_task(agent, t, **grade_params)
                     rows.append(row)
-                    dumped = asdict(row)
-                    dumped.pop("prompt", None)  # the prompt lives in the content-addressed store, not the JSONL row
-                    f.write(json.dumps(dumped) + "\n")
+                    write_agent_row(f, row)
                     # Native mode: stash the returned submission under its native_runs folder
                     # (optarena/native_runs/<run_id>/<kernel>/submission.<ext>) -- the on-host
                     # home of a no-container run's artifacts.
@@ -465,16 +462,15 @@ def cmd_grade_submission(args) -> int:
     reads on the return trip.
     """
     from optarena.agent_bench import timing
-    from optarena.agent_bench.envelope import Submission
-    from optarena.agent_bench.pipeline import grade_once, grade_result_to_json, task_from_request
+    from optarena.agent_bench.pipeline import grade_once, grade_request_from_json, grade_result_to_json
     timing.pin_threads()  # this leg TIMES the submission -> pin like every other measurement session
     with open(args.input, "r", encoding="utf-8") as f:
         req = json.load(f)
-    submission = Submission.from_obj(req["submission"])
-    task = task_from_request(req)
-    payload = grade_result_to_json(grade_once(submission, task, **req["params"]))
+    submission, task, params = grade_request_from_json(req)  # the request schema lives in pipeline.py
+    payload = grade_result_to_json(grade_once(submission, task, **params))
     if args.output:
-        pathlib.Path(args.output).parent.mkdir(parents=True, exist_ok=True)  # the srun leg may target a fresh scratch dir
+        pathlib.Path(args.output).parent.mkdir(parents=True,
+                                               exist_ok=True)  # the srun leg may target a fresh scratch dir
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(payload, f)
     else:

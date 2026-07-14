@@ -6,11 +6,13 @@ grade over srun. Every test fakes the agent + the scorer -- no LLM, no compile, 
 import json
 
 import optarena.agent_bench.pipeline as pipeline
+from optarena import config
 from optarena.agent_bench.envelope import Submission
 from optarena.agent_bench.judge_scheduler import DeviceSlot
 from optarena.agent_bench.runner import RunRow, CallPoint
 from optarena.agent_bench.scoring import Score, VerifyResult
 from optarena.agent_bench.task import Task
+from optarena.precision import Precision
 
 
 def make_think_row(**over) -> RunRow:
@@ -159,6 +161,47 @@ def test_grade_request_task_roundtrip():
     req = pipeline.grade_request_to_json(a_submission(), task, {"preset": "S"})
     back = pipeline.task_from_request(req)
     assert (back.kernel, back.source_mode, back.language, back.residency) == ("gemm", "restricted", "c", "host")
+
+
+def test_grade_request_preserves_precision_and_image():
+    # A non-default task must cross the srun boundary FIELD-COMPLETE -- else the remote judge
+    # rebuilds it as FP64 / cpu and grades a different task than the local judge.
+    task = Task("gemm", "restricted", "c", Precision.FP32, "nvidia")
+    req = pipeline.grade_request_to_json(a_submission(), task, {"preset": "S"})
+    assert req["precision"] == Precision.FP32.value and req["image"] == "nvidia"
+    back = pipeline.task_from_request(req)
+    assert back.precision == Precision.FP32 and back.image == "nvidia"
+
+
+def test_grade_request_from_json_roundtrip():
+    # The codec twin decodes a request into (submission, task, params) -- the remote CLI leg's
+    # single decode point (inverse of grade_request_to_json).
+    task = Task("atax", "restricted", "c")
+    req = pipeline.grade_request_to_json(a_submission(), task, {"preset": "S", "verify": True})
+    sub, back_task, params = pipeline.grade_request_from_json(req)
+    assert sub.source == a_submission().source
+    assert (back_task.kernel, back_task.language) == ("atax", "c")
+    assert params == {"preset": "S", "verify": True}
+
+
+def test_verify_settings_keys_are_independent_verify_kwargs():
+    # G1: service._record now calls independent_verify(**verify_settings()); guard the key set
+    # so the service's harden gate cannot drift from the pipeline's re-verify.
+    assert set(pipeline.verify_settings()) == {"reverify_seed", "dual_oracle", "suspect_above"}
+
+
+def test_pipeline_enabled_honors_config_nodelist(monkeypatch):
+    # A pool declared only in config.yaml (judge.nodelist) -- not the sbatch env exports --
+    # still auto-enables the pipeline (pipeline_enabled reuses the resolvers, not a raw env read).
+    monkeypatch.delenv("OPTARENA_AGENT_NODES_EXPANDED", raising=False)
+    monkeypatch.delenv("OPTARENA_JUDGE_NODES_EXPANDED", raising=False)
+    monkeypatch.delenv("OPTARENA_AGENT_WORKERS_PER_NODE", raising=False)
+    monkeypatch.setattr("optarena.agent_bench.judge_scheduler.local_gpu_count", lambda: 0)
+    config.set_override("judge.nodelist", "nid001,nid002")
+    try:
+        assert pipeline.pipeline_enabled("auto") is True
+    finally:
+        config.clear_override("judge.nodelist")
 
 
 # ---- run_pipeline end to end (fake agent + fake scorer, all-local slots) -----

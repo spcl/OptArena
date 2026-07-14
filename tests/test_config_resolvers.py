@@ -6,12 +6,12 @@ Guards the config-parameter consolidation: every drift-prone key is read through
 ONE resolver whose CODE default matches the shipped ``config.yaml`` value, so the
 runtime behaves identically whether the yaml key is present, deleted, or partially
 env-overridden. A drift (code default != yaml, the exact hazard the audit found on
-``measurement.baseline`` / ``runtime.backend`` / ``fuzz.correctness_size_cap``)
-would only surface if the key were removed -- these tests exercise the CODE default
-directly by making ``config.get`` return each caller's default.
+``measurement.baseline`` / ``fuzz.correctness_size_cap``) would only surface if the key
+were removed -- these tests exercise the CODE default directly by making ``config.get``
+return each caller's default.
 """
 import optarena.config as config
-from optarena import containers, fuzz
+from optarena import fuzz
 from optarena.agent_bench import service, timing
 
 
@@ -25,11 +25,6 @@ def _defaults_only(monkeypatch):
 def test_measurement_baseline_code_default_matches_yaml_track(monkeypatch):
     _defaults_only(monkeypatch)
     assert timing.measurement_baseline() == "track"
-
-
-def test_runtime_backend_code_default_matches_yaml_apptainer(monkeypatch):
-    _defaults_only(monkeypatch)
-    assert containers.backend() == "apptainer"
 
 
 def test_correctness_size_cap_code_default_matches_yaml_1024(monkeypatch):
