@@ -95,7 +95,7 @@ class TritonFramework(TorchCudaEventTiming, Framework):
         return result
 
     # Native GPU timing (torch CUDA events) comes from the TorchCudaEventTiming
-    # mixin -- shared verbatim with APPy.
+    # mixin -- the one torch-backed GPU timing path.
 
     def set_datatype(self, datatype):
         super().set_datatype(datatype)

@@ -17,7 +17,7 @@ np_complex = None
 
 #: The IEEE floating-point pair every native / non-ml_dtypes-aware framework can
 #: execute. Frameworks whose type system does not recognise the ``ml_dtypes``
-#: extension dtypes (the C/C++/Fortran backends, Numba, Pythran, APPy) stay here.
+#: extension dtypes (the C/C++/Fortran backends, Numba, Pythran) stay here.
 IEEE_PRECISIONS = frozenset({Precision.FP32, Precision.FP64})
 
 #: The full precision matrix (IEEE + fp16/bf16/fp8), executed by the frameworks
@@ -123,11 +123,11 @@ class Timer:
 
 
 class TorchCudaEventTiming:
-    """Device-only GPU timing via torch CUDA events, shared by the torch-backed
-    GPU adapters (Triton, APPy). CuPy uses its own ``cupy.cuda.Event`` API and does
-    NOT mix this in. A pure mixin: it overrides only the create/start/stop timer
-    methods, so an adapter that lists it before :class:`Framework` gets device-event
-    timing in place of the host-clock default."""
+    """Device-only GPU timing via torch CUDA events, used by the torch-backed GPU
+    adapter (Triton). CuPy uses its own ``cupy.cuda.Event`` API and does NOT mix
+    this in. A pure mixin: it overrides only the create/start/stop timer methods,
+    so an adapter that lists it before :class:`Framework` gets device-event timing
+    in place of the host-clock default."""
 
     def create_timer(self, program: Any) -> "Timer":
         """Allocate a start/stop torch CUDA event pair for device-side timing."""
@@ -154,15 +154,22 @@ class TorchCudaEventTiming:
 
 #: Per-framework descriptors (replaces the old ``framework_info/*.json`` corpus
 #: -- internal infrastructure config, so it lives in code, not data files).
-#: ``arch`` is cpu/gpu; ``postfix`` selects the ``<module>_<postfix>.py`` impl
-#: file; ``prefix`` is the conventional import alias; ``precisions`` is the set
-#: of :class:`~optarena.precision.Precision` values the framework can execute
-#: (the sweep driver records ``status="skip"`` for any precision not in it, via
-#: :meth:`Framework.supports`). The Framework subclass is resolved by
-#: :func:`_framework_class` (by name, NOT stored here) so there is no
-#: string-class dispatch.
+#: Each entry is one FLAVOR of a framework ``base``: the ``base`` field groups
+#: flavors of the same backend (``dace_cpu``/``dace_gpu`` share base ``dace``;
+#: ``tvm``/``tvm_cpu`` share ``tvm``; ``cc``/``llvm``/``fortran``/``polly``/
+#: ``pluto`` share ``native``), and the base -- not the flavor name -- selects
+#: the :class:`Framework` subclass via :func:`_framework_class`, so ONE class
+#: serves a whole flavor family. ``arch`` is cpu/gpu; ``postfix`` selects the
+#: ``<module>_<postfix>.py`` impl file; ``prefix`` is the conventional import
+#: alias; ``precisions`` is the set of :class:`~optarena.precision.Precision`
+#: values the flavor can execute (the sweep driver records ``status="skip"`` for
+#: any precision not in it, via :meth:`Framework.supports`). The native flavors
+#: additionally carry the ``language`` (c/cpp/fortran) and ``compiler`` (gcc/
+#: clang/gfortran) they compile with -- the native backend's configurable options
+#: -- plus a ``flags`` preset for the polyhedral flavors (polly/pluto).
 FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
     "numpy": {
+        "base": "numpy",
         "full_name": "NumPy",
         "prefix": "np",
         "postfix": "numpy",
@@ -170,6 +177,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "precisions": ALL_PRECISIONS,
     },
     "numba": {
+        "base": "numba",
         "full_name": "Numba",
         "prefix": "nb",
         "postfix": "numba",
@@ -177,6 +185,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "precisions": IEEE_PRECISIONS,
     },
     "cupy": {
+        "base": "cupy",
         "full_name": "CuPy",
         "prefix": "cp",
         "postfix": "cupy",
@@ -184,6 +193,7 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16, Precision.BF16}),
     },
     "jax": {
+        "base": "jax",
         "full_name": "Jax",
         "prefix": "jax",
         "postfix": "jax",
@@ -191,13 +201,16 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "precisions": ALL_PRECISIONS,
     },
     "pythran": {
+        "base": "pythran",
         "full_name": "Pythran",
         "prefix": "pt",
         "postfix": "pythran",
         "arch": "cpu",
         "precisions": IEEE_PRECISIONS,
     },
+    # DaCe: one base, two hardware flavors (same postfix/impl file, arch differs).
     "dace_cpu": {
+        "base": "dace",
         "full_name": "DaCe CPU",
         "prefix": "dc",
         "postfix": "dace",
@@ -205,53 +218,72 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
     "dace_gpu": {
+        "base": "dace",
         "full_name": "DaCe GPU",
         "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16}),
     },
-    # Native frameworks: ONE source per (kernel, language, precision), generated
-    # on demand from the numpy reference + gitignored; each builds its own
-    # lib<short>_<fw>.so. cc=C(gcc), llvm=C++(clang), fortran=Fortran(gfortran).
+    # Native backend: one base ``native``, one flavor per (language, compiler).
+    # ONE source per (kernel, language, precision), generated on demand from the
+    # numpy reference + gitignored; each flavor builds its own lib<short>_<fw>.so.
+    # polly/pluto reuse the C++ (clang) flavor with a polyhedral ``flags`` preset
+    # (optarena.flags) on the same generated C++ source.
     "cc": {
+        "base": "native",
         "full_name": "C (gcc)",
         "prefix": "cc",
         "postfix": "cpp",
         "arch": "cpu",
+        "language": "c",
+        "compiler": "gcc",
         "precisions": IEEE_PRECISIONS,
     },
     "llvm": {
+        "base": "native",
         "full_name": "C++ (clang)",
         "prefix": "llvm",
         "postfix": "cpp",
         "arch": "cpu",
+        "language": "cpp",
+        "compiler": "clang",
         "precisions": IEEE_PRECISIONS,
     },
     "fortran": {
+        "base": "native",
         "full_name": "Fortran (gfortran)",
         "prefix": "fortran",
         "postfix": "cpp",
         "arch": "cpu",
+        "language": "fortran",
+        "compiler": "gfortran",
         "precisions": IEEE_PRECISIONS,
     },
-    # Polyhedral flag presets on the same generated C++ source (clang++ +
-    # Polly / Pluto-OpenMP delta from optarena.flags).
     "polly": {
+        "base": "native",
         "full_name": "C++ Polly (clang)",
         "prefix": "polly",
         "postfix": "cpp",
         "arch": "cpu",
+        "language": "cpp",
+        "compiler": "clang",
+        "flags": "polly",
         "precisions": IEEE_PRECISIONS,
     },
     "pluto": {
+        "base": "native",
         "full_name": "C++ Pluto (clang)",
         "prefix": "pluto",
         "postfix": "cpp",
         "arch": "cpu",
+        "language": "cpp",
+        "compiler": "clang",
+        "flags": "pluto",
         "precisions": IEEE_PRECISIONS,
     },
     "triton": {
+        "base": "triton",
         "full_name": "Triton",
         "prefix": "tr",
         "postfix": "triton",
@@ -265,7 +297,9 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
             Precision.FP8_E5M2,
         }),
     },
+    # TVM: one base, two hardware flavors (distinct impl files -> distinct postfix).
     "tvm": {
+        "base": "tvm",
         "full_name": "tvm",
         "prefix": "tvm",
         "postfix": "tvm",
@@ -273,48 +307,46 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "precisions": ALL_PRECISIONS,
     },
     "tvm_cpu": {
+        "base": "tvm",
         "full_name": "tvm_cpu",
         "prefix": "tvm_cpu",
         "postfix": "tvm_cpu",
         "arch": "cpu",
         "precisions": ALL_PRECISIONS,
     },
-    "appy": {
-        "full_name": "APPy",
-        "prefix": "ap",
-        "postfix": "appy",
-        "arch": "gpu",
-        "precisions": IEEE_PRECISIONS,
-    },
 }
 
 
+def framework_flavors(base: str) -> List[str]:
+    """The flat framework names that are flavors of ``base`` (e.g.
+    ``framework_flavors("native")`` -> ``["cc", "llvm", "fortran", "polly",
+    "pluto"]``). The inverse of the ``base`` grouping in :data:`FRAMEWORK_META`."""
+    return [name for name, meta in FRAMEWORK_META.items() if meta["base"] == base]
+
+
 def _framework_class(fname: str):
-    """Map a framework name to its :class:`Framework` subclass (class object,
-    not a string). The per-framework modules import THIS module, so the import
-    is done lazily here to avoid a circular import."""
+    """Map a framework name to its :class:`Framework` subclass (class object, not
+    a string) via its ``base`` (:data:`FRAMEWORK_META`) -- so one class serves a
+    whole flavor family (dace_cpu+dace_gpu -> DaceFramework; cc/llvm/fortran/polly/
+    pluto -> CppBackendFramework; tvm+tvm_cpu -> TVMFramework). The per-framework
+    modules import THIS module, so the import is done lazily to dodge the circular
+    import."""
     from optarena.infrastructure import (Framework, NumbaFramework, CupyFramework, JaxFramework, PythranFramework,
-                                         DaceFramework, CppBackendFramework, TritonFramework, TVMFramework,
-                                         APPyFramework)
-    classes = {
+                                         DaceFramework, CppBackendFramework, TritonFramework, TVMFramework)
+    base_class = {
         "numpy": Framework,
         "numba": NumbaFramework,
         "cupy": CupyFramework,
         "jax": JaxFramework,
         "pythran": PythranFramework,
-        "dace_cpu": DaceFramework,
-        "dace_gpu": DaceFramework,
-        "cc": CppBackendFramework,
-        "llvm": CppBackendFramework,
-        "fortran": CppBackendFramework,
-        "polly": CppBackendFramework,
-        "pluto": CppBackendFramework,
+        "dace": DaceFramework,
+        "native": CppBackendFramework,
         "triton": TritonFramework,
         "tvm": TVMFramework,
-        "tvm_cpu": TVMFramework,
-        "appy": APPyFramework,
     }
-    return classes[fname]
+    if fname not in FRAMEWORK_META:
+        raise KeyError(f"unknown framework {fname!r}; known: {sorted(FRAMEWORK_META)}")
+    return base_class[FRAMEWORK_META[fname]["base"]]
 
 
 class Framework(object):
