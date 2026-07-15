@@ -31,10 +31,29 @@ tests or tamper with the clock. Three things make up a run:
 
 An agent reaches its model over an **inference endpoint** -- a hosted API (Claude, OpenAI) or a
 self-hosted vLLM server -- and grades over the **judge** (`optarena serve`). On a cluster this is a
-**static, round-robin** deployment: three single-node container roles (inference / judge / agent),
-no dynamic load balancing, an agent worker `w` pinned once to `vllm_urls[w % V]` + `judge_urls[w % J]`.
-Full cluster contract: [docs/LAUNCH.md](docs/LAUNCH.md) (CSCS Alps submit quickstart:
-[docs/LAUNCH.md#quickstart--submit-a-run](docs/LAUNCH.md#quickstart--submit-a-run)).
+**static, round-robin** deployment: three single-node roles (inference / judge / agent), no dynamic
+load balancing, an agent worker `w` pinned once to `vllm_urls[w % I]` + `judge_urls[w % J]`.
+
+### Run on a cluster — one SLURM job
+
+On a homogeneous cluster (Daint/Alps: every node is 4× GH200) **one command** brings the whole
+deployment up from a single allocation. `optarena launch` runs under **one `srun` across the
+allocation** (one task per node); **MPI gives each rank a node and the rank picks its role** --
+`I` vLLM endpoints of `K` nodes each + `J` judges, with rank 0 also driving the agents:
+
+```sh
+# 3 nodes: I=2 single-node vLLM endpoints (K=1) + J=1 judge   (N = I·K + J)
+srun --mpi=pmix --ntasks=$SLURM_JOB_NUM_NODES --ntasks-per-node=1 \
+    optarena launch openai --model Qwen/Qwen2.5-Coder-7B-Instruct \
+        --inference-endpoints 2 --nodes-per-vllm 1 --judge-nodes 1 \
+        --kernels gemm,gesummv --baseline auto --preset S
+```
+
+`vllm` is assumed on `PATH`; the ranks self-assemble the endpoint URLs, wait until every endpoint is
+up, and grade every task -- worker `w` bound to `vllm_urls[w % I]` (think) + `judge_urls[w % J]`
+(grade). For a model too big for one node, set `--nodes-per-vllm K > 1` (a `K`-node ray cluster per
+endpoint, tensor-parallel over each node's GPUs, pipeline-parallel across the `K` nodes). Full
+contract + the manual per-role path + the CSCS recipe: [docs/LAUNCH.md](docs/LAUNCH.md).
 
 ---
 
