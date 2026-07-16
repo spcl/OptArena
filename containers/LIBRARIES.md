@@ -120,7 +120,7 @@ submission in-container. All from apt on the same shared install line.
 | GDB | `gdb` | interactive debugger |
 | Valgrind | `valgrind` | memcheck / cachegrind / callgrind memory + cache profiling |
 | numactl | `numactl` | NUMA CLI -- bind memory/CPU nodes, inspect topology (`--hardware`) |
-| gperftools | `google-perftools` `libgoogle-perftools-dev` | `pprof` CPU/heap profiler + `tcmalloc` fast allocator (`-ltcmalloc`) |
+| gperftools | `libgoogle-perftools-dev` | `tcmalloc` fast allocator (`-ltcmalloc`) + the CPU/heap profiler libs. NOTE: the `pprof` CLI is NOT shipped -- Ubuntu 26.04 dropped the `google-perftools` binary package (only the libs remain; upstream moved `pprof` to Go, `go install github.com/google/pprof@latest`). Read a profile dump with heaptrack / perf instead, or install pprof yourself. |
 | heaptrack | `heaptrack` | heap-allocation profiler (who allocates, how much) |
 | LIKWID | `likwid` | `likwid-topology` / `likwid-perfctr` hardware counters + thread affinity |
 | PAPI | `papi-tools` `libpapi-dev` | `papi_avail` + `-lpapi` performance-counter API |

@@ -68,7 +68,7 @@ RUN set -eu; \
       python3 python3-pip python3-venv python3-dev \
       gcc g++ gfortran clang flang \
       gdb valgrind linux-tools-common linux-tools-generic linux-cpupower util-linux hwloc \
-      msr-tools numactl google-perftools libgoogle-perftools-dev heaptrack likwid papi-tools \
+      msr-tools numactl libgoogle-perftools-dev heaptrack likwid papi-tools \
       libpapi-dev strace ltrace binutils \
       ca-certificates git curl wget openssh-client gnupg ripgrep fd-find jq less tree htop \
       unzip vim nano \
