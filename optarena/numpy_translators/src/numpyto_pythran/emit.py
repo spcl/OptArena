@@ -153,7 +153,17 @@ class _NanAwareMinMaxSign(ast.NodeTransformer):
             a, b = node.args
             cond = ast.BinOp(left=self._is_nan(a), op=ast.BitOr(), right=self._is_nan(b))
             asum = ast.BinOp(left=copy.deepcopy(a), op=ast.Add(), right=copy.deepcopy(b))
-            return ast.copy_location(self._where(cond, asum, node), node)
+            # Materialize the result with np.array(). A loop-carried running max/min
+            # (max_filter's ``h = np.maximum(h, p[:, d:d+W])`` over a slice window) becomes
+            # ``h = np.where(cond(h), h + .., np.maximum(h, ..))`` -- SELF-REFERENTIAL: h is in the
+            # condition and both branches. pythran compiles that as a LAZY expression template and
+            # reads h while rebuilding it, so the next iteration folds a stale/aliased h and the
+            # result is silently wrong (bit-exact under pure numpy; wrong only once pythran
+            # compiles it). Forcing an eager copy breaks the lazy self-reference. Verified: fixes
+            # max_filter and still propagates NaN (the reason this rewrite exists).
+            where = self._where(cond, asum, node)
+            materialized = ast.Call(func=self._np_attr("array"), args=[where], keywords=[])
+            return ast.copy_location(materialized, node)
         if f.attr == "sign" and len(node.args) == 1:
             a = node.args[0]
             return ast.copy_location(self._where(self._is_nan(a), copy.deepcopy(a), node), node)
