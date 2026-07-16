@@ -2902,16 +2902,26 @@ def _concat_operands_axis(args, kwargs, shape_table):
     for kw in kwargs:
         if kw.arg == "axis" and _const_int(kw.value) is not None:
             axis = _const_int(kw.value)
-    names: List[str] = []
+    names: List[Optional[str]] = []
     shapes: List[Tuple[str, ...]] = []
     for op in seq.elts:
-        if not isinstance(op, ast.Name):
+        if isinstance(op, ast.Name):
+            s = shape_table.get(op.id)
+            if s is None:
+                raise NotImplementedError(f"np.concatenate: shape of {op.id} unknown")
+            names.append(op.id)
+            shapes.append(tuple(s))
+            continue
+        # A non-Name operand -- dwt2d's rotate ``np.concatenate((e[:, 1:], e[:, 0:1]), axis=1)``
+        # -- still has a resolvable EXTENT, which is all the shape rule needs (and the fresh
+        # LHS must be sized, or it is never declared). The expander materialises such operands
+        # into Names BEFORE calling this, so its ``names`` stay complete; it rejects a leftover
+        # None rather than emitting a nameless read.
+        ext = _iter_extent_of(op, shape_table)
+        if ext is None:
             raise NotImplementedError("np.concatenate: operand must be a Name")
-        s = shape_table.get(op.id)
-        if s is None:
-            raise NotImplementedError(f"np.concatenate: shape of {op.id} unknown")
-        names.append(op.id)
-        shapes.append(tuple(s))
+        names.append(None)
+        shapes.append(tuple(ast.unparse(e) for e in ext))
     rank = len(shapes[0])
     if any(len(s) != rank for s in shapes):
         raise NotImplementedError("np.concatenate: mixed ranks unsupported")
@@ -2923,14 +2933,30 @@ def _concat_operands_axis(args, kwargs, shape_table):
 def expand_concatenate(target: ast.expr,
                        args: List[ast.expr],
                        shape_table: Dict[str, Tuple[str, ...]],
-                       kwargs=None) -> List[ast.stmt]:
+                       kwargs=None,
+                       local_dtypes=None,
+                       fresh_local_allocs=None) -> List[ast.stmt]:
     """``out = np.concatenate((a, b, ...), axis=k)`` -- join along ``axis``.
 
     Each operand is copied into ``out`` at its cumulative offset along
     ``axis`` (every other axis indexes 1:1). Generalises hstack/vstack to an
     arbitrary axis and rank. dwt2d's Haar recomposition
-    (``np.concatenate((L, H), axis=1)`` then ``axis=0``)."""
+    (``np.concatenate((L, H), axis=1)`` then ``axis=0``).
+
+    A SLICED operand (dwt2d's rotate ``np.concatenate((e[:, 1:], e[:, 0:1]), axis=1)``)
+    is spilled into a scratch buffer first -- the same materialisation einsum uses -- so
+    the bare-Name join below is unchanged."""
+    prelude: List[ast.stmt] = []
+    if args and isinstance(args[0], (ast.Tuple, ast.List)):
+        prelude, elts = _materialize_operands(args[0].elts,
+                                              shape_table,
+                                              "__cc_op",
+                                              local_dtypes=local_dtypes,
+                                              fresh_local_allocs=fresh_local_allocs)
+        args = [ast.Tuple(elts=list(elts), ctx=ast.Load())] + list(args[1:])
     names, shapes, axis = _concat_operands_axis(args, kwargs, shape_table)
+    if any(nm is None for nm in names):  # materialisation above could not spill this operand
+        raise NotImplementedError("np.concatenate: operand must be a Name")
     rank = len(shapes[0])
     iters = [_make_iter_name("__cc", d) for d in range(rank)]
     out: List[ast.stmt] = []
@@ -2950,7 +2976,7 @@ def expand_concatenate(target: ast.expr,
         ]
         out.extend(_wrap_for_loops(iters, s, body))
         offset_tok = (f"({offset_tok}) + ({s[axis]})" if offset_tok != "0" else str(s[axis]))
-    return out
+    return prelude + out
 
 
 def _const_int(node: Optional[ast.expr]) -> Optional[int]:
@@ -3370,6 +3396,56 @@ def _expand_einsum_ellipsis(spec: str, ranks: List[int]) -> str:
 #: einsum calls gets a unique name (two distinct-shape operands must not alias).
 _EINSUM_OP_TEMP = [0]
 
+#: Counter for the scratch buffers :func:`_materialize_operands` spills non-Name operands into.
+_OP_SPILL_TEMP = [0]
+
+
+def _materialize_operands(operands, shape_table, prefix: str, local_dtypes=None, fresh_local_allocs=None):
+    """Spill every non-Name operand into a fresh scratch buffer.
+
+    Several expanders (einsum, concatenate) are written against BARE-NAME operands, but a
+    kernel may hand them a slice / call / arithmetic expression -- dwt2d's
+    ``np.concatenate((e[:, 1:], e[:, 0:1]), axis=1)``. Copying each such operand into a
+    local first lets the bare-Name expansion run unchanged, instead of teaching every
+    expander to index arbitrary sub-expressions.
+
+    Returns ``(prelude_stmts, operand_exprs)``: the copy loops to emit first, and the
+    operand list with each spill replaced by its buffer Name. The buffer is registered in
+    ``shape_table`` + ``fresh_local_allocs`` so the emitter declares AND allocates it, and
+    inherits the source array's dtype (never hardcoded). An operand whose extent will not
+    resolve is passed through untouched, so the caller's own bare-Name check still reports it.
+    """
+    prelude: List[ast.stmt] = []
+    out: List[ast.expr] = []
+    for op in operands:
+        if isinstance(op, ast.Name):
+            out.append(op)
+            continue
+        op_ext = _iter_extent_of(op, shape_table)
+        if op_ext is None:
+            out.append(op)  # unresolved -- the caller's bare-Name check raises
+            continue
+        _OP_SPILL_TEMP[0] += 1
+        tmp = f"{prefix}{_OP_SPILL_TEMP[0]}"
+        tmp_shape = tuple(_CallHoister._extent_to_shape_token(e) for e in op_ext)
+        shape_table[tmp] = tmp_shape
+        if fresh_local_allocs is not None:
+            fresh_local_allocs[tmp] = tmp_shape
+        if local_dtypes is not None:
+            base = op.value if isinstance(op, ast.Subscript) else op
+            base_name = _name_id(base)
+            if base_name and local_dtypes.get(base_name):
+                local_dtypes[tmp] = local_dtypes[base_name]
+        cp_iters = [f"{prefix}c{_OP_SPILL_TEMP[0]}_{i}" for i in range(len(op_ext))]
+        cp_nodes = [_name(c) for c in cp_iters]
+        cp_slot = cp_nodes[0] if len(cp_nodes) == 1 else ast.Tuple(elts=cp_nodes, ctx=ast.Load())
+        cp_src = _scalarize_at_iters(op, cp_nodes, shape_table)
+        cp_dst = ast.Subscript(value=_name(tmp), slice=cp_slot, ctx=ast.Store())
+        prelude.append(_alloc_marker(tmp))
+        prelude.extend(_wrap_for_loops(cp_iters, list(tmp_shape), [ast.Assign(targets=[cp_dst], value=cp_src)]))
+        out.append(_name(tmp))
+    return prelude, out
+
 
 def expand_einsum(target: ast.expr,
                   args: List[ast.expr],
@@ -3396,39 +3472,13 @@ def expand_einsum(target: ast.expr,
         raise NotImplementedError("einsum needs a literal subscript string")
     spec = args[0].value
     operands = args[1:]
-    # Materialize any non-Name operand into a fresh local so the bare-Name
-    # expansion (and the ellipsis rank lookup) sees a Name. The buffer is
-    # registered in ``fresh_local_allocs`` so the emit declares it, and its
-    # dtype is inherited from the source array (never hardcoded).
-    prelude: List[ast.stmt] = []
-    materialized: List[ast.expr] = []
-    for op in operands:
-        if isinstance(op, ast.Name):
-            materialized.append(op)
-            continue
-        op_ext = _iter_extent_of(op, shape_table)
-        if op_ext is None:
-            materialized.append(op)  # unresolved -- the bare-Name check raises below
-            continue
-        _EINSUM_OP_TEMP[0] += 1
-        tmp = f"__es_op{_EINSUM_OP_TEMP[0]}"
-        tmp_shape = tuple(_CallHoister._extent_to_shape_token(e) for e in op_ext)
-        shape_table[tmp] = tmp_shape
-        if fresh_local_allocs is not None:
-            fresh_local_allocs[tmp] = tmp_shape
-        if local_dtypes is not None:
-            base = op.value if isinstance(op, ast.Subscript) else op
-            base_name = _name_id(base)
-            if base_name and local_dtypes.get(base_name):
-                local_dtypes[tmp] = local_dtypes[base_name]
-        cp_iters = [f"__es_c{i}" for i in range(len(op_ext))]
-        cp_nodes = [_name(c) for c in cp_iters]
-        cp_slot = cp_nodes[0] if len(cp_nodes) == 1 else ast.Tuple(elts=cp_nodes, ctx=ast.Load())
-        cp_src = _scalarize_at_iters(op, cp_nodes, shape_table)
-        cp_dst = ast.Subscript(value=_name(tmp), slice=cp_slot, ctx=ast.Store())
-        prelude.extend(_wrap_for_loops(cp_iters, list(tmp_shape), [ast.Assign(targets=[cp_dst], value=cp_src)]))
-        materialized.append(_name(tmp))
-    operands = materialized
+    # Materialize any non-Name operand into a fresh local so the bare-Name expansion (and
+    # the ellipsis rank lookup) sees a Name.
+    prelude, operands = _materialize_operands(operands,
+                                              shape_table,
+                                              "__es_op",
+                                              local_dtypes=local_dtypes,
+                                              fresh_local_allocs=fresh_local_allocs)
     if "..." in spec:
         # Expand ``...`` to explicit letters from each operand's rank (needs the
         # shape table), then lower the plain form; the parser stays ellipsis-free.
@@ -7354,6 +7404,10 @@ _ELEMENT_WRITE_EXPANDERS = {
     ("np", "roll"),
     ("np", "tril"),
     ("np", "pad"),
+    # ``out = np.concatenate((a, b), axis=k)`` copies each operand into ``out`` at its
+    # offset -- an element-write like the rest, so its fresh LHS needs the same auto-alloc
+    # (dwt2d's ``e1 = np.concatenate((e[:, 1:], e[:, 0:1]), axis=1)`` was emitted undeclared).
+    ("np", "concatenate"),
 }
 
 
