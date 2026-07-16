@@ -662,6 +662,22 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                     off = abs(kc)
                 side = (base[0] if off == 0 else ast.BinOp(left=base[0], op=ast.Add(), right=_const(off)))
                 return (side, copy.deepcopy(side))
+            # ``np.cumsum`` / ``np.cumprod`` -> a prefix scan is SHAPE-PRESERVING along its
+            # axis, so the result takes the operand's extent. Without this rule a fresh LHS
+            # (histogram_equalization's ``cdf = np.cumsum(hist)``) has no entry in the shape
+            # table, so the rewriter's ``_ELEMENT_WRITE_EXPANDERS`` registration -- which is
+            # gated on the target ALREADY having a shape -- silently skips it, the buffer is
+            # never allocated, and the emitted ``cdf[0] = ..`` stores through a NULL pointer
+            # (SIGSEGV). numpy FLATTENS an axis-less scan over an N-D operand; the cumulative
+            # expander rejects that form, so leave it unresolved rather than claim a wrong
+            # shape here.
+            if attr in ("cumsum", "cumprod") and expr.args:
+                base = _iter_extent_of(expr.args[0], shape_table)
+                if base is None:
+                    return None
+                if _kwarg_or_pos(expr.args, expr.keywords, 1, "axis") is not None or len(base) == 1:
+                    return base
+                return None
             # ``np.pad(src, pad_width, ...)`` -> each source axis grown by its
             # ``before + after`` width (scalar R or per-axis tuple). The stencil
             # ghost cells / the vector variants' unpadded component axis.
@@ -2026,6 +2042,19 @@ def expand_fftfreq(target, args, shape_table, kwargs=None) -> List[ast.stmt]:
     return _wrap_for_loops([it], [copy.deepcopy(n)], body)
 
 
+def _alloc_marker(name: str) -> ast.Assign:
+    """``<name> = __optarena_zeros__()`` -- the allocation-SITE marker.
+
+    A local whose extent depends on a body-computed scalar cannot be malloc'd at fn-top
+    (the scalar is garbage there), so the emitter declares it NULL and defers the malloc
+    to this marker, which sits after the scalar's assignment in straight-line order. An
+    expander that CONSUMES the original Assign must re-emit the marker, or the buffer it
+    writes into stays NULL. For a fn-top-malloc'd (statically shaped) local the marker is
+    a no-op in the emit walker, so emitting it unconditionally is safe."""
+    return ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())],
+                      value=ast.Call(func=ast.Name(id="__optarena_zeros__", ctx=ast.Load()), args=[], keywords=[]))
+
+
 def expand_copy(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """``out = np.copy(a)`` -> elementwise copy loop into the LHS.
 
@@ -2055,9 +2084,7 @@ def expand_copy(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, T
     sub_src = _scalarize_at_iters(src, iter_nodes, shape_table)
     sub_dst = ast.Subscript(value=_name(target.id), slice=idx, ctx=ast.Store())
     body = [ast.Assign(targets=[sub_dst], value=sub_src)]
-    alloc = ast.Assign(targets=[_store(target.id)],
-                       value=ast.Call(func=_name("__optarena_zeros__"), args=[], keywords=[]))
-    return [alloc] + _wrap_for_loops(iters, shape, body)
+    return [_alloc_marker(target.id)] + _wrap_for_loops(iters, shape, body)
 
 
 def expand_outer(target: ast.expr,
@@ -6469,11 +6496,6 @@ class _MatmulHoister(ast.NodeTransformer):
                 return ast.Name(id=temp, ctx=ast.Load())
         return node
 
-    @staticmethod
-    def _alloc_marker(name: str) -> ast.Assign:
-        return ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())],
-                          value=ast.Call(func=ast.Name(id="__optarena_zeros__", ctx=ast.Load()), args=[], keywords=[]))
-
     def _prepend_alloc_markers(self, stmts: List[ast.stmt]) -> List[ast.stmt]:
         """Prepend a ``__optarena_zeros__()`` allocation marker for each
         array temp written in ``stmts`` (in first-write order).
@@ -6499,7 +6521,7 @@ class _MatmulHoister(ast.NodeTransformer):
                     tgt = tgt.value
                 if (isinstance(tgt, ast.Name) and tgt.id in self.temp_arrays and tgt.id not in seen):
                     seen.append(tgt.id)
-        return [self._alloc_marker(n) for n in seen] + stmts
+        return [_alloc_marker(n) for n in seen] + stmts
 
     def _try_hoist_sparse_matmul(self, node: ast.BinOp):
         """Route ``A @ B`` through the sparse emitter when an operand
@@ -7578,6 +7600,17 @@ class LibNodeRewriter(ast.NodeTransformer):
                         if (key in _ELEMENT_WRITE_EXPANDERS and target.id in self.shape_table
                                 and target.id not in self.known_arrays and target.id not in self.fresh_local_allocs):
                             self.fresh_local_allocs[target.id] = tuple(self.shape_table[target.id])
+                            # ...and mark the allocation SITE. Registering the shape only gets the
+                            # local DECLARED; a local whose extent depends on a body-computed scalar
+                            # (histogram_equalization's ``cdf = np.cumsum(hist)`` is ``(nbins,)``,
+                            # and ``nbins`` is assigned in the body) is declared NULL at fn-top and
+                            # malloc'd at its ``__optarena_zeros__`` marker instead. The expander
+                            # consumed the original Assign that would have carried that marker, so
+                            # without one the buffer stays NULL and the first store segfaults. The
+                            # marker is a no-op for a fn-top-malloc'd (param-shaped) local, so
+                            # emitting it unconditionally is safe -- same rationale as
+                            # ``_prepend_alloc_markers``, which does this for matmul temps.
+                            prelude = prelude + [_alloc_marker(target.id)]
                         # ``np.arange`` over integer bounds yields an integer
                         # iota (numpy intp) -- declare the local int64 so an
                         # index array built from it (``q = j % nx`` -> a gather
