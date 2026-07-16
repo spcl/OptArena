@@ -14,10 +14,12 @@ import ast
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from numpyto_common import dtypes
+
 #: Float / complex dtypes a precision sweep remaps; everything else
 #: (int / uint / bool) keeps its dtype so a mixed kernel's index arrays
 #: stay integer when the floating precision changes.
-_FLOAT_DTYPES = frozenset({"float64", "float32", "float16", "float128", "double"})
+_FLOAT_DTYPES = frozenset({"float64", "float32", "float16", "float128", "double", "float8_e4m3", "float8_e5m2"})
 _COMPLEX_DTYPES = frozenset({"complex128", "complex64", "complex256"})
 _COMPLEX_FOR_FLOAT = {"float64": "complex128", "float32": "complex64",
                       "float16": "complex64", "float128": "complex256"}
@@ -48,9 +50,14 @@ def apply_precision(kir: "KernelIR", precision: Optional[str]) -> "KernelIR":
 
     ``precision`` of ``None``/empty is a no-op (each dtype keeps its
     declared value -- the natural fp64 path).
+
+    The spelling is normalized to the canonical registry key first, so the
+    enum-style ``fp8_e4m3`` and the numpy-style ``float8_e4m3`` are ONE leg and
+    every downstream ``dtype.startswith("float")`` float test still fires.
     """
     if not precision:
         return kir
+    precision = dtypes.canonical(precision)
     for arr in kir.arrays:
         arr.dtype = _apply_precision(arr.dtype, precision)
     for sca in kir.scalars:

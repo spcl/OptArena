@@ -29,10 +29,14 @@ class DTypeInfo:
     scalar_kind: str  # binding-JSON kind for a by-value scalar
     ptr_kind: str  # binding-JSON kind for a pointer/array
     ctype: Optional[type]  # ctypes type for marshalling, or None (e.g. complex)
+    #: For a STORAGE-ONLY format (the fp8 pair): the dtype its arithmetic is
+    #: performed in. ``None`` means the dtype computes in itself (every other
+    #: row). See :func:`compute_dtype` / :func:`is_storage_only`.
+    compute: Optional[str] = None
 
 
-def _row(numpy, c, fortran, scalar_kind, ptr_kind, ctype):
-    return DTypeInfo(numpy, c, fortran, scalar_kind, ptr_kind, ctype)
+def _row(numpy, c, fortran, scalar_kind, ptr_kind, ctype, compute=None):
+    return DTypeInfo(numpy, c, fortran, scalar_kind, ptr_kind, ctype, compute)
 
 
 #: canonical dtype -> info. Keyed by numpy name; aliases handled in :func:`info`.
@@ -41,6 +45,18 @@ REGISTRY: Dict[str, DTypeInfo] = {
     "float32": _row("float32", "float", "real(c_float)", "float", "ptr_float", ctypes.c_float),
     "float16": _row("float16", "_Float16", None, "float16", "ptr_float16", None),
     "float128": _row("float128", "long double", None, "float128", "ptr_float128", ctypes.c_longdouble),
+    # The OCP fp8 pair. No language has a native fp8 scalar, so both are 1-byte
+    # STORAGE with a ``compute`` of float32: an element is promoted to float on
+    # read, every float op is rounded back to the fp8 grid, and a write demotes
+    # to the byte (``__npb_f32_to_e4m3`` & co. in the emitted prelude). float32
+    # is the compute type because that is what ml_dtypes -- and fp8 hardware --
+    # accumulate in, so the emitted arithmetic tracks the numpy oracle exactly.
+    # The C type is a distinct typedef name, NOT a bare ``uint8_t``: ``uint8_t``
+    # would match ``_is_narrow_int`` and get silently widened to int64 on read.
+    "float8_e4m3": _row("float8_e4m3", "__npb_fp8_e4m3", "integer(c_int8_t)", "float8_e4m3", "ptr_float8_e4m3",
+                        ctypes.c_uint8, "float32"),
+    "float8_e5m2": _row("float8_e5m2", "__npb_fp8_e5m2", "integer(c_int8_t)", "float8_e5m2", "ptr_float8_e5m2",
+                        ctypes.c_uint8, "float32"),
     "int64": _row("int64", "int64_t", "integer(c_int64_t)", "int64", "ptr_int64", ctypes.c_int64),
     "int32": _row("int32", "int32_t", "integer(c_int32_t)", "int32", "ptr_int32", ctypes.c_int32),
     "int16": _row("int16", "int16_t", "integer(c_int16_t)", "int16", "ptr_int16", ctypes.c_int16),
@@ -64,6 +80,12 @@ _ALIASES = {
     "float": "float64",
     "double": "float64",
     "long": "int64",
+    # fp8 spellings: the Precision-enum value (``fp8_e4m3``) and the ml_dtypes
+    # name (``float8_e4m3fn``) both resolve to the canonical registry key, so
+    # ``--precision fp8_e4m3`` and ``--precision float8_e4m3`` are the same leg.
+    "fp8_e4m3": "float8_e4m3",
+    "fp8_e5m2": "float8_e5m2",
+    "float8_e4m3fn": "float8_e4m3",
 }
 
 
@@ -71,6 +93,39 @@ def info(dtype: str) -> DTypeInfo:
     """Look up a dtype (resolving aliases). Raises ``KeyError`` for unknown."""
     key = dtype if dtype in REGISTRY else _ALIASES.get(dtype, dtype)
     return REGISTRY[key]
+
+
+def canonical(dtype: str) -> str:
+    """The canonical registry key for ``dtype`` (resolves aliases).
+
+    Callers that STORE a dtype on the IR normalize through this, so every
+    downstream consumer sees one spelling (``float8_e4m3``, never ``fp8_e4m3``)
+    and name-shape tests like ``dtype.startswith("float")`` stay valid.
+    """
+    return info(dtype).numpy
+
+
+def compute_dtype(dtype: str) -> str:
+    """The dtype arithmetic on ``dtype`` is performed in.
+
+    A storage-only format (fp8) returns its wider compute float; every other
+    dtype computes in itself and returns unchanged. Unknown dtypes pass through
+    so callers with a non-registry token (a Fortran ``float_precision`` default)
+    are unaffected.
+    """
+    try:
+        return info(dtype).compute or info(dtype).numpy
+    except KeyError:
+        return dtype
+
+
+def is_storage_only(dtype: str) -> bool:
+    """True for a format that is 1-byte STORAGE and cannot be computed in
+    directly (the fp8 pair) -- reads promote, writes demote."""
+    try:
+        return info(dtype).compute is not None
+    except KeyError:
+        return False
 
 
 def c_type(dtype: str) -> str:

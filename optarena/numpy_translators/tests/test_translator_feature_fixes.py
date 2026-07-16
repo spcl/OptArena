@@ -151,8 +151,12 @@ def test_variadic_minmax_folds_to_nested_2arg(fn):
     """A 3-arg builtin ``max(a, b, c)`` emits as nested 2-arg calls so the
     C/C++ 2-arg ``max``/``min`` macros accept it (needleman_wunsch)."""
     from numpyto_c.emit import _CBodyEmitter
+    from numpyto_common.ir import KernelIR
     em = _CBodyEmitter.__new__(_CBodyEmitter)  # no shape state needed for scalars
     em.array_shapes = {}
+    # An empty kernel: emitting a Name resolves its dtype (to decide the fp8 read
+    # promotion), so the emitter needs its parameter tables even for scalars.
+    em.kir = KernelIR(tree=ast.parse("def f(): pass").body[0], kernel_name="f")
     out = em._emit_call(_expr(f"{fn}(a, b, c)"))
     assert out == f"{fn}({fn}(a, b), c)"
 

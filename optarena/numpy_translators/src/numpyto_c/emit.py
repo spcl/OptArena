@@ -20,7 +20,7 @@ for this tool.
 import ast
 import math
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators, parallelism
@@ -66,6 +66,34 @@ def _is_narrow_int(dtype: str) -> bool:
         return False
 
 
+class _Fp8Fns(NamedTuple):
+    """The three prelude entry points for one fp8 format."""
+    promote: str  # storage byte -> float
+    demote: str  # float -> storage byte
+    round: str  # float -> float, rounded to the fp8 grid
+
+
+#: Prelude function names per fp8 format, keyed by the CANONICAL registry dtype
+#: (the bodies live in ``_FP8_HELPERS``).
+_FP8_FNS = {
+    "float8_e4m3": _Fp8Fns("__npb_e4m3_to_f32", "__npb_f32_to_e4m3", "__npb_rn_e4m3"),
+    "float8_e5m2": _Fp8Fns("__npb_e5m2_to_f32", "__npb_f32_to_e5m2", "__npb_rn_e5m2"),
+}
+
+
+#: BinOp ops that are never fp8 arithmetic (bit / shift work is integer), so the
+#: fp8 round-to-grid wrap skips them.
+_FP8_NON_ARITH_OPS = (ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift)
+
+
+def _fp8_fns(dtype: str):
+    """:class:`_Fp8Fns` for a storage-only (fp8) dtype, else ``None``. Gated on
+    the registry, so a dtype is fp8 here iff the registry says it is."""
+    if not dtype or not dtypes.is_storage_only(dtype):
+        return None
+    return _FP8_FNS[dtypes.canonical(dtype)]
+
+
 def _default_float_dtype(kir: KernelIR) -> str:
     """The floating dtype for a temp not otherwise typed (a matmul / elementwise
     scratch). ``kir.float_precision`` wins when a global precision was applied;
@@ -74,13 +102,19 @@ def _default_float_dtype(kir: KernelIR) -> str:
     its temps must be float32 too -- else a ``np.sqrt(a)`` scratch would silently
     compute in double and diverge from numpy's per-op float32 rounding. A mixed
     or all-float64 kernel keeps float64. Reads only signature arrays / scalars
-    (NOT ``local_dtypes``, which the temps themselves populate)."""
+    (NOT ``local_dtypes``, which the temps themselves populate).
+
+    Resolved through :func:`dtypes.compute_dtype`, so a STORAGE-only format
+    yields the dtype it is computed in (fp8 -> float32) rather than the 1-byte
+    storage type: a temp holding an fp8 intermediate is a ``float``, and
+    ``_is_float32_kernel`` (hence float literals / libm variants) follows suit.
+    """
     if kir.float_precision:
-        return kir.float_precision
+        return dtypes.compute_dtype(kir.float_precision)
     cts: Set[str] = set()
     for desc in (*kir.arrays, *kir.scalars):
         if desc.dtype:
-            cts.add(_c_type(desc.dtype))
+            cts.add(_c_type(dtypes.compute_dtype(desc.dtype)))
     if cts & {"float", "double"} == {"float"}:
         return "float32"
     return "float64"
@@ -405,7 +439,20 @@ class _CBodyEmitter(BaseEmitter):
             self.array_shapes[target.id] = list(self.array_shapes[node.value.id])
         rhs = self.emit_expr(node.value)
         lhs = self.emit_expr(target)
+        fns = self._store_fns(target)
+        if fns is not None:  # fp8 target: demote the float RHS back to the byte
+            rhs = f"{fns.demote}({rhs})"
         return f"{indent}{lhs} = {rhs};"
+
+    def _store_fns(self, target: ast.AST):
+        """:class:`_Fp8Fns` when an assignment TARGET is an fp8 element / name,
+        else ``None`` -- the store half of the promote / demote model."""
+        base = target
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        if not isinstance(base, ast.Name):
+            return None
+        return _fp8_fns(self._name_dtype(base.id) or "")
 
     def _emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
         op = _BINOP.get(type(node.op))
@@ -413,11 +460,82 @@ class _CBodyEmitter(BaseEmitter):
             raise NotImplementedError(f"augmented op {type(node.op).__name__}")
         lhs = self.emit_expr(node.target)
         rhs = self.emit_expr(node.value)
+        fns = self._store_fns(node.target)
+        if fns is not None:
+            # ``y[i] += e`` on fp8 storage cannot use C's ``+=``: the target is a
+            # 1-byte code, so the read must promote and the result demote. The two
+            # occurrences of ``lhs`` are therefore NOT interchangeable -- expand to
+            # an explicit load / op / store. No round() wrap: the demote that
+            # follows rounds to the same grid, so it would be a no-op.
+            return f"{indent}{lhs} = {fns.demote}({fns.promote}({lhs}) {op} ({rhs}));"
         return f"{indent}{lhs} {op}= {rhs};"
 
     # ----- expression-level -----------------------------------------------
 
     def emit_expr(self, node: ast.AST) -> str:
+        """Emit an expression, rounding a float BinOp result back to the fp8 grid
+        when the kernel computes in fp8. The wrapper (rather than a wrap at each
+        of the BinOp branch's five exits) keeps ONE seam for Pow / FloorDiv /
+        Mod / MatMult and the generic arithmetic tail alike."""
+        text = self._emit_expr_inner(node)
+        if isinstance(node, ast.BinOp):
+            return self._fp8_round(node, text)
+        return text
+
+    def _fp8_round(self, node: ast.BinOp, text: str) -> str:
+        """Wrap a float BinOp result in the fp8 round-to-grid helper.
+
+        This is what keeps the emitted arithmetic equal to the numpy oracle
+        rather than merely close to it: ml_dtypes rounds back to fp8 after EVERY
+        op, so ``y + alpha * x`` rounds TWICE. Promoting on load and demoting
+        only on store computes the whole chain in float and rounds once -- which
+        measurably diverges (~10% of elements land on a different fp8 code for a
+        2-op kernel), so the per-op round is load-bearing, not belt-and-braces.
+        """
+        if isinstance(node.op, _FP8_NON_ARITH_OPS):
+            return text
+        fns = self._kernel_fp8_fns()
+        if fns is None or not self._touches_fp8(node):
+            return text
+        return f"{fns.round}({text})"
+
+    def _kernel_fp8_fns(self):
+        """The kernel's single fp8 format's helpers, or ``None`` if it uses none.
+
+        A kernel mixing BOTH fp8 formats has no well-defined per-op grid, so it
+        is refused rather than silently rounded to the wrong one.
+        """
+        cache = vars(self).get("_fp8_fns_cache", False)
+        if cache is not False:
+            return cache
+        used = _fp8_dtypes_used(self.kir)
+        if len(used) > 1:
+            raise NotImplementedError(f"kernel {self.kir.kernel_name!r} mixes fp8 formats {used}: the grid each "
+                                      f"intermediate rounds to is ambiguous")
+        fns = _fp8_fns(used[0]) if used else None
+        self._fp8_fns_cache = fns
+        return fns
+
+    def _touches_fp8(self, node: ast.AST) -> bool:
+        """True when the subtree reads an fp8 array / scalar param / local -- so
+        the enclosing op yields an fp8-valued float that must be re-rounded.
+
+        Deliberately NOT ``_is_float_operand``: that one cannot see by-value
+        scalar params (an ``alpha * n`` with fp8 ``alpha`` and integer ``n``
+        would go unrounded), and widening it would change the fp32 / fp64 paths.
+        """
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
+                name = sub.value.id
+            elif isinstance(sub, ast.Name):
+                name = sub.id
+            else:
+                continue
+            if _fp8_fns(self._name_dtype(name) or "") is not None:
+                return True
+        return False
+
+    def _emit_expr_inner(self, node: ast.AST) -> str:
         if isinstance(node, ast.Constant):
             v = node.value
             if isinstance(v, bool):
@@ -455,9 +573,8 @@ class _CBodyEmitter(BaseEmitter):
             # not a ``double`` vs ``double *`` comparison). Genuine scalars carry an EMPTY shape here, so they
             # stay bare; an explicit ``x[0]`` goes through visit_Subscript, never this branch.
             shape = self.array_shapes.get(node.id)
-            if shape and all(str(s) == "1" for s in shape):
-                return f"{node.id}[0]"
-            return node.id
+            access = f"{node.id}[0]" if (shape and all(str(s) == "1" for s in shape)) else node.id
+            return self._promote_name_read(node, access)
         if isinstance(node, ast.UnaryOp):
             # ``~x`` on a BOOLEAN operand is numpy logical negation (mask
             # inversion), not integer bitwise NOT -- emit ``!`` so a 0/1 bool
@@ -658,18 +775,52 @@ class _CBodyEmitter(BaseEmitter):
         return self._promote_read(node, f"{base}[{flat}]")
 
     def _promote_read(self, node: ast.Subscript, access: str) -> str:
-        """Promote a NARROW integer array element to the int64 ABI integer on
-        READ (``(int64_t)(arr[i])``), so a user-supplied int32 index/value array
-        never forms a mixed-width op with an int64 symbol/local. Array STORAGE
-        keeps its declared width; a write (Store ctx) is untouched and an
-        assignment back into the narrow array narrows implicitly."""
+        """Promote an array element on READ to the type it is computed in.
+
+        Two cases, both Load-only (a write / Store ctx falls through, and an
+        assignment back into the array narrows via the store seam):
+
+        * a NARROW integer element -> the int64 ABI integer (``(int64_t)(arr[i])``),
+          so a user-supplied int32 index/value array never forms a mixed-width op
+          with an int64 symbol/local. Array STORAGE keeps its declared width.
+        * an fp8 element -> ``float`` (``__npb_e4m3_to_f32(arr[i])``). fp8 is
+          1-byte storage with no arithmetic of its own, so every read promotes.
+        """
         base = node.value
         while isinstance(base, ast.Subscript):  # chained ``a[i][j]`` -> Name a
             base = base.value
-        if (isinstance(node.ctx, ast.Load) and isinstance(base, ast.Name)
-                and _is_narrow_int(self._dtype_for_name(base.id) or "")):
+        if not (isinstance(node.ctx, ast.Load) and isinstance(base, ast.Name)):
+            return access
+        dtype = self._dtype_for_name(base.id) or ""
+        fns = _fp8_fns(dtype)
+        if fns is not None:
+            return f"{fns.promote}({access})"
+        if _is_narrow_int(dtype):
             return f"(({_c_type('int')})({access}))"
         return access
+
+    def _name_dtype(self, name: str):
+        """dtype of a bare Name -- a local, an array, or a SCALAR PARAM.
+
+        ``_dtype_for_name`` consults only ``local_dtypes`` + arrays; a by-value
+        scalar (``alpha``) lives in ``kir.scalars`` and would otherwise come back
+        untyped, so an fp8 ``alpha`` would never be promoted on read.
+        """
+        dt = self._dtype_for_name(name)
+        if dt is None:
+            for sca in self.kir.scalars:
+                if sca.name == name:
+                    return sca.dtype
+        return dt
+
+    def _promote_name_read(self, node: ast.Name, access: str) -> str:
+        """Promote a bare fp8 Name (a scalar param, an fp8 local, or a size-1
+        fp8 array read as ``x[0]``) to ``float`` on READ -- the Name-level twin
+        of :meth:`_promote_read`. Store ctx falls through to the store seam."""
+        if not isinstance(node.ctx, ast.Load):
+            return access
+        fns = _fp8_fns(self._name_dtype(node.id) or "")
+        return f"{fns.promote}({access})" if fns is not None else access
 
     def _emit_call(self, node: ast.Call) -> str:
         if isinstance(node.func, ast.Name):
@@ -1543,6 +1694,124 @@ _CPP_PRELUDE = ""
 _CPP_EPILOGUE = ""
 
 
+#: Per-fp8-format prelude: the 1-byte storage typedef and the three conversions
+#: the promote / round / demote model needs. Keyed by the CANONICAL registry
+#: dtype, and ``{ct}`` is filled from the registry's ``c`` field -- so the type
+#: name is never spelled twice. Bodies are plain C that is also valid C++ (both
+#: headers already pull in stdint + memcpy), which is what lets ONE mechanism
+#: serve C and C++: no operator overloading, hence nothing C cannot express.
+#:
+#: The bit maths is verified bit-exact against ml_dtypes in both directions over
+#: all 256 patterns, round-to-nearest-EVEN ties, subnormals and signed zeros.
+#: Note the two formats differ at the top of the range: E4M3FN has NO infinity
+#: (overflow -> NaN 0x7F), E5M2 does (overflow -> Inf 0x7C) -- matching ml_dtypes.
+_FP8_HELPERS = {
+    "float8_e4m3":
+    ('/* OCP float8_e4m3fn: 1 sign / 4 exp (bias 7) / 3 mantissa. 1-byte STORAGE\n'
+     ' * only -- promoted to float to compute, rounded back on every op. */\n'
+     'typedef uint8_t {ct};\n'
+     'static inline float __npb_e4m3_to_f32({ct} b) {{\n'
+     '    uint32_t s = (uint32_t)(b >> 7) & 1u, e = (uint32_t)(b >> 3) & 0xFu, m = (uint32_t)b & 0x7u, u;\n'
+     '    if (e == 0xF && m == 0x7) u = (s << 31) | 0x7fc00000u;      /* NaN; E4M3FN has no Inf */\n'
+     '    else if (e == 0) {{                                          /* subnormal: m * 2^-9 */\n'
+     '        if (m == 0) u = s << 31;\n'
+     '        else {{\n'
+     '            int32_t ex = -6; uint32_t mm = m;\n'
+     '            while (!(mm & 0x8u)) {{ mm <<= 1; ex -= 1; }}\n'
+     '            u = (s << 31) | ((uint32_t)(ex + 127) << 23) | ((mm & 0x7u) << 20);\n'
+     '        }}\n'
+     '    }} else u = (s << 31) | ((e + 120u) << 23) | (m << 20);\n'
+     '    float f; memcpy(&f, &u, 4); return f;\n'
+     '}}\n'
+     'static inline {ct} __npb_f32_to_e4m3(float f) {{\n'
+     '    uint32_t u; memcpy(&u, &f, 4);\n'
+     '    uint32_t s = (u >> 31) & 1u, rest = u & 0x7fffffffu, m3, sticky, half, lsb, drop;\n'
+     '    if (rest >= 0x7f800000u) return ({ct})((s << 7) | 0x7Fu);   /* Inf/NaN -> NaN */\n'
+     '    int32_t e = (int32_t)(rest >> 23) - 127;\n'
+     '    uint32_t m = rest & 0x7fffffu;\n'
+     '    if (e >= -6) {{\n'
+     '        drop = 20; m3 = m >> drop; lsb = m3 & 1u;\n'
+     '        half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n'
+     '        if (sticky > half || (sticky == half && lsb)) {{ m3 += 1u; if (m3 == 8u) {{ m3 = 0u; e += 1; }} }}\n'
+     '        if (e > 8 || (e == 8 && m3 == 7u)) return ({ct})((s << 7) | 0x7Fu);  /* overflow -> NaN */\n'
+     '        return ({ct})((s << 7) | ((uint32_t)(e + 7) << 3) | (m3 & 0x7u));\n'
+     '    }}\n'
+     '    if (e < -10) return ({ct})(s << 7);                          /* underflow -> +/-0 */\n'
+     '    m |= 0x800000u; drop = (uint32_t)(20 + (-6 - e));\n'
+     '    m3 = m >> drop; lsb = m3 & 1u;\n'
+     '    half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n'
+     '    if (sticky > half || (sticky == half && lsb)) m3 += 1u;      /* carry into e=1 is correct */\n'
+     '    return ({ct})((s << 7) | (m3 & 0xFu));\n'
+     '}}\n'
+     '/* Round a float to the fp8 grid, STAYING in float. This is what makes the\n'
+     ' * emitted arithmetic track numpy: ml_dtypes rounds back to fp8 after EVERY\n'
+     ' * op, so a fused float chain would drift (see the fp8 emission tests). */\n'
+     'static inline float __npb_rn_e4m3(float x) {{ return __npb_e4m3_to_f32(__npb_f32_to_e4m3(x)); }}\n'),
+    "float8_e5m2":
+    ('/* OCP float8_e5m2: 1 sign / 5 exp (bias 15) / 2 mantissa. 1-byte STORAGE\n'
+     ' * only -- promoted to float to compute, rounded back on every op. */\n'
+     'typedef uint8_t {ct};\n'
+     'static inline float __npb_e5m2_to_f32({ct} b) {{\n'
+     '    uint32_t s = (uint32_t)(b >> 7) & 1u, e = (uint32_t)(b >> 2) & 0x1Fu, m = (uint32_t)b & 0x3u, u;\n'
+     '    if (e == 0x1F) u = (s << 31) | 0x7f800000u | (m ? 0x00400000u : 0u);   /* Inf / NaN */\n'
+     '    else if (e == 0) {{                                          /* subnormal: m * 2^-16 */\n'
+     '        if (m == 0) u = s << 31;\n'
+     '        else {{\n'
+     '            int32_t ex = -14; uint32_t mm = m;\n'
+     '            while (!(mm & 0x4u)) {{ mm <<= 1; ex -= 1; }}\n'
+     '            u = (s << 31) | ((uint32_t)(ex + 127) << 23) | ((mm & 0x3u) << 21);\n'
+     '        }}\n'
+     '    }} else u = (s << 31) | ((e + 112u) << 23) | (m << 21);\n'
+     '    float f; memcpy(&f, &u, 4); return f;\n'
+     '}}\n'
+     'static inline {ct} __npb_f32_to_e5m2(float f) {{\n'
+     '    uint32_t u; memcpy(&u, &f, 4);\n'
+     '    uint32_t s = (u >> 31) & 1u, rest = u & 0x7fffffffu, m2, sticky, half, lsb, drop;\n'
+     '    if (rest > 0x7f800000u) return ({ct})((s << 7) | 0x7Eu);    /* NaN */\n'
+     '    if (rest == 0x7f800000u) return ({ct})((s << 7) | 0x7Cu);   /* Inf */\n'
+     '    int32_t e = (int32_t)(rest >> 23) - 127;\n'
+     '    uint32_t m = rest & 0x7fffffu;\n'
+     '    if (e >= -14) {{\n'
+     '        drop = 21; m2 = m >> drop; lsb = m2 & 1u;\n'
+     '        half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n'
+     '        if (sticky > half || (sticky == half && lsb)) {{ m2 += 1u; if (m2 == 4u) {{ m2 = 0u; e += 1; }} }}\n'
+     '        if (e > 15) return ({ct})((s << 7) | 0x7Cu);             /* overflow -> Inf */\n'
+     '        return ({ct})((s << 7) | ((uint32_t)(e + 15) << 2) | (m2 & 0x3u));\n'
+     '    }}\n'
+     '    if (e < -18) return ({ct})(s << 7);                          /* underflow -> +/-0 */\n'
+     '    m |= 0x800000u; drop = (uint32_t)(21 + (-14 - e));\n'
+     '    m2 = m >> drop; lsb = m2 & 1u;\n'
+     '    half = 1u << (drop - 1); sticky = m & ((1u << drop) - 1u);\n'
+     '    if (sticky > half || (sticky == half && lsb)) m2 += 1u;\n'
+     '    return ({ct})((s << 7) | (m2 & 0x7u));\n'
+     '}}\n'
+     '/* Round a float to the fp8 grid, STAYING in float -- see __npb_rn_e4m3. */\n'
+     'static inline float __npb_rn_e5m2(float x) {{ return __npb_e5m2_to_f32(__npb_f32_to_e5m2(x)); }}\n'),
+}
+
+
+def _fp8_dtypes_used(kir: KernelIR) -> List[str]:
+    """The canonical storage-only (fp8) dtypes this kernel mentions, deduped.
+
+    Drives BOTH the prelude injection and the emitter's promote / round / demote
+    decisions, so a non-fp8 kernel is byte-for-byte unchanged.
+    """
+    seen: List[str] = []
+    for dt in (*(a.dtype for a in kir.arrays), *(s.dtype for s in kir.scalars), *kir.local_dtypes.values(),
+               kir.float_precision or ""):
+        if dt and dtypes.is_storage_only(dt):
+            canon = dtypes.canonical(dt)
+            if canon not in seen:
+                seen.append(canon)
+    return seen
+
+
+def _fp8_prelude(kir: KernelIR) -> str:
+    """Storage typedef + conversions for each fp8 format the kernel uses; empty
+    for every other kernel (no bloat on the fp64 / fp32 path)."""
+    return "".join(_FP8_HELPERS[dt].format(ct=dtypes.c_type(dt)) for dt in _fp8_dtypes_used(kir))
+
+
 def _helper_return_ctype(hkir: KernelIR) -> str:
     """C return type for a scalar-returning helper: int64 when every ``return``
     value is an integer literal, else double (the common physics-helper case)."""
@@ -1571,7 +1840,7 @@ def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     helpers = "".join(_emit_c_helper(h) for h in kir.helpers)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
-    return f"{_C_HEADER}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+    return f"{_C_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
 
 
 def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -1583,7 +1852,7 @@ def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     # so the same body string serves both targets.
     signature = signature.replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ")
-    return (f"{_CPP_HEADER}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+    return (f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
             f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
 
 
@@ -1612,7 +1881,7 @@ def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     helpers = "".join(_emit_c_helper(h) for h in kir.helpers)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ", parallel=True)
-    return f"{_C_HEADER}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+    return f"{_C_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
 
 
 def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -1622,7 +1891,7 @@ def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     helpers = "".join(_emit_c_helper(h, cpp=True) for h in kir.helpers)
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", parallel=True)
-    return (f"{_CPP_HEADER}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+    return (f"{_CPP_HEADER}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
             f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}")
 
 
@@ -1677,6 +1946,6 @@ def emit_pluto(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     # scalar, still allocate at their marker inside the scop -- rare.)
     decl_block = (decls + "\n") if decls else ""
     free_block = (frees + "\n") if frees else ""
-    return (f"{_C_HEADER}\n{signature} {{\n{_C_PRELUDE}"
+    return (f"{_C_HEADER}{_fp8_prelude(kir)}\n{signature} {{\n{_C_PRELUDE}"
             f"{decl_block}    #pragma scop\n{body}\n    #pragma endscop\n"
             f"{free_block}{_C_EPILOGUE}}}\n")

@@ -21,7 +21,7 @@ import copy
 import dataclasses
 import math
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators, parallelism
@@ -66,6 +66,244 @@ def _fortran_type(dtype: str) -> str:
         return dtypes.fortran_kind(dtype)
     except KeyError:
         return "real(c_double)"
+
+
+class _Fp8Fns(NamedTuple):
+    """The three contained procedures for one fp8 format."""
+    promote: str  # storage byte -> real(c_float)
+    demote: str  # real(c_float) -> storage byte
+    round: str  # real(c_float) -> real(c_float), rounded to the fp8 grid
+
+
+#: Contained-procedure names per fp8 format, keyed by the CANONICAL registry
+#: dtype. No leading underscores (unlike the C prelude's ``__npb_*``): a Fortran
+#: identifier may not start with one.
+_FP8_FNS = {
+    "float8_e4m3": _Fp8Fns("npb_e4m3_to_f32", "npb_f32_to_e4m3", "npb_rn_e4m3"),
+    "float8_e5m2": _Fp8Fns("npb_e5m2_to_f32", "npb_f32_to_e5m2", "npb_rn_e5m2"),
+}
+
+
+#: BinOp ops that are never fp8 arithmetic (bit / shift work is integer), so the
+#: fp8 round-to-grid wrap skips them.
+_FP8_NON_ARITH_OPS = (ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift)
+
+
+def _fp8_fns(dtype: str):
+    """:class:`_Fp8Fns` for a storage-only (fp8) dtype, else ``None`` -- gated on
+    the registry, so a dtype is fp8 here iff the registry says it is."""
+    if not dtype or not dtypes.is_storage_only(dtype):
+        return None
+    return _FP8_FNS[dtypes.canonical(dtype)]
+
+
+def _fp8_dtypes_used(kir: KernelIR) -> List[str]:
+    """The canonical storage-only (fp8) dtypes this kernel mentions, deduped."""
+    seen: List[str] = []
+    for dt in (*(a.dtype for a in kir.arrays), *(s.dtype for s in kir.scalars), *kir.local_dtypes.values(),
+               kir.float_precision or ""):
+        if dt and dtypes.is_storage_only(dt):
+            canon = dtypes.canonical(dt)
+            if canon not in seen:
+                seen.append(canon)
+    return seen
+
+
+#: Contained procedures implementing one fp8 format, keyed by canonical dtype.
+#: Fortran HAS no fp8 scalar, so -- exactly as in C -- a value is 1-byte STORAGE
+#: (``integer(c_int8_t)``), promoted to real(c_float) to compute and rounded back
+#: to the grid after each op. Note this needs no derived type and no
+#: ``interface operator(*)``: the promote / round / demote model carries the
+#: semantics, so ONE mechanism serves C, C++ and Fortran alike.
+#:
+#: ``transfer`` reinterprets the IEEE-754 bits (Fortran's memcpy); ``ishft`` with
+#: a negative shift is a LOGICAL (zero-fill) shift, so the sign bit extracts
+#: cleanly. Verified bit-exact against ml_dtypes -- see tests/test_fp8_emission.py.
+_FP8_HELPER_SRC = {
+    "float8_e4m3":
+    """
+    pure function npb_e4m3_to_f32(b) result(r)
+        use, intrinsic :: iso_c_binding
+        integer(c_int8_t), intent(in) :: b
+        real(c_float) :: r
+        integer(c_int32_t) :: bb, s, e, m, u, ex, mm
+        bb = iand(int(b, c_int32_t), 255)
+        s = ishft(bb, -7)
+        e = iand(ishft(bb, -3), 15)
+        m = iand(bb, 7)
+        if (e == 15 .and. m == 7) then
+            u = ior(ishft(s, 31), int(z'7fc00000', c_int32_t))
+        else if (e == 0) then
+            if (m == 0) then
+                u = ishft(s, 31)
+            else
+                ex = -6
+                mm = m
+                do while (iand(mm, 8) == 0)
+                    mm = ishft(mm, 1)
+                    ex = ex - 1
+                end do
+                u = ior(ior(ishft(s, 31), ishft(ex + 127, 23)), ishft(iand(mm, 7), 20))
+            end if
+        else
+            u = ior(ior(ishft(s, 31), ishft(e + 120, 23)), ishft(m, 20))
+        end if
+        r = transfer(u, 0.0_c_float)
+    end function npb_e4m3_to_f32
+
+    pure function npb_f32_to_e4m3(f) result(b)
+        use, intrinsic :: iso_c_binding
+        real(c_float), intent(in) :: f
+        integer(c_int8_t) :: b
+        integer(c_int32_t) :: u, s, rest, e, m, m3, sticky, half, lsb, drop, out
+        u = transfer(f, 0_c_int32_t)
+        s = iand(ishft(u, -31), 1)
+        rest = iand(u, int(z'7fffffff', c_int32_t))
+        if (rest >= int(z'7f800000', c_int32_t)) then
+            out = ior(ishft(s, 7), 127)
+        else
+            e = ishft(rest, -23) - 127
+            m = iand(rest, int(z'7fffff', c_int32_t))
+            if (e >= -6) then
+                drop = 20
+                m3 = ishft(m, -drop)
+                lsb = iand(m3, 1)
+                half = ishft(1, drop - 1)
+                sticky = iand(m, ishft(1, drop) - 1)
+                if (sticky > half .or. (sticky == half .and. lsb == 1)) then
+                    m3 = m3 + 1
+                    if (m3 == 8) then
+                        m3 = 0
+                        e = e + 1
+                    end if
+                end if
+                if (e > 8 .or. (e == 8 .and. m3 == 7)) then
+                    out = ior(ishft(s, 7), 127)
+                else
+                    out = ior(ior(ishft(s, 7), ishft(e + 7, 3)), iand(m3, 7))
+                end if
+            else if (e < -10) then
+                out = ishft(s, 7)
+            else
+                m = ior(m, int(z'800000', c_int32_t))
+                drop = 20 + (-6 - e)
+                m3 = ishft(m, -drop)
+                lsb = iand(m3, 1)
+                half = ishft(1, drop - 1)
+                sticky = iand(m, ishft(1, drop) - 1)
+                if (sticky > half .or. (sticky == half .and. lsb == 1)) m3 = m3 + 1
+                out = ior(ishft(s, 7), iand(m3, 15))
+            end if
+        end if
+        if (out > 127) out = out - 256
+        b = int(out, c_int8_t)
+    end function npb_f32_to_e4m3
+
+    pure function npb_rn_e4m3(x) result(r)
+        use, intrinsic :: iso_c_binding
+        real(c_float), intent(in) :: x
+        real(c_float) :: r
+        r = npb_e4m3_to_f32(npb_f32_to_e4m3(x))
+    end function npb_rn_e4m3
+""",
+    "float8_e5m2":
+    """
+    pure function npb_e5m2_to_f32(b) result(r)
+        use, intrinsic :: iso_c_binding
+        integer(c_int8_t), intent(in) :: b
+        real(c_float) :: r
+        integer(c_int32_t) :: bb, s, e, m, u, ex, mm
+        bb = iand(int(b, c_int32_t), 255)
+        s = ishft(bb, -7)
+        e = iand(ishft(bb, -2), 31)
+        m = iand(bb, 3)
+        if (e == 31) then
+            u = ior(ishft(s, 31), int(z'7f800000', c_int32_t))
+            if (m /= 0) u = ior(u, int(z'400000', c_int32_t))
+        else if (e == 0) then
+            if (m == 0) then
+                u = ishft(s, 31)
+            else
+                ex = -14
+                mm = m
+                do while (iand(mm, 4) == 0)
+                    mm = ishft(mm, 1)
+                    ex = ex - 1
+                end do
+                u = ior(ior(ishft(s, 31), ishft(ex + 127, 23)), ishft(iand(mm, 3), 21))
+            end if
+        else
+            u = ior(ior(ishft(s, 31), ishft(e + 112, 23)), ishft(m, 21))
+        end if
+        r = transfer(u, 0.0_c_float)
+    end function npb_e5m2_to_f32
+
+    pure function npb_f32_to_e5m2(f) result(b)
+        use, intrinsic :: iso_c_binding
+        real(c_float), intent(in) :: f
+        integer(c_int8_t) :: b
+        integer(c_int32_t) :: u, s, rest, e, m, m2, sticky, half, lsb, drop, out
+        u = transfer(f, 0_c_int32_t)
+        s = iand(ishft(u, -31), 1)
+        rest = iand(u, int(z'7fffffff', c_int32_t))
+        if (rest > int(z'7f800000', c_int32_t)) then
+            out = ior(ishft(s, 7), 126)
+        else if (rest == int(z'7f800000', c_int32_t)) then
+            out = ior(ishft(s, 7), 124)
+        else
+            e = ishft(rest, -23) - 127
+            m = iand(rest, int(z'7fffff', c_int32_t))
+            if (e >= -14) then
+                drop = 21
+                m2 = ishft(m, -drop)
+                lsb = iand(m2, 1)
+                half = ishft(1, drop - 1)
+                sticky = iand(m, ishft(1, drop) - 1)
+                if (sticky > half .or. (sticky == half .and. lsb == 1)) then
+                    m2 = m2 + 1
+                    if (m2 == 4) then
+                        m2 = 0
+                        e = e + 1
+                    end if
+                end if
+                if (e > 15) then
+                    out = ior(ishft(s, 7), 124)
+                else
+                    out = ior(ior(ishft(s, 7), ishft(e + 15, 2)), iand(m2, 3))
+                end if
+            else if (e < -18) then
+                out = ishft(s, 7)
+            else
+                m = ior(m, int(z'800000', c_int32_t))
+                drop = 21 + (-14 - e)
+                m2 = ishft(m, -drop)
+                lsb = iand(m2, 1)
+                half = ishft(1, drop - 1)
+                sticky = iand(m, ishft(1, drop) - 1)
+                if (sticky > half .or. (sticky == half .and. lsb == 1)) m2 = m2 + 1
+                out = ior(ishft(s, 7), iand(m2, 7))
+            end if
+        end if
+        if (out > 127) out = out - 256
+        b = int(out, c_int8_t)
+    end function npb_f32_to_e5m2
+
+    pure function npb_rn_e5m2(x) result(r)
+        use, intrinsic :: iso_c_binding
+        real(c_float), intent(in) :: x
+        real(c_float) :: r
+        r = npb_e5m2_to_f32(npb_f32_to_e5m2(x))
+    end function npb_rn_e5m2
+""",
+}
+
+
+def _fp8_contained(kir: KernelIR) -> str:
+    """The fp8 conversion procedures this kernel needs, as CONTAINED procedures
+    (siblings see each other, so ``npb_rn_*`` can call the pair; and unlike a
+    module there is no .mod artefact to collide between parallel builds).
+    Empty for every non-fp8 kernel."""
+    return "".join(_FP8_HELPER_SRC[dt] for dt in _fp8_dtypes_used(kir))
 
 
 def _double_kind() -> str:
@@ -294,8 +532,13 @@ class _FortranBodyEmitter(BaseEmitter):
         # about kind mixing (a ``1.0_c_double`` literal beside a
         # ``real(c_float)`` variable is a hard "Different type kinds"
         # error, unlike C's silent promotion), so literals must match the
-        # kernel's float precision set on the IR.
-        self._rk = {"float32": "c_float", "float16": "c_float"}.get(kir.float_precision or "float64", "c_double")
+        # kernel's float precision set on the IR. Resolved through
+        # ``compute_dtype`` so an fp8 kernel -- whose values are held in
+        # real(c_float) between the promote and the demote -- suffixes its
+        # literals ``_c_float``; the raw ``float8_e4m3`` would miss this map and
+        # fall through to c_double, which is exactly the kind clash above.
+        self._rk = {"float32": "c_float", "float16": "c_float"}.get(
+            dtypes.compute_dtype(kir.float_precision or "float64"), "c_double")
         # libm functions Fortran lacks an intrinsic for, called through a bind(C)
         # interface so the result is bit-identical to the C backend (and numpy,
         # which also uses libm) -- collected here, declared in the spec part.
@@ -660,11 +903,25 @@ class _FortranBodyEmitter(BaseEmitter):
             return f"{indent}{self.emit_expr(target)} = {'.true.' if node.value.value else '.false.'}"
         rhs = self.emit_expr(node.value)
         lhs = self.emit_expr(target)
+        fns = self._store_fns(target)
+        if fns is not None:  # fp8 target: demote the real(c_float) RHS to the byte
+            rhs = f"{fns.demote}({rhs})"
         return f"{indent}{lhs} = {rhs}"
 
     def _emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
         lhs = self.emit_expr(node.target)
         rhs = self.emit_expr(node.value)
+        fp8 = self._store_fns(node.target)
+        if fp8 is not None:
+            # ``y(i) += e`` on fp8 storage: the target is a 1-byte code, so the
+            # READ must promote and the result demote -- the two occurrences of
+            # ``lhs`` below are NOT interchangeable. Bitwise augmented ops cannot
+            # reach here (an fp8 array is never an integer operand). No round()
+            # wrap: the demote rounds to the same grid, so it would be a no-op.
+            op = _BINOP.get(type(node.op))
+            if op is None:
+                raise NotImplementedError(f"augmented op {type(node.op).__name__} on fp8")
+            return f"{indent}{lhs} = {fp8.demote}({fp8.promote}({lhs}) {op} ({rhs}))"
         # Bitwise / shift augmented ops -- map to the integer
         # intrinsic forms used in the BinOp emit.
         if isinstance(node.op, ast.BitAnd):
@@ -685,6 +942,98 @@ class _FortranBodyEmitter(BaseEmitter):
         return f"{indent}{lhs} = {lhs} {op} ({rhs})"
 
     def emit_expr(self, node: ast.AST) -> str:
+        """Emit an expression, rounding a float BinOp result back to the fp8 grid
+        when the kernel computes in fp8. Wrapping HERE rather than at each of the
+        BinOp branch's exits keeps one seam for Pow / FloorDiv / MATMUL / MODULO
+        and the generic arithmetic tail alike."""
+        text = self._emit_expr_inner(node)
+        if isinstance(node, ast.BinOp):
+            return self._fp8_round(node, text)
+        return text
+
+    def _fp8_round(self, node: ast.BinOp, text: str) -> str:
+        """Wrap a float BinOp result in the fp8 round-to-grid procedure.
+
+        Load-bearing, not belt-and-braces: ml_dtypes rounds back to fp8 after
+        EVERY op, so promoting on load and demoting only on store would compute
+        the chain in float and round once -- measurably diverging from the numpy
+        oracle (see tests/test_fp8_emission.py).
+        """
+        if isinstance(node.op, _FP8_NON_ARITH_OPS):
+            return text
+        fns = self._kernel_fp8_fns()
+        if fns is None or not self._touches_fp8(node):
+            return text
+        return f"{fns.round}({text})"
+
+    def _kernel_fp8_fns(self):
+        """The kernel's single fp8 format's procedures, or ``None`` if it uses
+        none. A kernel mixing BOTH formats has no well-defined per-op grid, so it
+        is refused rather than silently rounded to the wrong one."""
+        cache = vars(self).get("_fp8_fns_cache", False)
+        if cache is not False:
+            return cache
+        used = _fp8_dtypes_used(self.kir)
+        if len(used) > 1:
+            raise NotImplementedError(f"kernel {self.kir.kernel_name!r} mixes fp8 formats {used}: the grid each "
+                                      f"intermediate rounds to is ambiguous")
+        fns = _fp8_fns(used[0]) if used else None
+        self._fp8_fns_cache = fns
+        return fns
+
+    def _name_dtype(self, name: str) -> Optional[str]:
+        """dtype of a Name -- an array, a local, or a by-value SCALAR param. The
+        scalars are consulted too, so an fp8 ``alpha`` is promoted on read."""
+        for a in self.kir.arrays:
+            if a.name == name:
+                return a.dtype
+        dt = self.kir.local_dtypes.get(name)
+        if dt is not None:
+            return dt
+        for sca in self.kir.scalars:
+            if sca.name == name:
+                return sca.dtype
+        return None
+
+    def _touches_fp8(self, node: ast.AST) -> bool:
+        """True when the subtree reads an fp8 array / scalar param / local -- so
+        the enclosing op yields an fp8-valued real that must be re-rounded.
+
+        fp8-specific by design rather than reusing ``_expr_is_real``, which is
+        deliberately conservative ("stays False when unsure") -- an unproven real
+        would silently skip its rounding, which is a correctness gap here.
+        """
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
+                name = sub.value.id
+            elif isinstance(sub, ast.Name):
+                name = sub.id
+            else:
+                continue
+            if _fp8_fns(self._name_dtype(name) or "") is not None:
+                return True
+        return False
+
+    def _promote_name_read(self, node: ast.Name, access: str) -> str:
+        """Promote a bare fp8 Name (a scalar param, an fp8 local, or a size-1 fp8
+        array read as ``x(1)``) to real(c_float) on READ. Store ctx falls through
+        to the store seam."""
+        if not isinstance(node.ctx, ast.Load):
+            return access
+        fns = _fp8_fns(self._name_dtype(node.id) or "")
+        return f"{fns.promote}({access})" if fns is not None else access
+
+    def _store_fns(self, target: ast.AST):
+        """:class:`_Fp8Fns` when an assignment TARGET is an fp8 element / name,
+        else ``None`` -- the store half of the promote / demote model."""
+        base = target
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        if not isinstance(base, ast.Name):
+            return None
+        return _fp8_fns(self._name_dtype(base.id) or "")
+
+    def _emit_expr_inner(self, node: ast.AST) -> str:
         if isinstance(node, ast.Constant):
             v = node.value
             if isinstance(v, bool):
@@ -732,9 +1081,8 @@ class _FortranBodyEmitter(BaseEmitter):
             # A size-1 array read bare in a value expression is its sole element ``x(1)`` (Fortran is
             # 1-based), not the whole rank-1 array -- so ``a(i+1) > x`` is a scalar comparison, not a
             # rank-0-vs-rank-1 mismatch. An explicit ``x[0]`` goes through _emit_subscript, not here.
-            if node.id in self._size1_arrays:
-                return f"{node.id}(1)"
-            return node.id
+            access = f"{node.id}(1)" if node.id in self._size1_arrays else node.id
+            return self._promote_name_read(node, access)
         if isinstance(node, ast.Tuple):
             # ``(a, b, c)`` as an axis tuple / array constructor -- emit
             # the Fortran array constructor syntax. Bare elements only;
@@ -1211,7 +1559,14 @@ class _FortranBodyEmitter(BaseEmitter):
         # mixed integer kinds in operators + intrinsics). Storage keeps its width;
         # a Store (LHS) or an array-section read is left untouched.
         is_section = any(":" in a for a in adjusted)
-        if (not is_section and isinstance(node.ctx, ast.Load) and self._is_narrow_int_array(base_name)):
+        if is_section or not isinstance(node.ctx, ast.Load):
+            return access
+        # An fp8 element is a 1-byte code with no arithmetic of its own -- promote
+        # it to real(c_float) on every scalar READ (the store seam demotes back).
+        fns = _fp8_fns(self._name_dtype(base_name) or "")
+        if fns is not None:
+            return f"{fns.promote}({access})"
+        if self._is_narrow_int_array(base_name):
             return f"INT({access}, {self._int_kind_selector()})"
         return access
 
@@ -1571,6 +1926,14 @@ class _FortranBodyEmitter(BaseEmitter):
         registry), or None when ``dtype`` is not an integer. Resolved through
         ``_fortran_type`` so an alias like ``int`` maps to the right kind without
         a hardcoded match."""
+        # An fp8 dtype is STORED as ``integer(c_int8_t)`` -- Fortran has no fp8
+        # scalar -- so the _fortran_type match below would otherwise identify it
+        # as int8 and treat the byte as an integer VALUE: the read promotion
+        # would widen the code to int64 and the arithmetic would add bit
+        # patterns. It is a float format; the fp8 promote / round / demote seams
+        # own it, so it is never an int tag.
+        if dtypes.is_storage_only(dtype):
+            return None
         if dtype in self._INT_KIND_SUFFIX:
             return dtype
         ft = _fortran_type(dtype)
@@ -2387,7 +2750,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
         lines.append("    end interface")
         libm_iface = "\n".join(lines)
 
-    contained = "".join(_emit_fortran_helper(h) for h in kir.helpers)
+    contained = _fp8_contained(kir) + "".join(_emit_fortran_helper(h) for h in kir.helpers)
     return _format_subroutine(
         name=name,
         params=param_names,
@@ -2412,7 +2775,8 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """
     # Float locals follow the kernel's precision (real(c_float) at fp32),
     # else a double local clashes with float32 arrays/values.
-    rk = {"float32": "c_float", "float16": "c_float"}.get(kir.float_precision or "float64", "c_double")
+    rk = {"float32": "c_float", "float16": "c_float"}.get(
+            dtypes.compute_dtype(kir.float_precision or "float64"), "c_double")
     real_t = f"real({rk})"
     ck = {
         "float32": "c_float_complex",
@@ -2880,7 +3244,8 @@ def _emit_fortran_helper(hkir: KernelIR) -> str:
     # inherit them from. Shapes are reversed for the C-interop (col-major) layout,
     # matching :func:`_array_decl`; the dtype comes from the lowering's
     # ``local_dtypes`` (a bool mask -> ``logical``, a complex temp -> ``complex``).
-    rk = {"float32": "c_float", "float16": "c_float"}.get(hkir.float_precision or "float64", "c_double")
+    rk = {"float32": "c_float", "float16": "c_float"}.get(
+        dtypes.compute_dtype(hkir.float_precision or "float64"), "c_double")
     default_real = f"real({rk})"
     ldt = hkir.local_dtypes
     param_set = set(hkir.input_args)
