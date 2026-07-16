@@ -31,3 +31,10 @@ torch
 triton
 # mpi4py: the MPI-track SPMD Python driver; built against the image's MPICH (MPICC pin in containers/optarena.Dockerfile)
 mpi4py
+# HDF5 / netCDF bindings for the apt libhdf5-dev + libnetcdf-dev the images install.
+# Declared EXPLICITLY: they used to arrive only as a transitive dep of the stock PyPI
+# dace, so pinning dace to the fork (which does not depend on them) silently dropped
+# them and the image smoke test -- which imports both -- broke. A dep the smoke test
+# asserts must be a dep this file states.
+h5py
+netCDF4
