@@ -1,12 +1,12 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""End-to-end numerical-correctness gate for the whole foundation + HPC corpus.
+"""End-to-end numerical-correctness gate for the foundation + HPC + ML corpus.
 
-For every foundation/HPC kernel at the **S** preset, the numerical oracle emits
-the auto-generated implementation for each backend (C / C++ / Fortran via
-NumpyToX, plus numba / pythran / jax), compiles/runs it, and compares the result
-against the NumPy reference. This file turns that sweep into one parametrized
-unit test per ``(kernel, backend)`` pair.
+For every gated kernel (:data:`GATED_TRACKS`) at the **S** preset, the numerical
+oracle emits the auto-generated implementation for each backend (C / C++ / Fortran
+via NumpyToX, plus numba / pythran / jax), compiles/runs it, and compares the
+result against the NumPy reference. This file turns that sweep into one
+parametrized unit test per ``(kernel, backend)`` pair.
 
 Semantics (a strict green gate -- no xfail tolerance):
 
@@ -43,7 +43,14 @@ if _bad:
     raise ValueError(f"OPTARENA_E2E_BACKENDS has unknown backend(s) {_bad}; valid: {list(_ALL_E2E_BACKENDS)}")
 
 
-def _foundation_hpc_stems():
+#: Tracks the sweep gates. ``ml`` carries the kernelbench-derived level-2 / level-3
+#: kernels (softmax / conv2d / lenet / mlp / resnet / mnist_infer / gpt2_block), which
+#: are as much a translator contract as the numeric ones -- they exercise the reduction,
+#: keepdims, triangular-mask and int->float promotion paths nothing else reaches.
+GATED_TRACKS = ("foundation", "hpc", "ml")
+
+
+def _gated_stems():
     stems = []
     for key in sorted(KERNELS):
         stem = key.rsplit("/", 1)[-1]
@@ -51,7 +58,7 @@ def _foundation_hpc_stems():
             spec = BenchSpec.load(stem)
         except Exception:  # noqa: BLE001 -- ambiguous/malformed stem: skip
             continue
-        if spec.track in ("foundation", "hpc"):
+        if spec.track in GATED_TRACKS:
             stems.append(stem)
     return stems
 
@@ -89,7 +96,7 @@ def _result(stem: str) -> dict:
 
 
 def _params():
-    for stem in _foundation_hpc_stems():
+    for stem in _gated_stems():
         for backend in E2E_BACKENDS:
             yield pytest.param(stem, backend, id=f"{stem}-{backend}")
 

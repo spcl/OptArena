@@ -112,6 +112,9 @@ from optarena import dtypes as _dtypes  # noqa: E402
 from optarena.spec import BenchSpec  # noqa: E402
 from optarena.initialize import auto_initialize  # noqa: E402
 from optarena.precision import Precision  # noqa: E402
+# The emitter's own fp-tag helper -- the single source of truth for the ``_fp64`` /
+# ``_fp32`` / ``_fp16`` suffix on every emitted file, so this file's globs match it.
+from numpyto_common.naming import fptype_tag  # noqa: E402
 # The Pluto affine-index detector was lifted into the package so external consumers (the nest-forge
 # arena's Pluto lane) share ONE detector; kept under its historical private name for existing callers.
 from optarena.pluto_affine import scop_nonaffine_reason as _scop_nonaffine_reason  # noqa: E402,F401
@@ -201,7 +204,51 @@ PRECISIONS = {
     # the emitted code's op order. A 1e-3 tolerance tolerates that while
     # still catching dtype EMIT bugs (wrong type -> gross/garbage error).
     "fp32": (np.float32, Precision.FP32, "float32", 1e-3, 1e-3),
+    # fp16 carries ~3 decimal digits (eps ~9.8e-4), so even a short reduction drifts
+    # well past the fp32 band -- 2e-2 tolerates that while still catching a dtype EMIT
+    # bug (a wrong type gives a GROSS error, not a last-digit one). C / C++ get the
+    # native ``_Float16`` from the dtype registry; Fortran has no half-precision real
+    # kind at all (``_fortran_type("float16")`` is None, and gfortran rejects
+    # ``real(2)``), so the fp16 leg is C / C++ only -- see FP16_BACKENDS.
+    "fp16": (np.float16, Precision.FP16, "float16", 2e-2, 2e-2),
 }
+
+#: The backends whose toolchain has a native half type. C / C++ compile the registry's
+#: ``_Float16``; gfortran has no half-precision REAL kind (it rejects ``real(2)``), so
+#: Fortran is absent BY LANGUAGE, not by gap. Asking it anyway is worse than useless:
+#: the Fortran emit silently falls back to ``real(c_double)`` for float16, so the leg
+#: would build a DOUBLE kernel and grade it against an fp16 reference inside the loose
+#: fp16 band -- a pass that proves nothing. An fp16 sweep must not ask it.
+FP16_BACKENDS = frozenset({"c", "cpp"})
+
+#: numpy float WIDTH (itemsize) -> the PRECISIONS key that grades it. Derived FROM
+#: PRECISIONS so a new precision needs no edit here.
+_PRECISION_BY_WIDTH = {np.dtype(cfg[0]).itemsize: name for name, cfg in PRECISIONS.items()}
+
+
+def _grading_precision(spec: BenchSpec, precision: str) -> str:
+    """The PRECISIONS key whose TOLERANCE actually applies to ``spec``.
+
+    ``apply_precision`` is a NO-OP on the fp64 sweep (the natural path: every dtype
+    keeps its DECLARED value), so a kernel that pins ``dtype: float32`` in its init
+    spec -- mnist_infer's whole MLP -- still computes in float32 while the fp64 leg
+    graded it at 1e-9. That is ~an order tighter than float32 can carry, and it
+    failed on exactly that (``FAIL:logits:d=1.49e-08``) rather than on any real
+    defect. Accuracy is bounded by the NARROWEST float in the computation, so grade
+    at the narrower of the requested sweep precision and the kernel's declared
+    floats. A sweep that DOES override (fp32 / fp16) remaps every declared dtype
+    down to it, so the same min picks the override -- one rule covers both legs.
+
+    Only the tolerance moves: ``np_float`` / the emit ``--precision`` still follow
+    the REQUESTED sweep, so this never changes what is built or run, just what
+    counts as agreement.
+    """
+    widths = [np.dtype(PRECISIONS[precision][0]).itemsize]
+    for dt in (spec.init.dtypes or {}).values():
+        npdt = np.dtype(dt)
+        if np.issubdtype(npdt, np.floating) and npdt.itemsize in _PRECISION_BY_WIDTH:
+            widths.append(npdt.itemsize)
+    return _PRECISION_BY_WIDTH[min(widths)]
 
 
 def foundation_kernels() -> List[str]:
@@ -344,6 +391,10 @@ def run_kernel(short: str,
         return _all_backend_status("skip:sparse")  # see tests/sparse_oracle
     if spec.init is None:
         return _all_backend_status("skip:no-init")
+    # Grade at the precision the kernel actually COMPUTES in, which is not always the
+    # one swept (a declared float32 survives the fp64 leg untouched) -- see
+    # _grading_precision. Tolerance only; the emit / input dtypes are unchanged.
+    rtol, atol = PRECISIONS[_grading_precision(spec, precision)][3:5]
     out_args = info["output_args"]
     syms = dict(spec.parameters[preset])
     # Polybench presets are huge (NI=1000+); scale every size symbol down
@@ -480,7 +531,12 @@ def run_kernel(short: str,
     tdp = pathlib.Path(td_ctx.name)
     try:
         # Canonical native name carries the fp tag: <short>[_<sparse>]_<fptype>.
-        fptype = "fp32" if emit_prec == "float32" else "fp64"
+        # Resolved through the SAME helper the emitter names its files with, so the
+        # glob below cannot drift from what was written. A hardcoded fp32-else-fp64
+        # ternary lived here and silently mapped every other precision to ``fp64``:
+        # the fp16 emit wrote ``<short>_fp16.*`` and the fp64 glob then matched
+        # nothing -- reported as ``FAIL:no-binding``, as if the emit had failed.
+        fptype = fptype_tag(emit_prec)
         # The native (C/C++/Fortran) emit is shared by exactly those three
         # backends. The Python/JIT backends (numba/pythran/cupy) and jax emit
         # from the numpy source INDEPENDENTLY, so a native-emit failure must not
