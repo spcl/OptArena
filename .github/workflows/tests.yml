@@ -311,7 +311,11 @@ jobs:
         env:
           OPTARENA_E2E_BACKENDS: "c,cpp,fortran,pythran"
         run: |
-          python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
+          # -n 2 (not auto): the c/cpp/fortran/pythran slice is the heaviest -- each xdist worker
+          # forks a child per kernel (COW) and drives native compiles, so `-n auto` (4 on ubuntu-latest)
+          # peaks past the 16 GB runner and it gets OOM-SIGTERM'd (exit 143) mid-sweep. Two workers keep
+          # the sweep parallel while halving peak memory. Sizes are already the down-scaled S preset.
+          python -m pytest -q -p no:cacheprovider -n 2 --timeout=600 tests/test_e2e_numerical.py
 
       - name: Phase 6a -- build + smoke-test the cpu agent-bench image (unified OCI -> SIF, gating)
         # GATES now. UNIFIED build: one OCI Dockerfile (containers/optarena.Dockerfile, HW=cpu) is the
