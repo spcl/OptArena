@@ -408,16 +408,27 @@ def emit_pythran(numpy_source: str, kir: KernelIR) -> str:
 
     # ``_clean_for_pythran`` may rename a reserved param, but never reorders or
     # drops one, so the ORIGINAL names still index the kir type maps positionally.
+    # Params carrying a DEFAULT are OPTIONAL. The frontend types only the manifest's
+    # ``input_args``, and the oracle likewise calls with exactly those -- a prefix of the def
+    # params -- so a trailing optional the manifest omits is never passed and simply keeps its
+    # Python default in the body (the native path folds those ``if x is None`` branches away
+    # instead). Exporting it would demand a dtype nothing ever resolved: QE vexx_k declares 15
+    # such kwargs (coulomb_fac_q, qgm_q, ...) after its manifest args and tripped the guard
+    # below. Truncate the export at the first unclassified OPTIONAL param; a REQUIRED one with
+    # no dtype is still a loud failure, which is what the guard is for.
+    n_required = len(kfn.args.args) - len(kfn.args.defaults)
     types: List[str] = []
-    for arg in def_params:
+    for idx, arg in enumerate(def_params):
         if arg in sym_by_name:
             types.append("int")
         elif arg in arr_by_name:
             types.append(_pythran_array_type(arr_by_name[arg]))
         elif arg in sca_by_name:
             types.append(_pythran_scalar_type(sca_by_name[arg].dtype, f"scalar {arg!r}"))
+        elif idx >= n_required:
+            break  # optional + untyped -> stop exporting here; the body keeps its default
         else:
-            # A def param the frontend did not classify as symbol / array / scalar
+            # A REQUIRED def param the frontend did not classify as symbol / array / scalar
             # has no known dtype. Defaulting to float64 (the old behaviour) silently
             # type-puns a bool / int argument in the oracle's positional call --
             # exactly the miscompile this emitter must never produce. Fail loudly.
