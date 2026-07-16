@@ -32,7 +32,15 @@ runs:
         pip_retry -r requirements.txt \
           pytest pytest-timeout pytest-xdist sympy jinja2 cffi tree-sitter-language-pack psutil py-cpuinfo
         pip_retry -e .
-        pip_retry "jax[cpu]" dace numba pythran pyarrow
+        # DaCe: editable install of spcl/dace @ extended (the branch OptArena develops against), NOT the
+        # stock PyPI wheel. extended carries compiler.build_mode=native, which compiles each SDFG by
+        # invoking the compiler directly and skips the per-SDFG cmake configure -- cutting the framework
+        # + translator SDFG build time. Shallow clone keeps it fast; editable so the native codegen loads.
+        git clone --depth 1 --branch extended https://github.com/spcl/dace.git "$RUNNER_TEMP/dace"
+        pip_retry -e "$RUNNER_TEMP/dace"
+        pip_retry "jax[cpu]" numba pythran pyarrow
+        # Turn on native SDFG builds for every subsequent step in the job (no cmake per SDFG).
+        echo "DACE_compiler_build_mode=native" >> "$GITHUB_ENV"
 
     - name: Verify common toolchain (fail fast on a missing dependency)
       shell: bash
