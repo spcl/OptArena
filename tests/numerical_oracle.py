@@ -53,6 +53,10 @@ JAX_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_JAX_FORK_TIMEOUT_S", "180"))
 #: pythran's own per-kernel compile budget (``compile_timeout_s``), which reports its own
 #: skip first; this deadline is the outer backstop for a wedged JIT or a hung run.
 PY_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_PY_FORK_TIMEOUT_S", "600"))
+#: Kernels whose numpy REFERENCE is only mathematically valid at its declared size, so the
+#: polybench down-scaling below must not touch them (it would make the reference itself raise).
+#: See the rationale at the down-scale site.
+NO_SCALE = ("distribution_search", "gpt2_block")
 #: Address-space cap (GiB) on a backend COMPILE subprocess. pythran's template instantiation
 #: balloons to ~7 GB on a deeply-nested kernel, and concurrent ones took the 16 GB CI runner
 #: DOWN -- the VM is reclaimed ("runner has received a shutdown signal", exit 143), killing the
@@ -336,11 +340,16 @@ def run_kernel(short: str,
     # only needs correctness, which is size-independent -- and the
     # hand-written initializers are Python loops, far too slow at 1000.
     # Foundation kernels aren't scaled. Neither is a kernel whose numpy reference is only
-    # mathematically valid at its declared size: distribution_search couples an absolute forward-KL
-    # target to the vocabulary V (feasible only for V > e^10 ~= 22026), so a down-scaled V<=48 makes
-    # the REFERENCE itself raise (no grid solution). Run those at true size (~0.04s here) so the
-    # kernel is exercised for real rather than skipped for a "capability" the harness does have.
-    if "foundation" not in info.get("relative_path", "") and short not in ("distribution_search", ):
+    # mathematically valid at its declared size:
+    #   distribution_search couples an absolute forward-KL target to the vocabulary V (feasible only
+    #     for V > e^10 ~= 22026), so a down-scaled V<=48 makes the REFERENCE itself raise (no grid
+    #     solution);
+    #   gpt2_block derives its head count from the model width, ``nhead = D // HEAD_DIM`` with
+    #     HEAD_DIM=64, then ``dh = D // nhead`` -- so any D < 64 gives nhead == 0 and the reference
+    #     raises ZeroDivisionError. Its true S already IS small (D=128).
+    # Run those at true size so the kernel is exercised for real rather than reported as a bogus
+    # FAIL for a "capability" the harness does have.
+    if "foundation" not in info.get("relative_path", "") and short not in NO_SCALE:
         ints = {k: v for k, v in syms.items() if isinstance(v, int) and not isinstance(v, bool)}
         mx = max(ints.values(), default=0)
         # Default down-scale target is 48; ``max_size`` (JAX small-size pass)
