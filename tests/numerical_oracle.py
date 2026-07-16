@@ -48,6 +48,11 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 #: FAIL: a hung native kernel is a real miscompile, not a tracing limit). So one un-traceable
 #: kernel cannot stall the whole e2e sweep. Env-overridable for slow machines.
 JAX_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_JAX_FORK_TIMEOUT_S", "180"))
+#: Wall-clock cap (seconds) on a forked Python/JIT-backend child (numba / pythran / cupy). It
+#: covers the WHOLE leg -- emit, the backend compile, import and run -- so it must clear
+#: pythran's own per-kernel compile budget (``compile_timeout_s``), which reports its own
+#: skip first; this deadline is the outer backstop for a wedged JIT or a hung run.
+PY_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_PY_FORK_TIMEOUT_S", "600"))
 #: Wall-clock cap (seconds) on a forked native-invoke child (C/C++/Fortran/pluto). A
 #: miscompiled kernel can spin forever -- e.g. a Pluto transform that yields an
 #: unbounded loop -- and the parent otherwise blocks on the result pipe indefinitely.
@@ -743,17 +748,28 @@ def _dep_available(dep: str) -> bool:
 
 
 def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
-    """Validate a Python/JIT backend (numba/pythran/cupy) vs numpy.
+    """Validate a Python/JIT backend (numba/pythran/cupy) vs numpy, in a forked child.
 
-    Skips cleanly when the dependency is absent. Emits the backend module,
-    imports it (pythran is compiled to a .so first), runs the kernel on
-    fresh input copies and compares ``compare`` outputs. numba/cupy infer
-    dtypes at runtime; pythran's export is dtype-specific, so it gets the
+    Skips cleanly when the dependency is absent; everything else -- emit, compile,
+    import, run, compare -- happens in the CHILD (see :func:`_forked_status`), because
+    the imported extension module can never be unloaded from this process.
+    """
+    import importlib.util  # noqa: F401 -- kept for the compute body below
+    _cli, _extra, _pattern, dep = PY_BACKENDS[backend]
+    if not _dep_available(dep):
+        return "skip:not-installed"
+    return _forked_status(
+        lambda: _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec),
+        PY_FORK_TIMEOUT_S)
+
+
+def _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
+    """Emit + compile + import + run + compare a Python/JIT backend. Runs ONLY in the forked child.
+
+    numba/cupy infer dtypes at runtime; pythran's export is dtype-specific, so it gets the
     precision override."""
     import importlib.util
     cli, extra, pattern, dep = PY_BACKENDS[backend]
-    if not _dep_available(dep):
-        return "skip:not-installed"
     npy = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
     from optarena.emit_bridge import bench_info_tempfile
     # bench_info JSON synthesized from the co-located YAML (corpus retired).
@@ -858,35 +874,37 @@ def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, ato
         return "ok"
 
 
-def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
-    """Validate the NumpyToJAX emitter vs numpy, in a forked child.
+def _forked_status(compute, timeout_s: float) -> str:
+    """Run ``compute()`` in a forked child and pipe its status string back.
 
-    JAX is multithreaded, and importing it poisons the parent's ``os.fork``
-    used to isolate the C/C++/Fortran ctypes calls (fork-after-threads
-    deadlocks). So the parent NEVER imports jax: it forks, and the child does
-    the whole emit + run + compare and pipes back the status string. The
-    availability check uses ``find_spec`` (no import).
+    Every compiled / JIT backend runs in a CHILD, never in this process:
+
+    * an imported extension module can NEVER be unloaded (pythran compiles each kernel to
+      its own ``.so``), so importing one per kernel grows the worker's RSS monotonically
+      across the sweep -- ~180 modules in one worker is what OOM-SIGTERM'd the CI job
+      before it could even print which tests failed. The child's exit reclaims all of it.
+    * a segfaulting kernel kills only the child, scoring one ``FAIL:crash:SIGn``, instead
+      of taking the pytest worker (and the whole sweep's summary) down with it.
+    * JAX additionally must never be imported by the parent: it is multithreaded, and
+      fork-after-threads deadlocks the ``os.fork`` the C/C++/Fortran ctypes calls use.
+
+    Bounded by ``timeout_s``: a kernel that hangs (an untraceable JAX loop, a wedged JIT)
+    is SIGKILLed and reported ``skip:too-long`` rather than stalling the sweep.
     """
-    import importlib.util
-    if importlib.util.find_spec("jax") is None:
-        return "skip:not-installed"
     r, w = os.pipe()
     pid = os.fork()
-    if pid == 0:  # child (jax lives here only)
+    if pid == 0:  # child
         os.close(r)
         try:
-            res = _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec)
+            res = compute()
         except Exception as exc:  # noqa: BLE001
             res = f"FAIL:{type(exc).__name__}"
         try:
             os.write(w, res.encode()[:4096])
         finally:
             os._exit(0)
-    os.close(w)  # parent (stays jax-free)
-    # Bound the wait: a kernel JAX cannot trace (data-dependent / unbounded loop) hangs
-    # the child forever, so poll the pipe against a deadline and SIGKILL on timeout --
-    # otherwise an un-timed CI run would stall the whole e2e job on one kernel.
-    deadline = time.monotonic() + JAX_FORK_TIMEOUT_S
+    os.close(w)  # parent
+    deadline = time.monotonic() + timeout_s
     chunks = []
     while True:
         remaining = deadline - time.monotonic()
@@ -909,6 +927,16 @@ def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_
     if os.WIFSIGNALED(st):
         return f"FAIL:crash:SIG{os.WTERMSIG(st)}"
     return b"".join(chunks).decode() or "FAIL:no-result"
+
+
+def _run_jax_backend(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
+    """Validate the NumpyToJAX emitter vs numpy, in a forked child (see :func:`_forked_status`;
+    the parent stays jax-free, so the availability check uses ``find_spec`` -- no import)."""
+    import importlib.util
+    if importlib.util.find_spec("jax") is None:
+        return "skip:not-installed"
+    return _forked_status(lambda: _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec),
+                          JAX_FORK_TIMEOUT_S)
 
 
 def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec: str) -> str:
