@@ -1006,6 +1006,13 @@ class _FortranBodyEmitter(BaseEmitter):
         # ``d`` carries no registry dtype).
         if self._expr_is_integer(branch) and self._expr_is_real(partner):
             return f"real({self.emit_expr(branch)}, {self._rk})"
+        # merge() is equally strict on COMPLEX. numpy's ``x.real if c else x`` yields a real (or
+        # int) branch beside a complex partner -- QE vexx_k's
+        # ``deexx[ikb].real if gamma_only else deexx[ikb]``. C's ternary promotes real->complex
+        # silently; merge does not. Promote the non-complex branch to complex of the kernel kind,
+        # mirroring the int->real promotion above (cmplx accepts a real OR integer first arg).
+        if not self._operand_is_complex(branch) and self._operand_is_complex(partner):
+            return f"cmplx({self.emit_expr(branch)}, 0.0_{self._rk}, {self._rk})"
         return self.emit_expr(branch)
 
     def _expr_is_real(self, e: ast.AST) -> bool:
