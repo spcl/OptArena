@@ -1615,6 +1615,19 @@ def _harvest_local_shapes(tree: ast.AST,
         if not isinstance(target, ast.Name):
             continue
         rhs = stmt.value
+        # ``X = np.zeros(.., dtype=..) if cond else None`` -- vexx_k's ``deexx``,
+        # allocated only in the ultrasoft / PAW branch. The shape + dtype live in
+        # the constructor branch of the ternary; unwrap to it so the local is
+        # typed / sized like a direct ``X = np.zeros(..)``. Without this the local
+        # falls through untyped and defaults to real though it is np.complex128 --
+        # C narrows the complex accumulation silently (safe only while the branch
+        # is dead), but C++ rejects the complex->real assignment at compile.
+        if isinstance(rhs, ast.IfExp):
+            ctor = [b for b in (rhs.body, rhs.orelse) if isinstance(b, ast.Call)]
+            none_br = [b for b in (rhs.body, rhs.orelse)
+                       if isinstance(b, ast.Constant) and b.value is None]
+            if len(ctor) == 1 and len(none_br) == 1:
+                rhs = ctor[0]
         # Name = Name alias -- inherit shape and dtype from the source.
         if isinstance(rhs, ast.Name):
             src_shape = shape_table.get(rhs.id)
@@ -3650,6 +3663,17 @@ def _walk_complex(node: ast.AST, name_dtype: "Callable[[str], Optional[str]]") -
               else node.func.id if isinstance(node.func, ast.Name) else None)
         if fn in _REAL_FROM_COMPLEX:
             return None
+        # An explicit complex ``dtype=`` (``np.zeros((n,), dtype=np.complex128)``)
+        # or ``.astype(np.complex128)`` PRODUCES a complex value even when no
+        # operand is complex -- the dtype lives in a KEYWORD, not node.args, so
+        # inspect it directly. Without this a complex array whose only visible
+        # write is its zero-init (vexx_k's ``deexx``) reads as real and the
+        # complex->real narrowing pass unsoundly demotes it (compiles in C by
+        # dropping the imaginary part, but C++ rejects the assignment).
+        from numpyto_common.frontend import _dtype_from_constructor
+        ctor_dt = _dtype_from_constructor(node)
+        if ctor_dt is not None and ctor_dt.startswith("complex"):
+            return ctor_dt
         for a in node.args:
             r = _walk_complex(a, name_dtype)
             if r:
