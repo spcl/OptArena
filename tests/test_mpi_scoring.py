@@ -285,12 +285,12 @@ extern "C" void scaled_add_mpi(
 """
 
 
-def test_distributed_scaled_add_device_cuda_source_scores_solved():
+def test_distributed_scaled_add_device_cuda_source_scores_solved(mpi_c):
     """REAL GPU run of the C/CUDA driver device path: nvcc builds the portable-shim driver + the
     agent's CUDA ``kernel_mpi``; the driver mirrors each rank's tile on the GPU (H2D untimed), runs
     the device kernel on the device pointers, copies outputs back (D2H untimed), gathers, and grades
     bit-exact vs the NumPy reference. The distribution is the exact one the noop optimizer serves.
-    Gated on a usable GPU + nvcc + the MPICH toolchain."""
+    Gated on a usable GPU + nvcc + a real MPI toolchain (the ``mpi_c`` fixture -- MPICH or OpenMPI)."""
     if not _cuda_available():
         pytest.skip("no CUDA device / cupy")
     if not _nvcc_available():
@@ -339,14 +339,14 @@ extern "C" void scaled_add_mpi(
 """
 
 
-def test_distributed_scaled_add_mixed_host_device_scores_solved():
+def test_distributed_scaled_add_mixed_host_device_scores_solved(mpi_c):
     """REAL GPU run of a genuine MIXED-residency kernel: input ``x`` host, output ``y`` device, in one
     ``kernel_mpi`` call. The driver bakes ``g_on_device[] = { 0, 1 }`` (x host, y device), passes ``x``
     as ``work[0]`` (host) and ``y`` as ``dwork[1]`` (GPU mirror), and the CUDA kernel bridges the host
     input to the device itself. Proves the per-array ``location`` mask drives a real host+device mix
     end-to-end -- not just codegen/staging. ``mpi.residency`` is left at its host default; the single
     ``location: "device"`` on ``y`` alone routes the CUDA build and delivers the device pointer.
-    Gated on a usable GPU + nvcc + the MPICH toolchain."""
+    Gated on a usable GPU + nvcc + a real MPI toolchain (the ``mpi_c`` fixture -- MPICH or OpenMPI)."""
     if not _cuda_available():
         pytest.skip("no CUDA device / cupy")
     if not _nvcc_available():

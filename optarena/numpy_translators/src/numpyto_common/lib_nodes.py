@@ -3391,11 +3391,6 @@ def _expand_einsum_ellipsis(spec: str, ranks: List[int]) -> str:
     return ",".join(new_ins) + "->" + rhs.replace("...", ell)
 
 
-#: Monotone counter for the scratch buffers ``expand_einsum`` spills a
-#: non-Name operand into. Global so every materialised temp across a kernel's
-#: einsum calls gets a unique name (two distinct-shape operands must not alias).
-_EINSUM_OP_TEMP = [0]
-
 #: Counter for the scratch buffers :func:`_materialize_operands` spills non-Name operands into.
 _OP_SPILL_TEMP = [0]
 
