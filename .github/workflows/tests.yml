@@ -362,6 +362,16 @@ jobs:
     name: mpi (distributed track -- descriptor + codegen + launch + scoring)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # OpenMPI on a GH-Actions runner has no high-speed fabric (no InfiniBand / UCX device), so pin
+      # the simple self + shared-memory transports and disable UCX's VFS probe -- otherwise MPI_Init
+      # selects a missing transport and the REAL multi-rank launches (Phase 3) fail or hang. The
+      # rmaps oversubscribe knob lets R ranks share the 4 CI cores (belt-and-suspenders with the
+      # launcher's mpirun --oversubscribe).
+      OMPI_MCA_pml: ob1
+      OMPI_MCA_btl: self,vader
+      OMPI_MCA_rmaps_base_oversubscribe: "1"
+      UCX_VFS_ENABLE: "n"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
