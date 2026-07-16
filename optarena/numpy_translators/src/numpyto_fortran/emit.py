@@ -81,6 +81,17 @@ def _double_kind() -> str:
 #: The dtype-registry tag for the ABI integer (the size-symbol / default int
 #: kind), resolved FROM the registry so a width change (int->int64) needs no edit
 #: here -- it is the int tag whose Fortran kind equals that of canonical ``int``.
+#: Calls whose Fortran result is INTEGER. ``int``/``len``/``floor``/``ceil``/``round`` map to
+#: INT / SIZE / FLOOR / CEILING / NINT, which return integer unconditionally; the
+#: :data:`_INT_CALLS_ARGDEP` subset (MAX / MIN and the int helpers) is integer only when every
+#: argument is. Shared by the min/max operand typing and :meth:`_expr_is_integer` so the two
+#: cannot drift -- they disagreed before, and merge() then real-promoted an integer branch
+#: sitting beside an ``int(..)`` cast (bfs).
+_INT_RETURNING_CALLS = {
+    "int", "len", "max", "min", "floor", "ceil", "round", "ceiling", "nint", "int_floor", "python_mod"
+}
+_INT_CALLS_ARGDEP = {"max", "min", "int_floor", "python_mod"}
+
 _SYMBOL_INT_TAG = next((t for t in ("int64", "int32", "int16", "int8") if _fortran_type(t) == _fortran_type("int")),
                        "int64")
 
@@ -982,7 +993,46 @@ class _FortranBodyEmitter(BaseEmitter):
             if not self._expr_is_integer(partner):
                 lit = f"{litval}.0_{self._rk}"
                 return f"({lit})" if litval < 0 else lit
+        # The same TYPE strictness for an integer branch the literal path cannot spell -- a
+        # name / subscript / arithmetic. ``np.where(cdf > 0, cdf, npix)``
+        # (histogram_equalization) would emit ``merge(cdf(..), npix, ..)``, which gfortran
+        # rejects ("'fsource' argument of 'merge' must be the same type and kind as
+        # 'tsource'"). numpy promotes the integer operand to the real result dtype, so
+        # convert it the same way -- ``real(npix, rk)``.
+        #
+        # The partner must be PROVABLY real, not merely "not provably integer": the latter
+        # also covers un-inferable expressions, and promoting against one breaks a pair that
+        # is really int/int (bfs's ``np.where(nxt, d + 1, level)``, where the plain int local
+        # ``d`` carries no registry dtype).
+        if self._expr_is_integer(branch) and self._expr_is_real(partner):
+            return f"real({self.emit_expr(branch)}, {self._rk})"
         return self.emit_expr(branch)
+
+    def _expr_is_real(self, e: ast.AST) -> bool:
+        """True only when ``e`` is PROVABLY a real-typed Fortran expression.
+
+        Deliberately NOT the complement of :meth:`_expr_is_integer`: that predicate is
+        conservative, so ``not _expr_is_integer(x)`` means "real OR un-inferable" and acting
+        on it promotes integer pairs by mistake. This answers the positive question and stays
+        False when unsure."""
+        if isinstance(e, ast.Constant):
+            return isinstance(e.value, float)
+        if isinstance(e, (ast.Name, ast.Subscript)):
+            base = e
+            while isinstance(base, ast.Subscript):
+                base = base.value
+            if not isinstance(base, ast.Name) or self._name_int_kind(base.id) is not None:
+                return False
+            for decl in (*self.kir.arrays, *self.kir.scalars):
+                if decl.name == base.id:
+                    # Real iff the registry says the dtype is neither integer nor logical.
+                    return self._int_tag(decl.dtype) is None and decl.dtype != "bool"
+            return False
+        if isinstance(e, ast.UnaryOp):
+            return self._expr_is_real(e.operand)
+        if isinstance(e, ast.BinOp):
+            return self._expr_is_real(e.left) or self._expr_is_real(e.right)
+        return False
 
     def _expr_is_integer(self, e: ast.AST) -> bool:
         """True if ``e`` is an integer-typed Fortran expression (so a merge()
@@ -998,6 +1048,17 @@ class _FortranBodyEmitter(BaseEmitter):
             return self._expr_is_integer(e.operand)
         if isinstance(e, ast.BinOp) and not isinstance(e.op, ast.Div):
             return self._expr_is_integer(e.left) and self._expr_is_integer(e.right)
+        if isinstance(e, ast.Call):
+            # An int-returning call is INTEGER -- the same rule the min/max operand typing
+            # uses. Without it an ``int(..)`` cast read as non-integer, so a merge() partner
+            # that IS an integer got real-promoted beside it and gfortran rejected the
+            # mismatched pair (bfs: ``np.where(nxt, d + 1, level)``).
+            fn = (e.func.id if isinstance(e.func, ast.Name) else (e.func.attr if isinstance(e.func, ast.Attribute)
+                                                                  else ""))
+            if fn in _INT_RETURNING_CALLS:
+                if fn in _INT_CALLS_ARGDEP:
+                    return all(self._expr_is_integer(a) for a in e.args)
+                return True
         return False
 
     def _emit_subscript(self, node: ast.Subscript) -> str:
@@ -1548,6 +1609,14 @@ class _FortranBodyEmitter(BaseEmitter):
         """Recursively look for the first typed integer Name reachable
         through Subscript / BinOp / UnaryOp / Call args. Returns the
         first concrete int dtype tag (or None)."""
+        # An explicit ``int(x)`` is a TYPECAST that RESETS the kind: it emits
+        # ``INT(x, c_int64_t)``, so the result is the canonical ABI integer no matter how
+        # narrow ``x`` is. Descending into it reports the OPERAND's kind instead --
+        # histogram_equalization's ``max(0, int(.. flat[i] ..))`` picked int32 off the uint8
+        # ``flat`` and emitted ``max(0_c_int32_t, INT(.., c_int64_t))``, which gfortran
+        # rejects as "Different type kinds" under -std=f2018.
+        if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "int":
+            return _SYMBOL_INT_TAG
         for sub in ast.walk(expr):
             if isinstance(sub, ast.Name):
                 k = self._name_int_kind(sub.id)
@@ -1635,12 +1704,9 @@ class _FortranBodyEmitter(BaseEmitter):
                 # which return integer in Fortran.
                 fn = (e.func.id if isinstance(e.func, ast.Name) else
                       (e.func.attr if isinstance(e.func, ast.Attribute) else ""))
-                if fn in {
-                        "int", "len", "max", "min", "floor", "ceil", "round", "ceiling", "nint", "int_floor",
-                        "python_mod"
-                }:
+                if fn in _INT_RETURNING_CALLS:
                     # max/min/floor/ceil are int-returning iff their args are.
-                    if fn in {"max", "min", "int_floor", "python_mod"}:
+                    if fn in _INT_CALLS_ARGDEP:
                         return all(is_int(a) for a in e.args)
                     return True
                 return False
