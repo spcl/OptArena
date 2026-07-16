@@ -116,6 +116,22 @@ RUN set -eu; \
         --no-binary=mpi4py -r /requirements/${HW}.txt; \
     fi
 
+# DaCe: editable install of spcl/dace @ extended -- the branch OptArena develops against -- NOT the
+# PyPI wheel, exactly as .github/actions/setup does for every other job. The stock wheel is an old
+# release whose dace/dtypes.py evaluates ``typeclass(numpy.int)`` at IMPORT, and ``np.int`` was
+# removed in numpy 2 (cpu.txt pins numpy>=2), so a PyPI dace made ``import dace`` -- the image smoke
+# test -- die outright. (The native no-cmake build mode extended also carries stays opt-in via
+# DACE_compiler_build_mode, as in the setup action; the image keeps the default.)
+# --recurse-submodules is REQUIRED: dace vendors its runtime headers as git submodules
+# (external/moodycamel/blockingconcurrentqueue.h is included by dace/runtime/include/dace/stream.h),
+# so a plain clone builds an SDFG straight into "fatal error: ... blockingconcurrentqueue.h: No such
+# file or directory". This is why the fork cannot be a ``git+https`` line in the requirement files:
+# pip does not recurse submodules.
+RUN set -eu; \
+    git clone --depth 1 --recurse-submodules --shallow-submodules \
+      --branch extended https://github.com/spcl/dace.git /opt/dace; \
+    python3 -m pip install --break-system-packages --no-cache-dir -e /opt/dace
+
 # DIVERGENCE PICKS for the tail:
 #  * LC_ALL=C -- set by every .def %environment; the old .Dockerfiles omitted it. Kept for a
 #    deterministic C locale (reproducible numeric/formatting output).

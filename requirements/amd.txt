@@ -18,7 +18,9 @@ tree-sitter-language-pack
 psutil
 py-cpuinfo
 GPUtil
-dace
+# dace is NOT the PyPI wheel (an old release that imports the numpy-2-removed
+# ``np.int`` and fails under numpy>=2) -- the container clones spcl/dace@extended
+# editable with submodules, mirroring .github/actions/setup. See the Dockerfile.
 numba
 pythran
 cupy-rocm

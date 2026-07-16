@@ -40,6 +40,13 @@ From: ubuntu:26.04
     # prebuilt wheel is multi-ABI and auto-selects OpenMPI, silently mismatching MPICH).
     # --pre (for apache-tvm) lives in optional.txt itself.
     python3 -m pip install --break-system-packages --no-cache-dir --no-binary=mpi4py -r /requirements/optional.txt
+    # DaCe: editable install of spcl/dace @ extended (the branch OptArena develops against), NOT the
+    # PyPI wheel -- the stock release evaluates the numpy-2-removed ``typeclass(numpy.int)`` at import
+    # and dies under cpu.txt's numpy>=2. --recurse-submodules is REQUIRED (dace vendors its runtime
+    # headers as submodules), which is why it cannot be a requirements line -- pip does not recurse.
+    # Kept in step with containers/optarena.Dockerfile, the recipe this .def is the revert for.
+    git clone --depth 1 --recurse-submodules --shallow-submodules --branch extended https://github.com/spcl/dace.git /opt/dace
+    python3 -m pip install --break-system-packages --no-cache-dir -e /opt/dace
 
 %environment
     export LC_ALL=C
