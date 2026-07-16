@@ -97,11 +97,11 @@ def initialize(num_tasks, npts, seed, datatype=np.float64):
         rab[task, 1] = -0.11 + 0.012 * float((task + 1) % 4)
         rab[task, 2] = 0.06 - 0.010 * float((task + 2) % 3)
 
-        case = angular_cases[task % len(angular_cases)]
-        la_min[task] = case[0]
-        la_max[task] = case[1]
-        lb_min[task] = case[2]
-        lb_max[task] = case[3]
+        angular_case = angular_cases[task % len(angular_cases)]
+        la_min[task] = angular_case[0]
+        la_max[task] = angular_case[1]
+        lb_min[task] = angular_case[2]
+        lb_max[task] = angular_case[3]
 
     dh = np.zeros((3, 3), dtype=np.float64)
     dh_inv = np.zeros((3, 3), dtype=np.float64)
@@ -188,21 +188,21 @@ def cp2k_grid_integrate(
 
         for idir in range(3):
             for icoef in range(MAX_LP + 1):
-                for ig in range(2 * MAX_CUBE_RADIUS + 1):
-                    pol[task, idir, icoef, ig] = 0.0
+                for grid_offset in range(2 * MAX_CUBE_RADIUS + 1):
+                    pol[task, idir, icoef, grid_offset] = 0.0
             for lxb in range(MAX_L + 1):
                 for lxa in range(MAX_L + 1):
-                    for ls in range(MAX_LP + 1):
-                        alpha[task, idir, lxb, lxa, ls] = 0.0
+                    for alpha_order in range(MAX_LP + 1):
+                        alpha[task, idir, lxb, lxa, alpha_order] = 0.0
 
         for lzp in range(MAX_LP + 1):
             for lyp in range(MAX_LP + 1):
                 for lxp in range(MAX_LP + 1):
                     cxyz[task, lzp, lyp, lxp] = 0.0
 
-        for jco in range(MAX_COSET):
-            for ico in range(MAX_COSET):
-                cab[task, jco, ico] = 0.0
+        for cab_row in range(MAX_COSET):
+            for cab_col in range(MAX_COSET):
+                cab[task, cab_row, cab_col] = 0.0
 
         zetp = zeta[task] + zetb[task]
         f = zetb[task] / zetp
