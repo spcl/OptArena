@@ -304,27 +304,35 @@ def measure_baselines(task: Task,
     out: Dict[str, int] = {}
     if baseline_uses_numpy(baseline):
         out["numpy"] = _time_numpy(spec, data, repeat, warmup=warmup)
-    compiled = baseline_compiled(baseline)  # None | (label, language, compiler, mode)
+    compiled = baseline_compiled(baseline)  # None | (label, language, candidate compilers, mode)
     if compiled is not None:
-        label, lang, compiler, mode = compiled
+        label, lang, compilers, mode = compiled
         timeout = float(config.get("timeouts.kernel_s", 300))
         memory_gb = float(config.get("limits.kernel_memory_gb", 10))
-        try:
-            _, c_ns, _, _ = run_compiled_reference(spec,
-                                                   task,
-                                                   binding,
-                                                   data, [],
-                                                   repeat,
-                                                   timeout,
-                                                   memory_gb,
-                                                   language=lang,
-                                                   mode=mode,
-                                                   compiler=compiler or None,
-                                                   warmup=warmup)
-            out[label] = c_ns
-        except RuntimeError:  # kernel doesn't emit / the autopar build failed -> fall back to numpy
-            if "numpy" not in out:
-                out["numpy"] = _time_numpy(spec, data, repeat, warmup=warmup)
+        # Strongest baseline: time every AVAILABLE candidate compiler and keep the fastest
+        # (min) as the denominator. A missing compiler / a kernel that will not build under
+        # it just raises RuntimeError and is skipped; if none build, fall back to numpy.
+        best_ns = None
+        for compiler in compilers:
+            try:
+                _, c_ns, _, _ = run_compiled_reference(spec,
+                                                       task,
+                                                       binding,
+                                                       data, [],
+                                                       repeat,
+                                                       timeout,
+                                                       memory_gb,
+                                                       language=lang,
+                                                       mode=mode,
+                                                       compiler=compiler or None,
+                                                       warmup=warmup)
+            except RuntimeError:
+                continue
+            best_ns = c_ns if best_ns is None else min(best_ns, c_ns)
+        if best_ns is not None:
+            out[label] = best_ns
+        elif "numpy" not in out:
+            out["numpy"] = _time_numpy(spec, data, repeat, warmup=warmup)
     return out
 
 
@@ -496,23 +504,33 @@ def score(submission: Submission,
                 baseline_samples["c"] = c_samples
 
     # A ``*-autopar`` baseline: the auto-parallelized compiled reference (multi-core), timing only.
+    # Strongest baseline: time every AVAILABLE candidate compiler and keep the fastest sample set
+    # as the denominator. A missing compiler / a kernel that won't build under it is skipped; if
+    # none build, fall back to numpy.
     if plan.bl_is_autopar:
-        label, lang, compiler, _mode = plan.compiled
-        try:
-            _, a_ns, _, a_samples = run_compiled_reference(spec,
-                                                           task,
-                                                           binding,
-                                                           data, [],
-                                                           repeat,
-                                                           timeout,
-                                                           memory_gb,
-                                                           language=lang,
-                                                           mode=Mode.MULTI_CORE,
-                                                           compiler=compiler or None,
-                                                           warmup=timing.warmup_count())
-            baselines[label] = a_ns
-            baseline_samples[label] = a_samples
-        except RuntimeError:  # kernel doesn't emit / the autopar build failed -> numpy fallback
+        label, lang, compilers, _mode = plan.compiled
+        best_samples = None
+        for compiler in compilers:
+            try:
+                _, _a_ns, _, a_samples = run_compiled_reference(spec,
+                                                                task,
+                                                                binding,
+                                                                data, [],
+                                                                repeat,
+                                                                timeout,
+                                                                memory_gb,
+                                                                language=lang,
+                                                                mode=Mode.MULTI_CORE,
+                                                                compiler=compiler or None,
+                                                                warmup=timing.warmup_count())
+            except RuntimeError:
+                continue
+            if best_samples is None or min(a_samples) < min(best_samples):
+                best_samples = a_samples
+        if best_samples is not None:
+            baselines[label] = min(best_samples)
+            baseline_samples[label] = best_samples
+        else:
             _numpy_baseline_fallback()
 
     # Primary baseline for the scalar speedup row: numpy if timed, else C.
@@ -1129,28 +1147,32 @@ def score_cells(submission: Submission,
                 c_ctx.__exit__(None, None, None)
                 c_ctx = None
 
-        # Build the ``*-autopar`` baseline reference once (multi-core, forced compiler -> Polly /
-        # GCC autopar), kept open across cells. Unavailable -> numpy fallback per cell.
-        bl_lib = None
-        bl_ctx = None
+        # Build the ``*-autopar`` baseline reference(s) once (multi-core, forced compiler -> Polly /
+        # GCC autopar), kept open across cells. Strongest baseline: build EVERY available candidate
+        # compiler; each cell then times all of them and credits the fastest. A missing compiler / a
+        # candidate that won't build is skipped; none available -> numpy fallback per cell.
+        bl_libs = []  # [(compiler, lib)] for the candidates that built
+        bl_ctxs = []
         if plan.bl_is_autopar:
-            try:
-                atask = replace(task, language=plan.bl_lang, source_mode="restricted", residency="host")
-                bl_ctx = Sandbox(binding)
-                absb = bl_ctx.__enter__()
-                ok, lib, _log = build_reference_lib(absb.root,
-                                                    spec,
-                                                    task,
-                                                    binding,
-                                                    language=plan.bl_lang,
-                                                    mode=Mode.MULTI_CORE,
-                                                    compiler=(plan.compiled[2] or None))
-                bl_lib = lib if ok else None
-            except Exception:  # noqa: BLE001 -- autopar reference unavailable -> numpy fallback per cell
-                bl_lib = None
-            if bl_lib is None and bl_ctx is not None:
-                bl_ctx.__exit__(None, None, None)
-                bl_ctx = None
+            for compiler in plan.compiled[2]:
+                ctx = None
+                try:
+                    ctx = Sandbox(binding)
+                    absb = ctx.__enter__()
+                    ok, lib, _log = build_reference_lib(absb.root,
+                                                        spec,
+                                                        task,
+                                                        binding,
+                                                        language=plan.bl_lang,
+                                                        mode=Mode.MULTI_CORE,
+                                                        compiler=(compiler or None))
+                except Exception:  # noqa: BLE001 -- this candidate is unavailable / won't build
+                    ok, lib = False, None
+                if ok and lib is not None:
+                    bl_libs.append((compiler, lib))
+                    bl_ctxs.append(ctx)
+                elif ctx is not None:
+                    ctx.__exit__(None, None, None)
 
         determinism_ok = None  # computed once on the first correct cell
         try:
@@ -1199,12 +1221,18 @@ def score_cells(submission: Submission,
                             baseline_samples["c"] = c_samples
                     except RuntimeError:
                         c_outputs = None
-                if bl_lib is not None:  # the *-autopar baseline reference (timing only)
-                    try:
-                        _, a_samples, bl_peak = _run(bl_lib, plan.bl_lang, data, reps, warmup=warmup)
-                        baseline_samples[plan.bl_label] = a_samples
-                    except RuntimeError:
-                        pass
+                if bl_libs:  # the *-autopar baseline reference(s) (timing only) -- credit the fastest
+                    best = None  # (min_ns, samples, peak) of the fastest candidate at this cell
+                    for _compiler, lib in bl_libs:
+                        try:
+                            _, a_samples, a_peak = _run(lib, plan.bl_lang, data, reps, warmup=warmup)
+                        except RuntimeError:
+                            continue
+                        if best is None or min(a_samples) < best[0]:
+                            best = (min(a_samples), a_samples, a_peak)
+                    if best is not None:
+                        baseline_samples[plan.bl_label] = best[1]
+                        bl_peak = best[2]
                 # A compiled baseline wanted but unavailable at this cell -> numpy fallback. Warm it
                 # like the submission + the other baselines: when it is the ONLY timed baseline an
                 # unwarmed cold rep would bias the ratio (esp. the distributional backend).
@@ -1291,6 +1319,6 @@ def score_cells(submission: Submission,
         finally:
             if c_ctx is not None:
                 c_ctx.__exit__(None, None, None)
-            if bl_ctx is not None:
-                bl_ctx.__exit__(None, None, None)
+            for ctx in bl_ctxs:
+                ctx.__exit__(None, None, None)
     return results

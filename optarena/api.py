@@ -57,10 +57,11 @@ class Baseline(str, Enum):
     """The speedup denominator (what the submission is timed against).
 
     ``numpy`` / ``c`` and the three per-language auto-parallelizing compiled references
-    (``*-autopar``: the reference built ``Mode.MULTI_CORE`` with Polly for c/cpp, GCC
-    autopar for fortran). A denominator is ONE reference -- there is no "both".
+    (``*-autopar``: the reference built ``Mode.MULTI_CORE`` with the STRONGEST available
+    autopar compiler -- Polly or GCC autopar for c/cpp, GCC autopar for fortran). A
+    denominator is ONE reference -- there is no "both".
 
-    The per-kernel-track auto-default (foundation -> ``c-autopar``, ml / hpc -> ``numpy``)
+    The per-kernel-track auto-default (foundation / hpc -> ``c-autopar``, ml -> ``numpy``)
     is NOT a member here: pass ``baseline=None`` (or the ``"auto"`` boundary token on the
     CLI / config / wire) and :func:`optarena.harness.grading.resolve_baseline` picks the
     concrete kind per kernel.
