@@ -4,11 +4,11 @@
 
 The dense native translator shares one emit step for c/cpp/fortran; numba, pythran
 and jax each emit from the numpy source INDEPENDENTLY. So a kernel the native path
-can't lower yet (QE ``vexx_k``'s ``np.linalg.inv``/``det`` + None-literal call arg)
-must still be validated under jax/numba rather than short-circuiting the whole
-oracle to ``FAIL:emit`` for every backend. Pluto, which transforms the emitted C,
-inherits the native failure -- but as a SKIP (the gap is already the ``c`` FAIL),
-not a duplicate FAIL.
+can't lower yet must still be validated under jax/numba rather than short-circuiting
+the whole oracle to ``FAIL:emit`` for every backend. The forced-failure tests below
+monkeypatch the shared emit (``cond_reduce_sum``) to exercise this deterministically.
+Pluto, which transforms the emitted C, inherits the native failure -- but as a SKIP
+(the gap is already the ``c`` FAIL), not a duplicate FAIL.
 """
 import pytest
 
@@ -45,18 +45,23 @@ def test_jax_only_request_is_not_blocked_by_native_emit(monkeypatch):
     assert res["jax"] == "ok"
 
 
-def test_vexx_k_validates_under_jax_and_numba_despite_native_gap():
-    """The real motivating kernel: vexx_k's native emit genuinely fails (np.linalg
-    .inv/det + None-literal call args in the vcut path), but jax validates it
-    bit-exact against numpy at the S preset. numba emits its OWN module (so it does
-    not inherit the native FAIL) yet cannot JIT the ultrasoft augmentation tables,
-    so it legitimately SKIPs -- the point is the native gap does not short-circuit
-    the independently-emitted backends to FAIL."""
+def test_vexx_k_validates_on_every_native_backend_and_jax():
+    """vexx_k -- QE exact-exchange, the corpus's densest complex kernel -- now
+    emits + validates bit-exact on C, C++ AND Fortran (and jax). Its ultrasoft/PAW
+    non-local potential accumulator ``deexx = np.zeros(.., dtype=np.complex128) if
+    (okvan or okpaw) else None`` used to be typed REAL: C compiled it only because
+    that branch is dead for the default config (the complex->real narrowing never
+    ran), and C++ rejected the narrowing outright. The complex zero-init is now
+    typed complex, so this is a regression guard for that fix. numba emits its own
+    module but cannot JIT the augmentation tables, so it legitimately SKIPs."""
     pytest.importorskip("jax")
-    res = no.run_kernel("vexx_k", "S", only_backends={"c", "numba", "jax"})
-    assert res["c"] == "FAIL:emit"
-    assert res["jax"] == "ok"
-    # Decoupled: numba is NOT a FAIL inherited from the native path (ok or skip).
+    res = no.run_kernel("vexx_k", "S", only_backends={"c", "cpp", "fortran", "numba", "jax"})
+    assert res["c"] == "ok", res["c"]
+    assert res["cpp"] == "ok", res["cpp"]
+    assert res["fortran"] == "ok", res["fortran"]
+    assert res["jax"] == "ok", res["jax"]
+    # numba emits independently of the native path; it cannot JIT the ultrasoft
+    # tables, so it SKIPs -- never a FAIL inherited from native.
     assert res["numba"] == "ok" or res["numba"].startswith("skip"), res["numba"]
 
 
