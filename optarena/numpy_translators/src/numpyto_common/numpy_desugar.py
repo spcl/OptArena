@@ -16,7 +16,7 @@ walk, which is all the batched-``@`` rewrite needs to tell a batched matmul
 """
 import ast
 import copy
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 class DesugarError(NotImplementedError):
@@ -2050,6 +2050,21 @@ class _DropValidationGuards(ast.NodeTransformer):
         return node
 
 
+
+
+
+
+
+
+
+
+def _strip_docstring_stmts(body: List[ast.stmt]) -> List[ast.stmt]:
+    return [
+        s for s in body
+        if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and isinstance(s.value.value, str))
+    ]
+
+
 #: ``np.<name>`` abstract dtype category -> the concrete dtype KINDS it covers.
 #: Used to fold ``np.issubdtype(x.dtype, np.<name>)`` to a compile-time bool.
 _ISSUBDTYPE_CATEGORY: Dict[str, set] = {
@@ -2127,6 +2142,519 @@ class _DeadBranchElim(ast.NodeTransformer):
             self.changed = True
             return node.orelse or [ast.copy_location(ast.Pass(), node)]
         return node
+
+
+#: ``sqrt(DBL_EPSILON)`` -- the forward-difference step scale MINPACK's ``fdjac2``
+#: uses (``h = sqrt(epsfcn) * |p_j|``, ``epsfcn`` defaulting to machine epsilon).
+#: :func:`_curve_fit_lm_lines` reuses the SAME rule so the emitted fit and the
+#: scipy reference share a Jacobian truncation error and converge to the same
+#: stationary point (see that function's docstring).
+_FD_STEP = "1.4901161193847656e-08"
+
+
+def _list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
+    """A 1-D ``[e0, e1, ...]`` display -> its element expressions, else None.
+
+    Only a flat list of NON-display elements qualifies: a nested list / tuple
+    element (``peaks = [(1580.0, 9.0), ...]``) is a 2-D literal this 1-D
+    array fold would mis-shape, so it is refused.
+    """
+    if not isinstance(node, ast.List):
+        return None
+    if any(isinstance(e, (ast.List, ast.Tuple, ast.Starred)) for e in node.elts):
+        return None
+    return list(node.elts)
+
+
+def _len_call_of(node: ast.AST, name: str) -> bool:
+    """``len(<name>)`` -- the list's running length."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len"
+            and len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == name)
+
+
+class _SubstLenWithIndex(ast.NodeTransformer):
+    """``len(<name>)`` -> ``<idx>`` inside an appended value expression.
+
+    In ``while len(c) < K: c.append(1200.0 + 200.0 * len(c))`` the appended value
+    reads the length AT append time, which for the element landing at index ``i``
+    is exactly ``i`` -- so the loop-index substitution is semantics-preserving.
+    """
+
+    def __init__(self, name: str, idx: str):
+        self.name = name
+        self.idx = idx
+
+    def visit_Call(self, node: ast.Call):
+        self.generic_visit(node)
+        if _len_call_of(node, self.name):
+            return ast.copy_location(ast.Name(id=self.idx, ctx=ast.Load()), node)
+        return node
+
+
+def _appended_elts(stmt: ast.stmt, name: str) -> Optional[List[ast.expr]]:
+    """One list-grow statement -> the element expressions it appends, else None.
+
+    Accepts ``name.append(e)``, ``name += [e...]`` and ``name = name + [e...]``
+    -- the three spellings the corpus uses to build a parameter vector.
+    """
+    if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+            and isinstance(stmt.value.func, ast.Attribute) and stmt.value.func.attr == "append"
+            and isinstance(stmt.value.func.value, ast.Name) and stmt.value.func.value.id == name
+            and len(stmt.value.args) == 1):
+        return [stmt.value.args[0]]
+    if (isinstance(stmt, ast.AugAssign) and isinstance(stmt.op, ast.Add) and isinstance(stmt.target, ast.Name)
+            and stmt.target.id == name):
+        return _list_display_elts(stmt.value)
+    if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id == name and isinstance(stmt.value, ast.BinOp)
+            and isinstance(stmt.value.op, ast.Add) and isinstance(stmt.value.left, ast.Name)
+            and stmt.value.left.id == name):
+        return _list_display_elts(stmt.value.right)
+    return None
+
+
+def _off_add(off: str, delta: str) -> str:
+    """``off + delta`` as a source string, folding the literal + literal case so
+    the common ``0 + 1 + 1`` prefix stays a plain ``2`` in the emitted index."""
+    try:
+        return str(int(off) + int(delta))
+    except ValueError:
+        return f"{off} + {delta}" if off != "0" else delta
+
+
+def _range_bound(node: ast.AST) -> Optional[ast.expr]:
+    """``range(E)`` -> ``E`` (single-argument form only), else None."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range"
+            and len(node.args) == 1):
+        return node.args[0]
+    return None
+
+
+def _plan_list_build(body: List[ast.stmt], start: int, name: str):
+    """Plan the fold of the list variable ``name`` built from ``body[start]``.
+
+    Returns ``(stmts, next_index)`` -- the replacement statements and the index
+    one past the last statement consumed -- or ``None`` to leave the build
+    verbatim (an unrecognised mutation; the emitter's ``List`` guard then fails
+    loudly, exactly as before this pass existed).
+
+    Recognised build shape (raman_fitting's peak-centre and initial-guess
+    preludes), in order::
+
+        name = [<scalar>, ...]              # seed display (possibly empty)
+        for v in range(E):                  # fixed number of elements per trip
+            name += [<scalar>, ...]
+        while len(name) < E:                # extend to a symbolic length
+            name.append(<expr of len(name)>)
+        name = name[:E]                     # truncate to the final length
+        name += [<scalar>, ...]
+
+    Each element's destination index is tracked as a symbolic offset, so the
+    result is a plain ``np.zeros`` + indexed stores whose length is an
+    expression in the kernel's size symbols -- ``npeaks`` is ``params.shape[0]``
+    (a RUNTIME argument in the emitted C, not a compile-time constant), so a
+    fixed-length literal array would be wrong for any preset with a different K.
+    """
+    seed = _list_display_elts(body[start].value)
+    if seed is None:
+        return None
+    # (kind, base_offset, payload) segments in build order.
+    segs: List[Tuple[str, str, object]] = [("lit", "0", seed)]
+    off = _off_add("0", str(len(seed)))
+    trunc: Optional[str] = None
+    all_int = all(isinstance(e, ast.Constant) and isinstance(e.value, int) and not isinstance(e.value, bool)
+                  for e in seed)
+    j = start + 1
+    while j < len(body):
+        stmt = body[j]
+        elts = _appended_elts(stmt, name)
+        if elts is not None:  # straight-line append / extend
+            if trunc is not None:
+                return None  # a grow AFTER the truncate: length no longer well defined
+            segs.append(("lit", off, elts))
+            off = _off_add(off, str(len(elts)))
+            all_int = all_int and all(isinstance(e, ast.Constant) and isinstance(e.value, int) for e in elts)
+            j += 1
+            continue
+        # ``for v in range(E): name += [...]`` -- a fixed stride per trip.
+        if isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name) and not stmt.orelse:
+            bound = _range_bound(stmt.iter)
+            if bound is None:
+                return None
+            per: List[ast.expr] = []
+            for sub in stmt.body:
+                got = _appended_elts(sub, name)
+                if got is None:
+                    return None  # loop does more than grow the list -> not ours
+                per.extend(got)
+            if not per or trunc is not None:
+                return None
+            segs.append(("for", off, (stmt.target.id, ast.unparse(bound), per)))
+            off = _off_add(off, f"{len(per)} * ({ast.unparse(bound)})")
+            all_int = False
+            j += 1
+            continue
+        # ``while len(name) < E: name.append(<expr>)`` -- extend to length E.
+        if (isinstance(stmt, ast.While) and isinstance(stmt.test, ast.Compare) and len(stmt.test.ops) == 1
+                and isinstance(stmt.test.ops[0], ast.Lt) and _len_call_of(stmt.test.left, name)
+                and len(stmt.body) == 1):
+            got = _appended_elts(stmt.body[0], name)
+            if got is None or len(got) != 1 or trunc is not None:
+                return None
+            bound = ast.unparse(stmt.test.comparators[0])
+            # The while alone leaves length max(len(seed), E); only a following
+            # ``name = name[:E]`` on the SAME bound pins it to E. Without that the
+            # length is a max() this fold does not model -- leave it verbatim.
+            nxt = body[j + 1] if j + 1 < len(body) else None
+            if not (isinstance(nxt, ast.Assign) and len(nxt.targets) == 1 and isinstance(nxt.targets[0], ast.Name)
+                    and nxt.targets[0].id == name and isinstance(nxt.value, ast.Subscript)
+                    and isinstance(nxt.value.value, ast.Name) and nxt.value.value.id == name
+                    and isinstance(nxt.value.slice, ast.Slice) and nxt.value.slice.lower is None
+                    and nxt.value.slice.step is None and nxt.value.slice.upper is not None
+                    and ast.unparse(nxt.value.slice.upper) == bound):
+                return None
+            segs.append(("while", off, (bound, got[0])))
+            trunc = bound
+            all_int = False
+            j += 2
+            continue
+        break
+    length = trunc if trunc is not None else off
+    if length == "0":
+        return None  # an empty list nothing grows -- not an array build
+    pfx = f"__lst_{name}"
+    dtype = "np.int64" if all_int else "np.float64"
+    lines = [f"{name} = np.zeros(({length},), dtype={dtype})"]
+    for kind, base, payload in segs:
+        if kind == "lit":
+            for k, e in enumerate(payload):
+                idx = _off_add(base, str(k))
+                store = f"{name}[{idx}] = {ast.unparse(e)}"
+                # A truncating build may drop seed elements (K < len(seed)), so a
+                # direct store is guarded by the final length; an untruncated
+                # build stores unconditionally.
+                lines.append(f"if {idx} < {length}:\n    {store}" if trunc is not None else store)
+        elif kind == "for":
+            var, bound, per = payload
+            lines.append(f"for {var} in range({bound}):")
+            for k, e in enumerate(per):
+                idx = _off_add(f"{len(per)} * {var}", str(k))
+                lines.append(f"    {name}[{_off_add(base, idx)}] = {ast.unparse(e)}")
+        else:  # "while" -- elements at index base .. length-1, value reads its own index
+            bound, val = payload
+            idx = f"{pfx}_i"
+            filled = ast.unparse(_SubstLenWithIndex(name, idx).visit(copy.deepcopy(val)))
+            lines.append(f"for {idx} in range({base}, {bound}):\n    {name}[{idx}] = {filled}")
+    return ast.parse("\n".join(lines)).body, j
+
+
+def _fold_list_preludes(fn: ast.FunctionDef) -> None:
+    """Fold kernel-body Python list builds into ``np.zeros`` + indexed stores.
+
+    The native emitters have no list type -- a surviving ``List`` display is a
+    hard ``NotImplementedError`` at emit -- and a list whose length is a size
+    SYMBOL cannot be spelled as a fixed literal array either. Only top-level
+    statements of ``fn`` are considered: that is where the corpus builds its
+    parameter vectors, and it keeps the offset bookkeeping (which must see the
+    statements in execution order) straightforward. An unrecognised build is
+    left untouched, so this pass can only turn an emit failure into a success.
+    """
+    out: List[ast.stmt] = []
+    i = 0
+    changed = False
+    while i < len(fn.body):
+        stmt = fn.body[i]
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                and isinstance(stmt.value, ast.List)):
+            plan = _plan_list_build(fn.body, i, stmt.targets[0].id)
+            if plan is not None:
+                out.extend(plan[0])
+                i = plan[1]
+                changed = True
+                continue
+        out.append(stmt)
+        i += 1
+    if changed:
+        fn.body = out
+        ast.fix_missing_locations(fn)
+
+
+def _curve_fit_lm_lines(popt: str, f: str, x: str, y: str, p0: str, pfx: str, iters: int) -> List[str]:
+    """Source lines for a naive Levenberg-Marquardt fit replacing ``curve_fit``.
+
+    ``scipy.optimize.curve_fit(f, x, y, p0=...)`` with no bounds / sigma is an
+    unconstrained nonlinear least-squares fit; MINPACK's ``lmdif`` (what scipy
+    calls) is a trust-region LM over a forward-difference Jacobian. This emits
+    the textbook damped-normal-equations form of the same thing::
+
+        r = f(x, p) - y                       # residual
+        J[:, c] = (f(x, p + h e_c) - f(x, p)) / h   # forward-difference Jacobian
+        (J^T J + lam * diag(J^T J)) dp = -J^T r
+        accept dp if it lowers ||r||^2 (lam /= 10), else keep p (lam *= 10)
+
+    A rejected step is not retried within the trip: the next trip simply re-solves
+    at the same p with a larger lam (costing one redundant Jacobian), which keeps
+    the emitted nest a flat fixed-trip loop with no inner convergence search.
+
+    Two choices make the result agree with scipy's to the harness's 1e-9, rather
+    than merely landing on the same optimum to fitting accuracy:
+
+    * The step ``h = sqrt(eps) * |p_j|`` is MINPACK's own (:data:`_FD_STEP`). A
+      finite-difference Jacobian shifts the stationary point from ``J^T r = 0``
+      to ``J~^T r = 0``; sharing the step makes both solvers inherit the SAME
+      shift instead of two different ones.
+    * A fixed trip count, iterating well past convergence, rather than a
+      dynamic break -- the static backends want a static trip count, and the
+      extra trips are no-ops once the step is rejected at ``lam`` ceiling.
+
+    ``np.linalg.solve`` is left for the existing solve expander (Gauss-Jordan
+    with partial pivoting) to lower; the damping keeps the system positive
+    definite, so the pivoting never meets a singular column in practice.
+
+    Every generated name differs from every other by more than CASE: Fortran
+    identifiers are case-insensitive, so a ``_J`` Jacobian beside a ``_j`` loop
+    index would collide into one symbol in the emitted module.
+    """
+    n, m = f"{p0}.shape[0]", f"{y}.shape[0]"
+    i, c, a, b, it = f"{pfx}_i", f"{pfx}_c", f"{pfx}_a", f"{pfx}_b", f"{pfx}_it"
+    return [
+        f"{popt} = np.zeros(({n},), dtype=np.float64)",
+        f"{pfx}_jac = np.zeros(({m}, {n}), dtype=np.float64)",
+        f"{pfx}_ata = np.zeros(({n}, {n}), dtype=np.float64)",
+        f"{pfx}_atad = np.zeros(({n}, {n}), dtype=np.float64)",
+        f"{pfx}_grad = np.zeros(({n},), dtype=np.float64)",
+        f"{pfx}_rhs = np.zeros(({n},), dtype=np.float64)",
+        f"{pfx}_pt = np.zeros(({n},), dtype=np.float64)",
+        f"{pfx}_r = np.zeros(({m},), dtype=np.float64)",
+        f"for {i} in range({n}):",
+        f"    {popt}[{i}] = {p0}[{i}]",
+        f"{pfx}_lam = 0.001",
+        f"{pfx}_f0 = {f}({x}, {popt})",
+        f"{pfx}_ssq = 0.0",
+        f"for {i} in range({m}):",
+        f"    {pfx}_r[{i}] = {pfx}_f0[{i}] - {y}[{i}]",
+        f"    {pfx}_ssq = {pfx}_ssq + {pfx}_r[{i}] * {pfx}_r[{i}]",
+        f"for {it} in range({iters}):",
+        f"    for {c} in range({n}):",
+        f"        {pfx}_h = {_FD_STEP} * np.abs({popt}[{c}])",
+        f"        if {pfx}_h == 0.0:",
+        f"            {pfx}_h = {_FD_STEP}",
+        f"        for {i} in range({n}):",
+        f"            {pfx}_pt[{i}] = {popt}[{i}]",
+        f"        {pfx}_pt[{c}] = {popt}[{c}] + {pfx}_h",
+        f"        {pfx}_fp = {f}({x}, {pfx}_pt)",
+        f"        for {i} in range({m}):",
+        f"            {pfx}_jac[{i}, {c}] = ({pfx}_fp[{i}] - {pfx}_f0[{i}]) / {pfx}_h",
+        f"    for {a} in range({n}):",
+        f"        {pfx}_ga = 0.0",
+        f"        for {i} in range({m}):",
+        f"            {pfx}_ga = {pfx}_ga + {pfx}_jac[{i}, {a}] * {pfx}_r[{i}]",
+        f"        {pfx}_grad[{a}] = {pfx}_ga",
+        f"        for {b} in range({n}):",
+        f"            {pfx}_ab = 0.0",
+        f"            for {i} in range({m}):",
+        f"                {pfx}_ab = {pfx}_ab + {pfx}_jac[{i}, {a}] * {pfx}_jac[{i}, {b}]",
+        f"            {pfx}_ata[{a}, {b}] = {pfx}_ab",
+        f"    for {a} in range({n}):",
+        f"        for {b} in range({n}):",
+        f"            {pfx}_atad[{a}, {b}] = {pfx}_ata[{a}, {b}]",
+        f"        {pfx}_atad[{a}, {a}] = {pfx}_ata[{a}, {a}] + {pfx}_lam * {pfx}_ata[{a}, {a}]",
+        f"        {pfx}_rhs[{a}] = -{pfx}_grad[{a}]",
+        f"    {pfx}_step = np.linalg.solve({pfx}_atad, {pfx}_rhs)",
+        f"    for {i} in range({n}):",
+        f"        {pfx}_pt[{i}] = {popt}[{i}] + {pfx}_step[{i}]",
+        f"    {pfx}_ft = {f}({x}, {pfx}_pt)",
+        f"    {pfx}_ssqt = 0.0",
+        f"    for {i} in range({m}):",
+        f"        {pfx}_ssqt = {pfx}_ssqt + ({pfx}_ft[{i}] - {y}[{i}]) * ({pfx}_ft[{i}] - {y}[{i}])",
+        f"    if {pfx}_ssqt < {pfx}_ssq:",
+        f"        for {i} in range({n}):",
+        f"            {popt}[{i}] = {pfx}_pt[{i}]",
+        f"        for {i} in range({m}):",
+        f"            {pfx}_f0[{i}] = {pfx}_ft[{i}]",
+        f"            {pfx}_r[{i}] = {pfx}_ft[{i}] - {y}[{i}]",
+        f"        {pfx}_ssq = {pfx}_ssqt",
+        f"        {pfx}_lam = {pfx}_lam * 0.1",
+        f"        if {pfx}_lam < 1e-14:",
+        f"            {pfx}_lam = 1e-14",
+        f"    else:",
+        f"        {pfx}_lam = {pfx}_lam * 10.0",
+        f"        if {pfx}_lam > 10000000000.0:",
+        f"            {pfx}_lam = 10000000000.0",
+    ]
+
+
+#: ``curve_fit`` keywords the LM lowering reproduces exactly. ``maxfev`` bounds
+#: MINPACK's function-evaluation budget; the emitted fit uses a fixed trip count
+#: that converges far inside it, so honouring the number is meaningless -- but a
+#: keyword that CHANGES the objective (bounds / sigma / absolute_sigma) or the
+#: derivative (jac) would silently fit something else, so it is refused.
+_CURVE_FIT_IGNORED_KW = frozenset({"maxfev", "p0", "method", "full_output"})
+
+#: Fixed LM trip count. The corpus fit is converged well inside it -- raising the
+#: count to 200 reproduces the 100-trip parameters bit-for-bit -- and each surplus
+#: trip is a rejected step (lambda pinned at its ceiling), so the margin costs
+#: time rather than accuracy and buys insensitivity to the starting guess.
+_CURVE_FIT_ITERS = 100
+
+
+def _curve_fit_call(node: ast.AST) -> Optional[ast.Call]:
+    """A ``curve_fit(...)`` call -- bare, ``scipy.optimize.``- or ``optimize.``-
+    qualified -- else None."""
+    if not isinstance(node, ast.Call):
+        return None
+    fn = node.func
+    if isinstance(fn, ast.Name) and fn.id == "curve_fit":
+        return node
+    if isinstance(fn, ast.Attribute) and fn.attr == "curve_fit":
+        return node
+    return None
+
+
+class _CurveFitRewriter(ast.NodeTransformer):
+    """``popt, pcov = curve_fit(f, x, y, p0=g)`` -> a naive LM loop nest.
+
+    The static backends have no scipy; the fit is an unconstrained nonlinear
+    least-squares problem over a smooth analytic model, so it lowers to plain
+    loops + arithmetic (:func:`_curve_fit_lm_lines`) with the linear solve left
+    to the existing ``np.linalg.solve`` expander.
+
+    The model ``f`` is a nested / module-level ``def f(grid, *p)``: curve_fit
+    calls it as ``f(x, *popt)``, so its varargs tuple IS the parameter vector.
+    Rebinding ``*p`` to a single ndarray parameter is therefore exactly
+    curve_fit's own contract, and turns ``f`` into an ordinary one-array-in,
+    one-array-out helper the existing inliner already handles (its free
+    ``npeaks`` resolves in the kernel scope it inlines into). Negative constant
+    indices into ``p`` (``p[-1]`` -- the shared baseline) are rewritten against
+    the now-known parameter count, which the emitters cannot fold themselves.
+
+    ``pcov`` (the covariance estimate) is NOT computed: the corpus kernel binds
+    it to ``_`` and never reads it. A live ``pcov`` raises rather than emitting
+    a silently-absent output.
+    """
+
+    def __init__(self, tree: ast.Module, kernel: ast.FunctionDef):
+        self.tree = tree
+        self.kernel = kernel
+        self.ctr = 0
+        self.changed = False
+        #: ``(popt_name, parameter-count expression)`` per lowered fit.
+        self.fitted: List[Tuple[str, str]] = []
+
+    def _find_model(self, name: str) -> Optional[ast.FunctionDef]:
+        for scope in (self.kernel, self.tree):
+            for node in ast.walk(scope):
+                if isinstance(node, ast.FunctionDef) and node.name == name and node is not self.kernel:
+                    return node
+        return None
+
+    @staticmethod
+    def _rebind_varargs(fdef: ast.FunctionDef, nexpr: str) -> None:
+        """``def f(grid, *p)`` -> ``def f(grid, p)`` with ``p[-k]`` -> ``p[nexpr - k]``."""
+        vp = fdef.args.vararg
+        if vp is None:
+            return
+        fdef.args.args.append(ast.arg(arg=vp.arg))
+        fdef.args.vararg = None
+        for sub in ast.walk(fdef):
+            if (isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name) and sub.value.id == vp.arg
+                    and isinstance(sub.slice, ast.UnaryOp) and isinstance(sub.slice.op, ast.USub)
+                    and isinstance(sub.slice.operand, ast.Constant)):
+                sub.slice = ast.parse(f"{nexpr} - {sub.slice.operand.value}", mode="eval").body
+        ast.fix_missing_locations(fdef)
+
+    def visit_Assign(self, node: ast.Assign):
+        call = _curve_fit_call(node.value)
+        if call is None or len(node.targets) != 1:
+            return node
+        tgt = node.targets[0]
+        if isinstance(tgt, ast.Tuple):
+            if len(tgt.elts) != 2 or not all(isinstance(e, ast.Name) for e in tgt.elts):
+                raise DesugarError(f"curve_fit: unsupported target {ast.unparse(tgt)}")
+            if tgt.elts[1].id != "_":
+                raise DesugarError("curve_fit: the pcov covariance output is not computed by the LM "
+                                   f"lowering, but {tgt.elts[1].id!r} binds it")
+            popt = tgt.elts[0].id
+        elif isinstance(tgt, ast.Name):
+            popt = tgt.id
+        else:
+            raise DesugarError(f"curve_fit: unsupported target {ast.unparse(tgt)}")
+        for kw in call.keywords:
+            if kw.arg not in _CURVE_FIT_IGNORED_KW:
+                raise DesugarError(f"curve_fit: keyword {kw.arg!r} changes the fit; the LM lowering "
+                                   "only reproduces the unweighted, unbounded, FD-Jacobian form")
+        p0 = next((kw.value for kw in call.keywords if kw.arg == "p0"), None)
+        if p0 is None and len(call.args) >= 4:
+            p0 = call.args[3]
+        if len(call.args) < 3 or p0 is None:
+            raise DesugarError("curve_fit: need f, xdata, ydata and an explicit p0")
+        f, x, y = call.args[0], call.args[1], call.args[2]
+        if not all(isinstance(v, ast.Name) for v in (f, x, y, p0)):
+            raise DesugarError("curve_fit: f / xdata / ydata / p0 must be plain names")
+        model = self._find_model(f.id)
+        if model is None:
+            raise DesugarError(f"curve_fit: model {f.id!r} is not a def in this module")
+        pfx = f"__lm{self.ctr}"
+        self.ctr += 1
+        nexpr = f"{p0.id}.shape[0]"
+        self._rebind_varargs(model, nexpr)
+        self.fitted.append((popt, nexpr))
+        self.changed = True
+        lines = _curve_fit_lm_lines(popt, f.id, x.id, y.id, p0.id, pfx, _CURVE_FIT_ITERS)
+        return ast.parse("\n".join(lines)).body
+
+
+class _NegParamIndexFold(ast.NodeTransformer):
+    """``popt[-k]`` -> ``popt[<len> - k]`` for a fitted parameter vector.
+
+    The kernel reads the fitted baseline as ``offset[0] = popt[-1]``. ``popt``
+    is created by the LM lowering with a symbolic length, so the emitters (which
+    fold a negative index only against a STATIC extent) cannot resolve it.
+    """
+
+    def __init__(self, name: str, nexpr: str):
+        self.name = name
+        self.nexpr = nexpr
+
+    def visit_Subscript(self, node: ast.Subscript):
+        self.generic_visit(node)
+        if (isinstance(node.value, ast.Name) and node.value.id == self.name
+                and isinstance(node.slice, ast.UnaryOp) and isinstance(node.slice.op, ast.USub)
+                and isinstance(node.slice.operand, ast.Constant)):
+            node.slice = ast.parse(f"{self.nexpr} - {node.slice.operand.value}", mode="eval").body
+            ast.fix_missing_locations(node)
+        return node
+
+
+def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef) -> None:
+    """Lower every ``curve_fit`` in ``kernel`` to a naive LM loop nest, in place.
+
+    Runs BEFORE helper inlining (like the eigh rewriter) so the model ``def`` is
+    still a distinct function to rebind, and the LM's calls to it are inlined by
+    the ordinary helper machinery afterwards.
+    """
+    fits = [n for n in ast.walk(kernel) if _curve_fit_call(n) is not None]
+    if not fits:
+        return
+    # The list preludes build the p0 vector this fit consumes, so they must be
+    # arrays before the LM lines index them.
+    _fold_list_preludes(kernel)
+    rw = _CurveFitRewriter(tree, kernel)
+    kernel.body = [s for stmt in kernel.body for s in _as_stmts(rw.visit(stmt))]
+    if not rw.changed:
+        return
+    # ``offset[0] = popt[-1]`` reads the fitted vector's tail; resolve it against
+    # the parameter count now that the vector is an array of known length.
+    for popt, nexpr in rw.fitted:
+        _NegParamIndexFold(popt, nexpr).visit(kernel)
+    ast.fix_missing_locations(kernel)
+
+
+def _as_stmts(res) -> List[ast.stmt]:
+    """A NodeTransformer result (one node, a list, or a dropped ``None``) as a list."""
+    if res is None:
+        return []
+    return res if isinstance(res, list) else [res]
 
 
 def _as_matmul(node: ast.AST):

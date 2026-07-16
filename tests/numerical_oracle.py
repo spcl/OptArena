@@ -56,7 +56,7 @@ PY_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_PY_FORK_TIMEOUT_S", "600"))
 #: Kernels whose numpy REFERENCE is only mathematically valid at its declared size, so the
 #: polybench down-scaling below must not touch them (it would make the reference itself raise).
 #: See the rationale at the down-scale site.
-NO_SCALE = ("distribution_search", "gpt2_block")
+NO_SCALE = ("distribution_search", "gpt2_block", "raman_fitting")
 #: Address-space cap (GiB) on a backend COMPILE subprocess. pythran's template instantiation
 #: balloons to ~7 GB on a deeply-nested kernel, and concurrent ones took the 16 GB CI runner
 #: DOWN -- the VM is reclaimed ("runner has received a shutdown signal", exit 143), killing the
@@ -346,7 +346,14 @@ def run_kernel(short: str,
     #     solution);
     #   gpt2_block derives its head count from the model width, ``nhead = D // HEAD_DIM`` with
     #     HEAD_DIM=64, then ``dh = D // nhead`` -- so any D < 64 gives nhead == 0 and the reference
-    #     raises ZeroDivisionError. Its true S already IS small (D=128).
+    #     raises ZeroDivisionError. Its true S already IS small (D=128);
+    #   raman_fitting least-squares-fits Lorentzian bands of width gamma ~ 9-17 cm^-1 across a FIXED
+    #     1000-3000 cm^-1 window, so shrinking N widens the grid spacing: at N=48 it is ~43 cm^-1 and
+    #     the bands fall BETWEEN samples, leaving the optimum unidentifiable. scipy's own curve_fit
+    #     then moves by ~650 when merely its stopping tolerance is tightened, and by ~350 when p0 is
+    #     perturbed in its 11th digit -- so no independent solver can reproduce that iterate, and the
+    #     comparison measures nothing. At the declared N=1000 (spacing 2 cm^-1) both probes move it
+    #     by <2e-6 and the fit is well-posed.
     # Run those at true size so the kernel is exercised for real rather than reported as a bogus
     # FAIL for a "capability" the harness does have.
     if "foundation" not in info.get("relative_path", "") and short not in NO_SCALE:

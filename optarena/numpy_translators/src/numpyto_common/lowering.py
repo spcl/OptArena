@@ -39,6 +39,7 @@ from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 import sympy
 
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR
+from numpyto_common.numpy_desugar import _np_linalg_attr
 from numpyto_common.lib_nodes import (MESHGRID_AXIS_KW, _iter_extent_of,
                                       _scalarize_at_iters, expand_meshgrid)
 
@@ -1623,6 +1624,23 @@ def _harvest_local_shapes(tree: ast.AST,
                 src_dt = dtype_table.get(rhs.id)
                 if src_dt is not None and target.id not in dtype_table:
                     dtype_table[target.id] = src_dt
+            continue
+        # ``np.linalg.<op>`` is a TWO-level attribute, so the single-level
+        # ``np.<attr>`` gate below never matches it and the last-ditch extent
+        # guess mirrors the FIRST operand instead -- sizing ``x = np.linalg.
+        # solve(A, b)`` like the SQUARE A rather than like b. A 1-D b then has
+        # its reads padded to a phantom second dim (``x[i]`` -> ``x[i, :]``).
+        # Register what the solve / inv / cholesky expanders actually write.
+        _lin_op = _np_linalg_attr(rhs)
+        if _lin_op in ("solve", "inv", "cholesky"):
+            # ``solve`` returns x with b's shape; ``inv`` / ``cholesky`` are
+            # shape-preserving in their single operand.
+            _src_arg = rhs.args[1] if _lin_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0]
+                                                                                      if rhs.args else None)
+            if isinstance(_src_arg, ast.Name):
+                _src_shape = shape_table.get(_src_arg.id)
+                if _src_shape:
+                    shape_table[target.id] = tuple(_src_shape)
             continue
         if not (isinstance(rhs, ast.Call)
                 and isinstance(rhs.func, ast.Attribute)

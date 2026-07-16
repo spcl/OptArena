@@ -24,6 +24,7 @@ keeps the harness and the emitter aligned.
 
 import ast
 import copy
+import itertools
 import json
 import pathlib
 import re
@@ -55,9 +56,14 @@ def native_desugar(fn: ast.FunctionDef) -> None:
     * Fold static ``None is None`` / ``None is not None`` comparisons (an inlined
       helper's unsupplied optional parameter defaults to None) and DCE the dead
       IfExp / if branches, so a backend never meets a bare None literal at emit.
+    * Materialise ``np.array([<scalar exprs>])`` literals into a zeros local plus
+      element stores (the native emitters have no ``np.array`` constructor).
+    * Unwrap ``try: <body> except: <give-up>`` to ``<body>`` -- the static backends
+      have no exceptions and the handler is an error path that cannot fire.
     """
     from numpyto_common.numpy_desugar import (_ComplexAccessorToFunc, _DecomposeRollSlice, _DropValidationGuards,
-                                              _ElementalUfuncToPrimitive, _UfuncOutInline, _UfuncReduceToReducer)
+                                              _ElementalUfuncToPrimitive, _UfuncOutInline,
+                                              _UfuncReduceToReducer)
     _UfuncReduceToReducer().visit(fn)  # np.add.reduce -> np.sum before the elementwise-ufunc desugars
     _NewaxisToNone().visit(fn)
     _UfuncOutInline().visit(fn)
@@ -68,6 +74,55 @@ def native_desugar(fn: ast.FunctionDef) -> None:
     _FoldStaticNoneBranches().visit(fn)
     ast.fix_missing_locations(fn)
 
+
+def _is_scalar_leaf(node: ast.expr) -> bool:
+    """True when ``node`` is a scalar-valued element expression -- the leaf form
+    :class:`_MaterializeArrayLiterals` can lower to a single element store."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, (int, float)) and not isinstance(node.value, bool)
+    if isinstance(node, ast.UnaryOp):
+        return _is_scalar_leaf(node.operand)
+    if isinstance(node, ast.BinOp):
+        return _is_scalar_leaf(node.left) and _is_scalar_leaf(node.right)
+    # ``int(round(fr * size))`` / ``float(x)`` -- a scalar-returning builtin cast.
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _SCALAR_CASTS:
+        return all(_is_scalar_leaf(a) for a in node.args)
+    # A bare Name is ASSUMED scalar. It may in principle bind a whole row
+    # (``np.array([row0, row1])`` stacking two 1-D arrays), which this scalar-store
+    # lowering would mis-shape -- the frontend has no rank info this early. Accepted
+    # because ``np.array`` over expression elements reached NO emitter before this
+    # pass (it raised ``call to np.array not supported``), so the only kernels in
+    # scope are ones that already hard-failed, and a mis-shape surfaces as a numeric
+    # FAIL against the numpy oracle rather than as silent corruption.
+    if isinstance(node, ast.Name):
+        return True
+    # ``pv[0]`` / ``a[i, j]`` -- an integer-indexed element is a scalar; a Slice is not.
+    if isinstance(node, ast.Subscript):
+        sl = node.slice
+        elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
+        return not any(isinstance(e, ast.Slice) for e in elts)
+    return False
+
+def _has_loop_control(body: List[ast.stmt]) -> bool:
+    """True when ``body`` carries a ``break``/``continue`` bound to ITS OWN loop --
+    i.e. not nested inside a further For/While (whose own loop would capture it)."""
+
+    def _walk(stmts: List[ast.stmt]) -> bool:
+        for s in stmts:
+            if isinstance(s, (ast.Break, ast.Continue)):
+                return True
+            if isinstance(s, (ast.For, ast.While, ast.FunctionDef)):
+                continue  # a nested loop captures its own break/continue
+            for f in ("body", "orelse", "finalbody"):
+                sub = getattr(s, f, None)
+                if isinstance(sub, list) and _walk(sub):
+                    return True
+            for h in getattr(s, "handlers", []) or []:
+                if _walk(h.body):
+                    return True
+        return False
+
+    return _walk(body)
 
 class _NonFiniteNormalizer(ast.NodeTransformer):
     """Canonicalise the alternate spellings of IEEE infinity / NaN to ``np.inf`` /
@@ -216,6 +271,25 @@ def parse_kernel(numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optio
     _alias_sub.collect(fn)
     _alias_sub.visit(fn)  # also drops no-op ``x = x`` self-assignments
     ast.fix_missing_locations(fn)
+
+    # Rewrite ``popt, _ = curve_fit(model, x, y, p0=guess)`` to a naive
+    # Levenberg-Marquardt loop nest (and the Python list preludes that build its
+    # p0 vector to arrays). Like the eigh rewriter above this runs BEFORE helper
+    # inlining, so the model ``def`` is still a distinct function whose varargs
+    # can be rebound to the parameter ARRAY curve_fit conceptually passes it; the
+    # LM's calls to the model are then inlined by the ordinary fixpoint below.
+    from numpyto_common.numpy_desugar import rewrite_curve_fit
+    rewrite_curve_fit(tree, fn)
+
+    # Strip the give-up paths of every top-level HELPER -- an exception handler that
+    # only bails (``except np.linalg.LinAlgError: return None``) and the
+    # ``if <diverged>: return None`` failure sentinels. Runs BEFORE the inline
+    # fixpoint below, not with the rest of native_desugar (which runs after it):
+    # those early returns are exactly what disqualifies a routine from Form-3
+    # (single-tail-return) inlining, and a helper that returns a TUPLE -- as
+    # distribution_search's ``solve_three_levels`` returns ``(kl_f, kl_b, pv)`` --
+    # has no emittable ABI unless it is inlined into its caller.
+
 
     # Flatten helpers NESTED inside other top-level helpers first (lulesh's
     # per-helper ``def c(a, i): return a[:, i]`` column shorthand). A helper that
@@ -978,6 +1052,16 @@ def _parse_array_literal(call: ast.Call):
     return shape, dtype, flat
 
 
+
+
+#: Scalar-returning builtin casts accepted as a scalar leaf by :func:`_is_scalar_leaf`.
+_SCALAR_CASTS = ("int", "float", "round", "abs")
+
+
+
+
+
+
 def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: List[str]) -> None:
     """Materialise module-level ``NAME = np.array(<nested numeric literal>, dtype=)``
     lookup tables referenced in the kernel as a fresh ``NAME = np.zeros(shape, dt)``
@@ -1018,7 +1102,6 @@ def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args:
                                                                           ctx=ast.Load()))
                                       ])))
         # Row-major element stores ``NAME[i, j, ...] = const``.
-        import itertools
         for idx, val in zip(itertools.product(*[range(d) for d in shape]), flat):
             sl = (ast.Tuple(elts=[ast.Constant(value=i)
                                   for i in idx], ctx=ast.Load()) if len(idx) > 1 else ast.Constant(value=idx[0]))
@@ -2279,11 +2362,22 @@ class _LoopVarSubst(ast.NodeTransformer):
         return node
 
 
+
+
+
+
+
+
 def _unroll_const_list_loops(fn: ast.FunctionDef) -> None:
     """Unroll ``for x in <const list of tuples/values>: body`` at compile time --
     a backend has no Python list iteration (lulesh's face-node loops). The
     iterable is a list literal directly, or a local bound exactly once to one;
-    the consumed binding is dropped so no list literal reaches emit."""
+    the consumed binding is dropped so no list literal reaches emit.
+
+    A body carrying its own ``break``/``continue`` is NOT unrolled -- cloning it per
+    element would rebind those to the enclosing loop (or, once every enclosing list
+    loop is unrolled too, to no loop at all). Such a loop is left alone and its list
+    literal reaches emit, which rejects it."""
     binds_count: Dict[str, int] = {}
     for s in ast.walk(fn):
         if isinstance(s, ast.Assign):
@@ -2301,7 +2395,7 @@ def _unroll_const_list_loops(fn: ast.FunctionDef) -> None:
 
         def visit_For(self, node: ast.For):
             self.generic_visit(node)
-            if node.orelse:
+            if node.orelse or _has_loop_control(node.body):
                 return node
             seq: Optional[List[ast.expr]] = None
             src: Optional[str] = None
@@ -2376,8 +2470,17 @@ class _HoistMultiStmtHelpers(ast.NodeTransformer):
 
     def visit_If(self, node: ast.If) -> ast.AST:
         node.test = self._rewrite_expr(node.test)
+        # The test's hoisted ``__hcall<n> = helper(..)`` Assigns are queued in
+        # ``self._pending`` for the CALLER's _rewrite_stmt_list to place BEFORE this
+        # If. Rewriting the branches would otherwise drain that queue into the
+        # if-BODY (_rewrite_stmt_list unconditionally flushes _pending per
+        # statement) -- the temp would then be assigned inside the branch its own
+        # test reads, a use-before-def (distribution_search's line-search
+        # ``if max(abs(residual(trial))) < cur:``). Park it across the branches.
+        pending, self._pending = self._pending, []
         node.body = self._rewrite_stmt_list(node.body)
         node.orelse = self._rewrite_stmt_list(node.orelse)
+        self._pending = pending
         return node
 
     def _rewrite_stmt_list(self, stmts: List[ast.stmt]) -> List[ast.stmt]:
