@@ -365,14 +365,18 @@ jobs:
           python-version: '3.12'
       - uses: ./.github/actions/setup
 
-      - name: Setup -- MPICH + a source-built mpi4py (the track's ABI-matched toolchain)
-        # libmpich-dev provides mpicc.mpich (the mpich runtime pkg does not); python3-dev is
-        # needed to source-build mpi4py. --no-binary forces the source build against MPICH; the
-        # prebuilt wheel is multi-ABI and would auto-select OpenMPI at runtime, mismatching the
-        # MPICH-built C driver.
+      - name: Setup -- OpenMPI + a source-built mpi4py (real multi-rank on the CI runner)
+        # OpenMPI, not MPICH: MPICH's Hydra bootstraps as SINGLETON worlds on a GH-Actions runner
+        # (PMI/hwloc can't come up), so `mpiexec -n 4` yields four world-size-1 jobs and every
+        # multi-rank launch/scoring/correctness test could only self-skip or fail. OpenMPI's
+        # `mpirun --oversubscribe -n R` launches R REAL ranks on the 2 CI cores, so those tests
+        # actually RUN and pass -- no capability-gap skip. (cray-mpich ABI parity is for the Alps
+        # deployment, orthogonal to CI test correctness.) libopenmpi-dev ships mpicc + mpirun;
+        # python3-dev + --no-binary source-build mpi4py against THIS OpenMPI so its ABI matches the
+        # mpicc-built C driver.
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends mpich libmpich-dev python3-dev
-          MPICC=mpicc.mpich python -m pip install --no-binary=mpi4py mpi4py
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev python3-dev
+          MPICC=mpicc python -m pip install --no-binary=mpi4py mpi4py
 
       - name: Phase 1 -- data distribution + descriptor (pure numpy, no launcher)
         if: ${{ !cancelled() }}

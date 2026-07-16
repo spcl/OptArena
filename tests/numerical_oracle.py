@@ -312,7 +312,12 @@ def run_kernel(short: str,
     # heap-allocated locals make the real sizes run too, but the sweep
     # only needs correctness, which is size-independent -- and the
     # hand-written initializers are Python loops, far too slow at 1000.
-    if "foundation" not in info.get("relative_path", ""):
+    # Foundation kernels aren't scaled. Neither is a kernel whose numpy reference is only
+    # mathematically valid at its declared size: distribution_search couples an absolute forward-KL
+    # target to the vocabulary V (feasible only for V > e^10 ~= 22026), so a down-scaled V<=48 makes
+    # the REFERENCE itself raise (no grid solution). Run those at true size (~0.04s here) so the
+    # kernel is exercised for real rather than skipped for a "capability" the harness does have.
+    if "foundation" not in info.get("relative_path", "") and short not in ("distribution_search", ):
         ints = {k: v for k, v in syms.items() if isinstance(v, int) and not isinstance(v, bool)}
         mx = max(ints.values(), default=0)
         # Default down-scale target is 48; ``max_size`` (JAX small-size pass)
