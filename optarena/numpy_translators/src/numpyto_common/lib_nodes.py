@@ -116,14 +116,20 @@ def _simplify_sub(hi: ast.AST, lo: ast.AST) -> Optional[ast.AST]:
     return None
 
 
+def _is_full_slice_elt(e: ast.AST) -> bool:
+    """Return True when subscript element ``e`` is a bare ``:`` -- a WHOLE-axis
+    selection, i.e. semantically the same as omitting the axis."""
+    return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
+
+
 def _is_full_slice_subscript(node: ast.Subscript) -> bool:
     """Return True when ``node`` is a Subscript whose slice is a
     full slice ``:`` (or a tuple of full slices ``:, :``)."""
     sl = node.slice
     if isinstance(sl, ast.Slice):
-        return (sl.lower is None and sl.upper is None and sl.step is None)
+        return _is_full_slice_elt(sl)
     if isinstance(sl, ast.Tuple):
-        return all(isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None for e in sl.elts)
+        return all(_is_full_slice_elt(e) for e in sl.elts)
     return False
 
 
@@ -3621,12 +3627,18 @@ def _pad_src_base_and_lead(src_node: ast.expr):
     A bare ``Name`` pads the whole array (no lead). A ``Subscript`` with leading
     SCALAR indices -- ``in_grid[b]`` (stencil_4d) -- pads the sliced sub-array,
     so the lead scalars are prepended to every generated source read. Returns
-    ``None`` for any other form (slice-bearing subscripts etc.)."""
+    ``None`` for any other form (partial-slice subscripts etc.)."""
     if isinstance(src_node, ast.Name):
         return src_node.id, []
     if isinstance(src_node, ast.Subscript) and isinstance(src_node.value, ast.Name):
         sl = src_node.slice
         elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+        # Drop TRAILING whole-axis selections: ``in_grid[b]`` is normalized to the explicit
+        # ``in_grid[b, :, :, :]`` before this runs, and a bare ``:`` selects the entire axis --
+        # the same sub-array the lead-indexed form names. A PARTIAL slice (``a:b``) genuinely
+        # subsets an axis, so it still bails out below.
+        while elts and _is_full_slice_elt(elts[-1]):
+            elts.pop()
         if any(isinstance(e, ast.Slice) for e in elts):
             return None
         return src_node.value.id, elts
