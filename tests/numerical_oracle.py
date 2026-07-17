@@ -390,7 +390,16 @@ def run_kernel(short: str,
     from optarena.emit_bridge import legacy_bench_info_dict
     info = legacy_bench_info_dict(BenchSpec.load(short))["benchmark"]
     if "sparse_layouts" in info:
-        return _all_backend_status("skip:sparse")  # see tests/sparse_oracle
+        # DELEGATED, not dropped: optarena/numpy_translators/tests/test_sparse_oracle.py drives
+        # these through the full NumpyToC pipeline against a scipy reference (C + jax + dace legs,
+        # several seeds, every declared layout), and the translators' suite runs in CI. That harness
+        # can build the per-layout buffer ABI this sweep cannot: run_kernel calls the numpy
+        # reference with the LOGICAL scipy operand, whereas the native kernel takes unpacked
+        # member buffers, so the two need different arg lists.
+        # The path is spelled in full deliberately -- the old "see tests/sparse_oracle" reads as
+        # the repo-root tests/ directory, where no such file exists, and that misreading makes a
+        # real delegation look like a dead citation.
+        return _all_backend_status("skip:sparse")
     if spec.init is None:
         return _all_backend_status("skip:no-init")
     # Grade at the precision the kernel actually COMPUTES in, which is not always the
@@ -514,13 +523,25 @@ def run_kernel(short: str,
         # a silent skip that would hide the kernel for every backend at once.
         return _all_backend_status(f"FAIL:init-error:{type(exc).__name__}")
 
-    # A kernel whose initializer yields a genuinely SPARSE operand (a scipy
-    # sparse matrix -- the sp_* Krylov solvers' CSR ``A``) cannot be marshalled
-    # as a dense C-ABI buffer, and its ``A @ x`` is a SpMV the dense translator
-    # does not lower. These sparse benchmarks have dedicated coverage via
-    # run_sparse_benchmark.py (see the tests/extended_smoke sparse sweep), so
-    # skip them here exactly like the ``sparse_layouts`` specs above. A DENSE
-    # banded operand (banded_mmt) is a real ndarray and is NOT skipped.
+    # A kernel whose initializer yields a genuinely SPARSE operand (a scipy sparse matrix --
+    # the sp_* Krylov solvers' CSR ``A``). run_kernel builds the reference call from
+    # ``info["input_args"]``, which names the LOGICAL ``A``, while the native kernel takes its
+    # unpacked member buffers; this sweep has one arg list, so it cannot drive both.
+    #
+    # UNLIKE the ``sparse_layouts`` skip above, this one is NOT delegated anywhere. The old
+    # comment claimed coverage "via run_sparse_benchmark.py (see the tests/extended_smoke sparse
+    # sweep)": tests/extended_smoke does not exist, and run_sparse_benchmark.py is a shim to
+    # ``optarena run-sparse``, a PERF sweep that validates nothing and runs in no CI job. So
+    # bicg_solvers / sp_bicg / sp_bicgstab / sp_cg / sp_gmres / sp_minres currently have NO
+    # numerical CI coverage -- a real gap, recorded here rather than dressed up as a delegation.
+    #
+    # Two things also block simply unskipping them, both verified: the layout is a legacy
+    # ``variants`` entry that ``_custom_initialize`` never forwards, and ten of these
+    # initializers name the precision kwarg ``dtype`` rather than ``datatype``, so it is silently
+    # dropped and A/x/b stay float64 -- an fp32 leg would grade fp32 output against an fp64
+    # oracle, the cloudsc bug this gate already pins.
+    #
+    # A DENSE banded operand (banded_mmt) is a real ndarray and is NOT skipped.
     try:
         from scipy.sparse import issparse
         if any(issparse(v) for v in by.values()):
