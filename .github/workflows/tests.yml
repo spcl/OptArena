@@ -88,6 +88,7 @@ jobs:
             tests/test_ncores.py \
             tests/test_ext_break_scaled_exit.py \
             tests/test_framework_flavors.py \
+            tests/test_sparse_init_precision.py \
             tests/test_firewall.py \
             tests/test_hf_export.py
 

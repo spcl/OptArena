@@ -25,6 +25,13 @@ import scipy.sparse as sp
 
 _SUPPORTED_FORMATS = ("csr", "csc", "coo", "bsr", "dia")
 
+#: Config-layer format names that are aliases of a scipy storage format. ``bcsr`` (block
+#: CSR -- the emit's name, cf. ``sparse_emit.expand_matmul_bcsr_dense_vec``) is scipy's
+#: ``bsr``; the sparse manifests spell the block format ``bcsr`` (e.g. cg.yaml, spmv.yaml,
+#: and the sp_*.yaml ``bsr_uniform`` variants), so the generator boundary must accept it or
+#: those variants raise "Unsupported sparse format: 'bcsr'" and never run.
+_FORMAT_ALIASES = {"bcsr": "bsr"}
+
 _SUITESPARSE_BASE = "https://suitesparse-collection-website.herokuapp.com/MM"
 
 
@@ -44,8 +51,9 @@ def to_format(m, fmt: str):
     """Convert ``m`` to the requested scipy.sparse storage format.
 
     :param m: any scipy.sparse matrix or array-like.
-    :param fmt: one of ``csr``, ``csc``, ``coo``, ``bsr``, ``dia``.
+    :param fmt: one of ``csr``, ``csc``, ``coo``, ``bsr`` (alias ``bcsr``), ``dia``.
     """
+    fmt = _FORMAT_ALIASES.get(fmt, fmt)
     if fmt not in _SUPPORTED_FORMATS:
         raise ValueError(f"Unsupported sparse format: {fmt!r}. "
                          f"Choose one of {_SUPPORTED_FORMATS}.")
