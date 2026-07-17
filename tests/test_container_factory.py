@@ -194,3 +194,52 @@ def test_install_apptainer_succeeds_first_try_without_sleeping(monkeypatch):
     assert containers.install_apptainer("/tmp/apptainer-prefix") == 0
     assert calls.count("bash") == 1
     assert sleeps == []
+
+
+def test_install_apptainer_clears_a_partial_tree_between_attempts(monkeypatch, tmp_path):
+    """A failed attempt's leftovers must be gone before the retry runs.
+
+    Reproduces the real CI failure: upstream hard-refuses when its own ``<prefix>/<arch>`` exists
+    (``fatal "$DEST/$ARCH is not empty"``, no force flag), so a mirror that dies mid-unpack makes
+    every retry fail on that check instead of re-fetching -- the retry is worthless without this."""
+    prefix = tmp_path / "apptainer"
+    prefix.mkdir()
+    seen_dirty = []
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "curl":
+            return subprocess.CompletedProcess(argv, 0, stdout="#!/bin/bash\ntrue\n")
+        # Record whether upstream would refuse, then leave a partial tree as a dead mirror does.
+        seen_dirty.append((prefix / "x86_64").exists())
+        (prefix / "x86_64").mkdir(exist_ok=True)
+        (prefix / "x86_64" / "partial.rpm").write_text("half-unpacked")
+        return subprocess.CompletedProcess(argv, 0 if len(seen_dirty) == 3 else 2)
+
+    monkeypatch.setattr(containers.subprocess, "run", fake_run)
+    monkeypatch.setattr(containers.time, "sleep", lambda s: None)
+    assert containers.install_apptainer(str(prefix), attempts=4) == 0
+    assert seen_dirty == [False, False, False], \
+        f"a retry started against a dirty prefix {seen_dirty} -- upstream would refuse it outright"
+
+
+def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path):
+    """Only paths the attempt created may be removed.
+
+    ``prefix`` defaults to ``~/.local`` and is caller-supplied, so scoping the clean to the
+    installer's own additions is a safety property, not tidiness."""
+    prefix = tmp_path / "local"
+    (prefix / "share").mkdir(parents=True)
+    (prefix / "share" / "user_data.txt").write_text("do not delete me")
+    preexisting = set(os.listdir(prefix))
+    (prefix / "x86_64").mkdir()
+    (prefix / "bin").mkdir()
+
+    containers.clean_partial_install(str(prefix), preexisting)
+
+    assert sorted(os.listdir(prefix)) == ["share"]
+    assert (prefix / "share" / "user_data.txt").read_text() == "do not delete me"
+
+
+def test_clean_partial_install_tolerates_a_missing_prefix(tmp_path):
+    """The very first attempt can fail before the prefix exists at all."""
+    containers.clean_partial_install(str(tmp_path / "never-created"), set())
