@@ -10,44 +10,56 @@ from optarena import config, perf_reports
 from optarena.frameworks import (Benchmark, Framework, timeout_decorator as tout, utilities as util)
 from optarena.frameworks.errors import NotSupportedByFramework
 from optarena.frameworks.schema import Result, results_engine
+from optarena.precision import Precision, TOLERANCE_MATRIX, numpy_dtype, precision_from_datatype, tolerance_band
 from typing import Any, Callable, Dict, Sequence, Tuple, Optional
 
-#: The SINGLE source of validation tolerances, keyed by datatype string in BOTH
-#: the numpy-style ("float32") and Precision-enum ("fp32"/"fp8_e4m3") spellings.
-#: Each entry is ``(rtol, atol)``; coarser formats get looser floors
-#: (their eps is larger: fp64 ~2.2e-16, fp32 ~1.2e-7, fp16 ~9.8e-4, bf16 ~7.8e-3,
-#: fp8_e4m3 ~6e-2, fp8_e5m2 ~1.2e-1). Per-benchmark ``rtol``/``atol`` overrides win.
+#: STRING-KEYED PROJECTION of the typed, precision-keyed
+#: :data:`optarena.precision.TOLERANCE_MATRIX` -- THE single source of validation
+#: tolerances -- in BOTH the numpy-style ("float32") and Precision-enum ("fp32")
+#: spellings. Each entry is ``(rtol, atol)``. Kept for callers/tests that key
+#: tolerances by string; it is a VIEW of the matrix, not a second table.
+#: Per-benchmark ``rtol``/``atol`` overrides still win at the grade site.
 TOLERANCES = {
-    'float64': (1e-9, 1e-11),
-    'fp64': (1e-9, 1e-11),
-    'float32': (1e-3, 1e-5),
-    'fp32': (1e-3, 1e-5),
-    'float16': (1e-2, 1e-3),
-    'fp16': (1e-2, 1e-3),
-    'bfloat16': (3e-2, 1e-2),
-    'bf16': (3e-2, 1e-2),
-    'float8_e4m3': (1e-1, 1e-2),
-    'fp8_e4m3': (1e-1, 1e-2),
-    'float8_e5m2': (2e-1, 1e-1),
-    'fp8_e5m2': (2e-1, 1e-1),
+    spelling: band.as_tuple()
+    for prec, band in TOLERANCE_MATRIX.items()
+    for spelling in (prec.value, numpy_dtype(prec).__name__)
 }
 
 
 def tolerances_for(datatype) -> Tuple[float, float]:
     """``(rtol, atol)`` for ``datatype`` in any spelling.
 
-    Resolves through the precision registry first so every valid spelling --
-    numpy (``float16``), enum (``fp16``), or ml_dtypes (``float8_e4m3fn``) --
-    lands on the right band instead of silently taking fp64's tight tolerances
-    (which would turn a coarse-format result into a spurious validation FAIL).
-    A genuinely unknown datatype falls back to fp64.
+    Resolves the spelling to a concrete :class:`~optarena.precision.Precision` --
+    numpy (``float32``), enum (``fp32``), ml_dtypes (``float8_e4m3fn``), or ``None``
+    -> fp64 (the exact-kernel default) -- and returns that precision's band from the
+    single-source :data:`~optarena.precision.TOLERANCE_MATRIX`; an unknown datatype
+    falls back to fp64. Every call resolves to a concrete precision and looks the
+    band up in the matrix, so a coarse-format result can never silently take fp64's
+    tight band.
     """
-    from optarena.precision import precision_from_datatype
     try:
-        key = precision_from_datatype(datatype).value
+        prec = precision_from_datatype(datatype)
     except ValueError:
-        key = 'fp64'
-    return TOLERANCES[key]
+        prec = Precision.FP64
+    return tolerance_band(prec).as_tuple()
+
+
+def tolerance_datatype(requested: Optional[str], detected) -> Optional[str]:
+    """The datatype whose tolerance band should VALIDATE a run.
+
+    An explicit ``requested`` datatype (a ``--datatype`` value) wins verbatim.
+    With none, the band must follow the ACTUAL precision the data was materialized
+    at (``detected`` -- a numpy scalar type such as ``np.float32``, or ``None``):
+    a run with no ``--datatype`` takes each kernel's own default precision (a legacy
+    ``initialize`` may default to ``np.float32``), so resolving the band off
+    ``None`` -- which :func:`tolerances_for` maps to the tight fp64 band -- would
+    grade an fp32 result against fp64 tolerances and FAIL a correct native run.
+    A ``None`` ``detected`` (no float array, or an ambiguous mix) keeps the fp64
+    floor, which is right for integer / exact kernels.
+    """
+    if requested is not None:
+        return requested
+    return None if detected is None else detected.__name__
 
 
 class Test(object):
@@ -198,6 +210,12 @@ class Test(object):
         # we try to detect the expected datatype from the input data we got from the benchmark.
         # Ideally, we would store the expected datatype information in the benchmark
         # JSON file directly so we don't have to guess here.
+        #
+        # ``detected_dtype`` -- the ACTUAL float precision the data was materialized
+        # at -- also keys the validation band below: with no ``--datatype`` a kernel
+        # takes its own default precision, so the grader must follow the data rather
+        # than assume the caller's ``None`` means fp64 (see ``tolerance_datatype``).
+        detected_dtype = None
         dtypes = set(type(v) for v in bdata.values() if type(v) in [np.float32, np.float64])
         dtypes |= set(
             type(v.dtype.type()) for v in bdata.values()
@@ -284,9 +302,11 @@ class Test(object):
                     frmwrk_name = self.frmwrk.info["full_name"] + " - " + impl_name
 
                     # Datatype-aware ULP-scaled tolerances from the single
-                    # module-level TOLERANCES table; per-benchmark rtol/atol
-                    # overrides still win below.
-                    _r, _a = tolerances_for(datatype)
+                    # module-level TOLERANCES table, keyed by the ACTUAL data
+                    # precision (``detected_dtype``) when no ``--datatype`` was
+                    # given -- so fp32 data grades at the fp32 band, not fp64's
+                    # tight floor. Per-benchmark rtol/atol overrides still win below.
+                    _r, _a = tolerances_for(tolerance_datatype(datatype, detected_dtype))
                     rtol = self.bench.info.get('rtol', _r)
                     atol = self.bench.info.get('atol', _a)
                     valid = util.validate(np_out, frmwrk_out, frmwrk_name, rtol=rtol, atol=atol)

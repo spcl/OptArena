@@ -87,6 +87,7 @@ jobs:
             tests/test_vecmath.py \
             tests/test_ncores.py \
             tests/test_ext_break_scaled_exit.py \
+            tests/test_framework_flavors.py \
             tests/test_firewall.py \
             tests/test_hf_export.py
 
@@ -270,7 +271,8 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rs --timeout=900 \
             tests/test_frameworks.py \
-            tests/test_fp16.py
+            tests/test_fp16.py \
+            tests/test_default_datatype_tolerance.py
 
       - name: Phase 5 -- e2e numerical sweep [pluto] @ S
         if: ${{ !cancelled() }}

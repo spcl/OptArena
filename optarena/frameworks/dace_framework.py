@@ -72,7 +72,7 @@ from dace.transformation.interstate import LoopToMap
 from optarena.frameworks import Benchmark, Framework
 from optarena.frameworks import utilities as util
 from optarena.frameworks.framework import TimingResult, Timer
-from optarena.frameworks.test import tolerances_for
+from optarena.frameworks.test import tolerance_datatype, tolerances_for
 
 dc_float = None
 dc_complex_float = None
@@ -386,7 +386,13 @@ class DaceFramework(Framework):
             return False
         copy_back = self.copy_back_func()
         out = [copy_back(a) for a in out]
-        rtol_default, atol_default = tolerances_for(self.datatype)
+        # Grade at the ACTUAL precision of the arrays being compared: with no
+        # ``--datatype`` (``self.datatype is None``) the data takes the kernel's own
+        # default precision, so keying the band off ``None`` -> the fp64 band would
+        # fail a correct fp32 variant spuriously (same defect as the CLI grader).
+        present = {a.dtype.type for a in out if a.dtype.name in ("float32", "float64")}
+        band = tolerance_datatype(self.datatype, present.pop() if len(present) == 1 else None)
+        rtol_default, atol_default = tolerances_for(band)
         rtol = bench.info.get("rtol", rtol_default)
         atol = bench.info.get("atol", atol_default)
         label = f"{self.info['full_name']} - {variant.name}"
