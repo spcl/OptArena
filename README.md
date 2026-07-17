@@ -698,6 +698,34 @@ now an *override* the regenerator never touches.
 - *shape mismatch at validation* -- an `init.arrays` expression doesn't match what the
   kernel writes; fix the shape.
 
+### (Optional) a custom initializer -- `<kernel>.py`
+
+`init.arrays` / `init.scalars` cover most kernels: the harness fills the shapes you
+declare. When the inputs need constructing rather than filling -- an index array that
+has to stay in bounds, a sorted grid, a recurrence that would overflow on a generic
+uniform fill -- write an `initialize` and point the manifest at it:
+
+```yaml
+init:
+  input_args: [LEN_1D]                             # what initialize() is called with
+  arrays: {a: (LEN_1D,), b: (LEN_1D,), c: (LEN_1D,)}
+  func_name: initialize                            # -> tsvc_2_s322.py
+```
+
+**It goes in `<kernel>.py`, beside the reference -- never in `<kernel>_numpy.py`.**
+The `_numpy.py` reference is the spec the agent reads and optimizes; building inputs
+is harness work and stays out of it. Return the arrays in the order `init.arrays` then
+`init.scalars` declare them; take `datatype` if the data depends on the run precision:
+
+```python
+# tsvc_2_s322.py
+def initialize(LEN_1D, datatype=np.float64):
+    ...
+    return a, b, c
+```
+
+`tests/test_tree_structure.py` enforces the placement across the corpus.
+
 ### (Optional) an original-source sidecar
 
 A ported kernel may ship the upstream source it was ported from, beside its numpy

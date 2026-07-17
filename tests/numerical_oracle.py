@@ -300,26 +300,23 @@ def _custom_initialize(info, syms, datatype=np.float64) -> Dict[str, Any]:
     explicitly so the input dtype matches the emitted code's precision.
     """
     import importlib
-    import importlib.util
     import inspect
     init = info["init"]
-    # The custom ``initialize`` lives either in a dedicated module (HPC kernels:
-    # crc16.py) or, for foundation kernels which have no separate init file,
-    # alongside the reference in ``<module>_numpy.py``. Try the package module
-    # first (preserves intra-package relative imports), then the _numpy file.
-    fn = None
-    try:
-        mod = importlib.import_module("optarena.benchmarks.{r}.{m}".format(r=info["relative_path"].replace("/", "."),
-                                                                           m=info["module_name"]))
-        fn = vars(mod).get(init["func_name"])
-    except ModuleNotFoundError:
-        fn = None
+    # A kernel's custom ``initialize`` lives in ``<module>.py``, beside the
+    # ``<module>_numpy.py`` reference and never inside it -- one home, corpus-wide
+    # (enforced by tests/test_tree_structure.py). It is imported as a package module,
+    # not loaded from the file, so its intra-package imports resolve.
+    src = REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}.py'
+    hint = (f'a kernel\'s {init["func_name"]!r} lives in {info["module_name"]}.py beside '
+            f'{info["module_name"]}_numpy.py; defining it in the _numpy reference is not supported')
+    if not src.is_file():
+        raise FileNotFoundError(f'{info["module_name"]}: init.func_name is {init["func_name"]!r} '
+                                f"but {src} does not exist -- {hint}.")
+    mod = importlib.import_module("optarena.benchmarks.{r}.{m}".format(r=info["relative_path"].replace("/", "."),
+                                                                       m=info["module_name"]))
+    fn = vars(mod).get(init["func_name"])
     if fn is None:
-        p = REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py'
-        spec = importlib.util.spec_from_file_location(f'{info["module_name"]}_numpy', p)
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
-        fn = vars(m)[init["func_name"]]
+        raise AttributeError(f'{src} defines no {init["func_name"]!r} -- {hint}.')
     # Pass each init arg as-is: the preset (and the size-scaling above)
     # already types dimensions as int and physical params as float.
     # int()-ing everything truncated float params -- nbody's dt=0.05 -> 0

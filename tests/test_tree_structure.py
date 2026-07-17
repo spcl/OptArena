@@ -194,25 +194,33 @@ def test_every_kernel_resolves_under_a_track():
         assert ref.is_file(), f"{short}: missing numpy reference {ref}"
 
 
-def test_single_initialize_definition_per_kernel():
-    """A kernel's ``initialize`` must live in exactly ONE module: either the
-    package module ``<module>.py`` OR the ``<module>_numpy.py`` reference, never
-    both. The oracle resolves the package module first, so a duplicate in
-    ``_numpy.py`` is silently shadowed -- a stale/wrong copy then wins and the run
-    crashes (the srad / lavamd failure mode). One source of truth, enforced here."""
-    dupes = []
+def test_initialize_lives_in_the_benchmark_module():
+    """A kernel's ``initialize`` lives in ``<module>.py`` -- never in the
+    ``<module>_numpy.py`` reference.
+
+    ``_numpy.py`` is the kernel's *reference implementation*: the spec the agent is
+    shown and optimizes against (hf_export ships it verbatim). Input generation is
+    harness scaffolding, not part of that spec, so it gets its own module. Keeping
+    one home also removes the shadowing hazard -- the oracle resolves ``<module>.py``
+    and a second copy in ``_numpy.py`` would sit there unused and drift.
+
+    Only kernels with a custom initializer are in scope: a declarative manifest
+    (empty ``init.func_name``, built by the harness' ``auto_initialize``) defines no
+    ``initialize`` anywhere, and must not be given one."""
+    misplaced = []
     for short in sorted(KERNELS):
         spec = BenchSpec.load(short)
         if spec.init is None or not spec.init.func_name:
-            continue
+            continue  # declarative: auto_initialize builds the inputs, nothing to place
         kdir = paths.BENCHMARKS / spec.relative_path
-        homes = [
-            c.name for c in (kdir / f"{spec.module_name}.py", kdir / f"{spec.module_name}_numpy.py")
-            if _defines_function(c, spec.init.func_name)
-        ]
-        if len(homes) > 1:
-            dupes.append(f"{short}: {spec.init.func_name!r} in {homes}")
-    assert not dupes, "init defined in multiple modules (keep one):\n" + "\n".join(dupes)
+        fn = spec.init.func_name
+        if _defines_function(kdir / f"{spec.module_name}_numpy.py", fn):
+            misplaced.append(f"{short}: {fn!r} is defined in {spec.module_name}_numpy.py; "
+                             f"move it to {spec.module_name}.py")
+        elif not _defines_function(kdir / f"{spec.module_name}.py", fn):
+            misplaced.append(f"{short}: init.func_name is {fn!r} but {spec.module_name}.py defines no such function")
+    assert not misplaced, ("initialize() must live in <benchmark>.py, not <benchmark>_numpy.py:\n" +
+                           "\n".join(misplaced))
 
 
 def test_relative_path_co_locates_with_a_manifest():
