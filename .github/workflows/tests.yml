@@ -86,6 +86,7 @@ jobs:
             tests/test_compile_flags.py \
             tests/test_vecmath.py \
             tests/test_ncores.py \
+            tests/test_ext_break_scaled_exit.py \
             tests/test_firewall.py \
             tests/test_hf_export.py
 
