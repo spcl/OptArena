@@ -1,20 +1,9 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The two optional diagnostics (``optarena/perf_reports.py``): a vectorization
-report and a lowered-code dump.
-
-The invariant these guard is that a TIMED run is unaffected: both knobs default off,
-and even switched on the optimization report is a SEPARATE compile that must leave
-the ``.so`` the harness times byte-identical (``test_opt_report_does_not_touch_the_
-timed_library``).
-
-The native cases build a fabricated two-precision ``cpp_backend`` rather than a real
-benchmark: it is the same code path (``cpp_runtime`` -> ``languages`` ->
-``compilers.yaml`` -> ``flags``), but it pins the SOURCE, so an assertion about which
-loop vectorized stays true when a kernel's generated code changes. The source is
-written to vectorize in one loop and provably not in the other, so the report is
-checked for both halves of its job -- what the compiler did, and what it refused.
-"""
+"""The two optional diagnostics (``optarena/perf_reports.py``): a vectorization report and a
+lowered-code dump. Both knobs default off, and even switched on the report is a SEPARATE compile that
+must leave the timed ``.so`` byte-identical. Native cases build a fabricated two-precision
+``cpp_backend`` with a pinned source, vectorizing in one loop and provably not in the other."""
 import hashlib
 import pathlib
 import subprocess
@@ -26,13 +15,9 @@ from optarena.benchmarks import cpp_runtime
 from optarena.frameworks import generate_framework
 from optarena.languages import report_flags
 
-#: One kernel per precision, holding a loop that MUST vectorize (unit stride, no
-#: dependence) followed by one that CANNOT (each iteration reads what the previous
-#: wrote) -- so one report is asked to state both a width and a refusal.
-#:
-#: The symbol carries the precision (``probe_fp64`` / ``probe_fp32``) because the two
-#: sources link into ONE library: that is the emitter's actual convention (file stem
-#: == exported symbol), and a shared name would be a duplicate definition at link.
+#: One kernel per precision: a loop that MUST vectorize followed by one that CANNOT (a dependence),
+#: so one report states both a width and a refusal. Symbol carries precision since both sources link
+#: into one library (file stem == exported symbol; a shared name would collide at link).
 _SRC = """
 void probe_%(fp)s(%(t)s *out, const %(t)s *a, const %(t)s *b, long n) {
   for (long i = 0; i < n; i++) out[i] = a[i] * b[i] + (%(t)s)1.5;
@@ -43,8 +28,7 @@ void probe_%(fp)s(%(t)s *out, const %(t)s *a, const %(t)s *b, long n) {
 
 @pytest.fixture
 def backend(tmp_path):
-    """A fabricated ``cpp_backend`` holding the two precision sources of kernel
-    ``probe``, laid out exactly as the emitter writes them."""
+    """A fabricated ``cpp_backend`` holding the two precision sources, laid out as the emitter writes them."""
     cb = tmp_path / "cpp_backend"
     cb.mkdir()
     (cb / "probe_fp64.c").write_text(_SRC % {"t": "double", "fp": "fp64"})
@@ -60,8 +44,7 @@ def _md5(path: pathlib.Path) -> str:
 
 
 def test_both_knobs_default_off():
-    """A default run must produce no reports at all -- neither costs anything it is
-    not asked for."""
+    """A default run must produce no reports at all."""
     assert perf_reports.enabled("opt_report") is False
     assert perf_reports.enabled("lowered_code") is False
 
@@ -93,21 +76,18 @@ def test_report_flags_resolve_per_compiler_family():
 
 
 def test_report_flags_are_empty_when_no_channel_is_wired():
-    """A compiler with no ``report_ref`` reports "not supported" rather than getting a
-    flag guessed for it (nvcc would reject the gcc spelling)."""
+    """A compiler with no ``report_ref`` reports "not supported" rather than a guessed flag."""
     assert report_flags("cuda", compiler="nvcc") == ""
 
 
 def test_clang_filter_never_matches_every_pass():
-    """``-Rpass=.*`` floods the report with asm-printer instruction-mix noise; the
-    filter must name the vectorizer passes."""
+    """``-Rpass=.*`` floods the report with asm-printer noise; the filter must name the vectorizer passes."""
     assert "=.*" not in flags.CLANG_OPT_REPORT
     assert "loop-vectorize" in flags.CLANG_OPT_REPORT
 
 
 def test_report_flags_never_name_a_missing_constant():
-    """Every ``report_ref`` in the compiler table must name a real
-    :mod:`optarena.flags` constant -- the yaml and the flag module cannot drift."""
+    """Every ``report_ref`` in the compiler table must name a real :mod:`optarena.flags` constant."""
     compilers = cpp_runtime.FRAMEWORK_LANG
     for framework, lang in compilers.items():
         report_flags(lang, compiler=cpp_runtime.FRAMEWORK_COMPILER.get(framework))
@@ -129,8 +109,7 @@ def test_write_none_means_not_supported_and_writes_nothing(tmp_path, monkeypatch
 
 
 def test_write_creates_the_kernel_directory_on_demand(tmp_path, monkeypatch):
-    """The 349-kernel tree is never materialised up front -- the writer makes only the
-    directory it is about to write into."""
+    """The kernel tree is never materialised up front -- the writer makes only the directory it needs."""
     monkeypatch.setattr(perf_reports, "REPORTS", tmp_path)
     path = perf_reports.write("hpc/map_reduce/arc_distance", "arc_distance", "cc", "default", "lowered_code", "TEXT")
     assert path is not None and path.read_text() == "TEXT"
@@ -138,8 +117,7 @@ def test_write_creates_the_kernel_directory_on_demand(tmp_path, monkeypatch):
 
 
 def test_two_implementations_do_not_overwrite_each_others_report(tmp_path, monkeypatch):
-    """Numba's serial and parallel tracks are separately compiled and separately
-    timed, so they must not collapse onto one filename."""
+    """Numba's serial and parallel tracks are separately compiled and timed; must not collapse onto one filename."""
     monkeypatch.setattr(perf_reports, "REPORTS", tmp_path)
     a = perf_reports.write("x", "k", "numba", "nopython-mode", "lowered_code", "SERIAL")
     b = perf_reports.write("x", "k", "numba", "nopython-mode-parallel", "lowered_code", "PARALLEL")
@@ -151,8 +129,7 @@ def test_two_implementations_do_not_overwrite_each_others_report(tmp_path, monke
 
 
 def test_frameworks_without_a_report_answer_not_supported():
-    """``None`` is the default for both hooks, so a knob can be switched on across a
-    mixed sweep without special-casing the frameworks that cannot answer."""
+    """``None`` is the default for both hooks, so a knob can switch on across a mixed sweep."""
     numpy = generate_framework("numpy")
     assert numpy.opt_report(object(), None) is None
     assert numpy.lowered_code(object(), None) is None
@@ -162,8 +139,7 @@ def test_frameworks_without_a_report_answer_not_supported():
 
 
 def test_native_opt_report_names_the_vectorized_and_the_refused_loop(backend):
-    """The report must carry BOTH halves: the width of what vectorized, and the
-    reason for what did not."""
+    """The report must carry BOTH halves: the width of what vectorized, and the reason for what did not."""
     text = cpp_runtime.opt_report_text(backend, "probe", "cc")
     assert text is not None
     assert "probe_fp64.c" in text and "probe_fp32.c" in text  # every TU, not just the last
@@ -185,9 +161,8 @@ def test_native_opt_report_is_none_when_sources_were_never_emitted(tmp_path):
 
 
 def test_opt_report_does_not_touch_the_timed_library(backend):
-    """THE invariant. The report is a separate compile-only run: the ``.so`` the
-    harness times must come out byte-identical, so a measurement cannot depend on
-    whether reports were switched on."""
+    """THE invariant: the report is a separate compile-only run, so the timed ``.so`` must come out
+    byte-identical whether or not reports were switched on."""
     so = cpp_runtime._ensure_built(backend, "probe", "cc")
     before, before_mtime = _md5(so), so.stat().st_mtime_ns
 
@@ -215,9 +190,8 @@ def test_native_lowered_code_disassembles_the_timed_library(backend):
 
 
 def test_native_lowered_code_shows_the_simd_the_report_claimed(backend):
-    """The two capabilities must agree: the report says the loop vectorized at some
-    width, and the disassembly is where that claim is checked against real
-    instructions."""
+    """The two capabilities must agree: the report claims a vectorized width, checked against the
+    disassembly's real instructions."""
     report = cpp_runtime.opt_report_text(backend, "probe", "cc")
     asm = perf_reports.objdump(cpp_runtime._ensure_built(backend, "probe", "cc"))
     assert "byte vectors" in report
@@ -225,8 +199,7 @@ def test_native_lowered_code_shows_the_simd_the_report_claimed(backend):
 
 
 def test_built_so_never_builds(backend):
-    """``lowered_code`` reports on an artifact a timed run made; it must not compile
-    one that nobody timed."""
+    """``lowered_code`` reports on an artifact a timed run made; must not compile one nobody timed."""
     assert cpp_runtime.built_so(backend, "probe", "cc") is None
     cpp_runtime._ensure_built(backend, "probe", "cc")
     assert cpp_runtime.built_so(backend, "probe", "cc") is not None
@@ -247,8 +220,8 @@ def test_objdump_of_a_non_object_is_not_supported(tmp_path):
 
 
 def test_numba_lowered_code_dumps_real_instructions():
-    """Numba never writes a ``.so``, so it answers with its own asm instead. Compiled
-    HERE (not loaded from a kernel's cache), so the JIT has something to report."""
+    """Numba never writes a ``.so``, so it answers with its own asm; compiled HERE (not cache-loaded)
+    so the JIT has something to report."""
     numba = pytest.importorskip("numba")
     numpy = pytest.importorskip("numpy")
 
@@ -271,10 +244,8 @@ def test_numba_hooks_decline_a_plain_python_function():
 
 
 def test_numba_reports_nothing_for_a_cache_restored_function(tmp_path, monkeypatch):
-    """A cache hit restores executable code with none of the compile-time
-    by-products: ``inspect_asm`` then returns an instruction-free stub rather than
-    raising, so an unguarded hook would write a well-formed report containing no
-    code. It must answer "not supported" instead."""
+    """A cache hit restores executable code with no compile-time by-products: ``inspect_asm`` returns
+    an instruction-free stub rather than raising, so this must answer "not supported" instead."""
     numba = pytest.importorskip("numba")
     src = tmp_path / "cached_kernel.py"
     src.write_text("import numba as nb\n\n@nb.njit(cache=True)\ndef k(x):\n    return x * 2.0 + 1.0\n")

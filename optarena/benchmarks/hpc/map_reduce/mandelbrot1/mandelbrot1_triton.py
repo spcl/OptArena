@@ -40,8 +40,8 @@ def _kernel_mandelbrot(
     y_mask = y_idx < yn
     mask_2d = x_mask[None, :] & y_mask[:, None]
 
-    x_coords = xmin + x_idx * (xmax - xmin) / (xn - 1.0)  # Shape: (BLOCK_SIZE_X,)
-    y_coords = ymin + y_idx * (ymax - ymin) / (yn - 1.0)  # Shape: (BLOCK_SIZE_Y,)
+    x_coords = xmin + x_idx * (xmax - xmin) / (xn - 1.0)
+    y_coords = ymin + y_idx * (ymax - ymin) / (yn - 1.0)
 
     C_real = x_coords[None, :]  # Broadcast x across rows
     C_imag = y_coords[:, None]  # Broadcast y across columns
@@ -71,13 +71,7 @@ def _kernel_mandelbrot(
 
 
 def mandelbrot(xmin, xmax, ymin, ymax, xn, yn, maxiter, horizon, Z_out, N_out):
-    # Z_out / N_out are accepted to match the harness call signature; this
-    # kernel allocates its own device tensors and RETURNS (Z, N) -- the harness
-    # binds the returns to the output buffers.
-    # Allocate output tensors
-    # X = torch.Tensor(np.linspace(xmin, xmax, xn, dtype=np.float64))
-    # Y = torch.Tensor(np.linspace(ymin, ymax, yn, dtype=np.float64))
-    # no need for the following as it can be computed inside the kernel: C = torch.Tensor(X + Y[:, None] * 1j)
+    # Z_out/N_out just match the harness signature; kernel returns fresh (Z, N), which the harness binds to them.
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     N = torch.zeros((yn, xn), dtype=torch.int64, device=device)
     if tl_float == tl.float32:

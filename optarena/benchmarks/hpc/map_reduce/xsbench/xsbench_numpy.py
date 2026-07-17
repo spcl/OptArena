@@ -1,34 +1,4 @@
-"""
-Attribution
-This module is a standalone NumPy adaptation of the XSBench computational
-kernel for numerical validation and benchmarking.
-
-Original project:
-    XSBench
-
-Extracted kernel:
-    history-based unionized-grid macroscopic cross-section lookup:
-    calculate_macro_xs, calculate_micro_xs, and grid_search
-
-Original source:
-    openmp-threading/Simulation.c
-    openmp-threading/XSbench_header.h
-    openmp-threading/GridInit.c
-    openmp-threading/Main.c
-
-Original project license:
-    MIT License
-
-This adaptation preserves the history-based unionized-grid lookup structure,
-material/nuclide loop, binary search, index_grid lookup, and five-channel
-cross-section interpolation.
-
-This adaptation preserves the computational kernel while intentionally omitting
-surrounding application/runtime infrastructure such as threading, MPI
-communication, SIMD implementations, runtime systems, I/O, benchmark
-harnesses, and other non-essential components required only by the original
-application.
-"""
+"""NumPy adaptation of the XSBench (MIT License) unionized-grid macroscopic cross-section lookup kernel."""
 import numpy as np
 
 NUM_XS_CHANNELS = 5
@@ -370,9 +340,7 @@ def xsbench_kernel(
     nuclide_grid: np.ndarray,
     mats: np.ndarray,
 ) -> np.ndarray:
-    """Run the unionized-grid XSBench lookup kernel (functional wrapper: allocates
-    the output buffer and returns it -- the harness entry ``xsbench`` writes it
-    in-place)."""
+    """Functional wrapper: allocates the output buffer, runs the lookup kernel, and returns it (see xsbench())."""
 
     out = np.zeros((int(p_energy_samples.shape[0]), NUM_XS_CHANNELS), dtype=np.float64)
     xsbench(
@@ -397,14 +365,7 @@ def generate_random_xsbench_inputs(
     max_num_nucs: int = 3,
     seed: int = 7,
 ) -> tuple[np.ndarray, ...]:
-    """Generate deterministic, production-shaped data for unionized XS lookups.
-
-    The original XSBench initializer uses an LCG stream to fill every nuclide
-    grid point, sorts each nuclide grid by energy, constructs the unionized
-    energy array as the sorted concatenation of all nuclide energies, and builds
-    index_grid with a monotone sweep over that unionized grid. Materials are
-    based on the 12 hard-coded H-M material definitions.
-    """
+    """Generates deterministic, production-shaped XSBench inputs via the original LCG stream + H-M materials."""
 
     if n_samples < 0:
         raise ValueError("n_samples must be non-negative")
@@ -476,9 +437,7 @@ def xsbench(
     mats,
     out,
 ):
-    """Manifest-compatible XSBench benchmark entry point. Writes the per-sample
-    macroscopic cross sections into the pre-allocated ``out`` buffer in place (the
-    agentbench ABI passes outputs as buffers, never a functional return)."""
+    """Manifest-compatible entry point; writes per-sample macro cross sections into out in place."""
 
     n_samples = int(p_energy_samples.shape[0])
 

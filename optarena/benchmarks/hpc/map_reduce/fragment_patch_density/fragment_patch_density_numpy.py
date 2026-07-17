@@ -1,13 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# LS3DF divide-and-conquer density patching (Gen_dens): assemble the global charge
-# density from overlapping fragment densities by signed inclusion-exclusion. Each
-# fragment F contributes rho_F(r) = sum_i |psi_{F,i}(r)|^2 (gather + reduction over its k
-# states), scatter-added into the global N^3 grid at its periodic corner offset with the
-# fragment sign alpha_F = (-1)^(number of fragment dimensions of size 1). The signed sum
-# over the 2x2x2 set of fragment shapes cancels the artificial-boundary contributions, so
-# rho_glob reproduces a direct calculation.
+# LS3DF Gen_dens: signed inclusion-exclusion scatter-add of per-fragment densities into the global rho grid.
 #
 # Method / attribution:
 #   - Wang, Zhao, Meza, Phys. Rev. B 77:165113 (2008), doi:10.1103/PhysRevB.77.165113

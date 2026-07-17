@@ -1,33 +1,4 @@
-"""
-Attribution
-This module is a standalone NumPy adaptation of the GROMACS computational
-kernel for numerical validation and benchmarking.
-
-Original project:
-    GROMACS Molecular Simulation Package
-
-Extracted kernel:
-    nbnxn_kernel_4x4_ElecQSTab_VdwLJ_F_ref nonbonded 4x4 reference kernel
-
-Original source:
-    src/gromacs/nbnxm/kernels_reference/kernel_ref_4x4.cpp
-    src/gromacs/nbnxm/kernels_reference/kernel_ref_outer.h
-    src/gromacs/nbnxm/kernels_reference/kernel_ref_inner.h
-    src/gromacs/nbnxm/kernels_reference/kernel_ref_includes.h
-
-Original project license:
-    GNU Lesser General Public License v2.1 or later (LGPL-2.1+)
-
-This adaptation preserves the 4x4 cluster traversal, exclusion handling,
-tabulated electrostatics, and Lennard-Jones force accumulation of the GROMACS
-reference NBNxM kernel.
-
-This adaptation preserves the computational kernel while intentionally omitting
-surrounding application/runtime infrastructure such as threading, MPI
-communication, SIMD implementations, runtime systems, I/O, benchmark
-harnesses, and other non-essential components required only by the original
-application.
-"""
+"""NumPy adaptation of GROMACS's nbnxn_kernel_4x4_ElecQSTab_VdwLJ_F_ref reference kernel (LGPL-2.1+)."""
 import math
 import numpy as np
 
@@ -107,9 +78,7 @@ def _generate_clustered_coordinates(n_clusters, cutoff, rng):
         center += rng.normal(0.0, 0.01 * float(cutoff), size=3)
 
         local = rng.normal(0.0, local_scale, size=(UNROLLI, 3))
-        # Keep the four atoms in a compact but non-identical arrangement. This
-        # mirrors the NBNXM assumption that atom data is clustered, while the
-        # small lane-dependent offsets avoid accidental zero-distance pairs.
+        # small lane-dependent offsets keep atoms clustered but avoid accidental zero-distance pairs.
         local += np.array(
             [
                 [-0.04, -0.02, -0.01],
@@ -472,11 +441,7 @@ def gromacs(
     f,
     fshift,
 ):
-    """Manifest-compatible GROMACS benchmark entry point. Writes the per-atom forces
-    (``f``) and per-shift virial (``fshift``) into the pre-allocated output buffers in
-    place (agentbench ABI: outputs are passed-in buffers, not a functional return).
-    The force computation itself is unchanged -- only the top-level return is copied
-    into the caller's buffers."""
+    """Manifest-compatible entry point: writes per-atom forces (f) and per-shift virial (fshift) in place."""
 
     f_res, fshift_res = _nbnxm_4x4_qstab_lj_force_arrays(
         x,

@@ -1,44 +1,6 @@
 # Copyright 2026 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Complete numpy port of ICON ``mo_velocity_advection.velocity_tendencies``
-(the dynamical-core velocity-advection dwarf -- unstructured-grid stencils with
-indirect neighbour gathers).
-
-Unlike a single-configuration port, this reproduces **every** branch of the
-Fortran subroutine, each selected by the same runtime switches ICON uses:
-
-  * ``istep``                 -- 1 enables the half-level / kinetic-energy edge
-                                 block (vt, vn_ie, z_kin_hor_e, z_vt_ie,
-                                 z_w_concorr_me, boundary levels); any other
-                                 value skips it (the values carried in on the
-                                 in/out buffers are reused, as in ICON step 2).
-  * ``lvn_only``              -- .true. short-circuits everything that is only
-                                 needed for the w-tendency (z_w_v, z_v_grad_w,
-                                 ddt_w_adv_pc) and the vn-only interior z_vt_ie.
-  * ``ldeepatmo``            -- .true. selects the deep-atmosphere formulae for
-                                 z_v_grad_w, ddt_vn_apc_pc and ddt_vn_cor_pc.
-  * ``lextra_diffu``         -- .true. tightens the CFL limit (0.65 vs 0.85) and
-                                 adds the fourth-order background diffusion on
-                                 both ddt_w_adv_pc (cells) and ddt_vn_apc_pc
-                                 (edges) at CFL-flagged levels.
-  * ``l_vert_nested``        -- .true. takes the upper-boundary vn_ie from the
-                                 nest parent (vn_ie_ubc) instead of vn level 1.
-  * ``ddt_vn_cor_associated`` -- .true. when either ddt_vn_adv/ddt_vn_cor pointer
-                                 is associated; writes the Coriolis tendency
-                                 ddt_vn_cor_pc.
-
-Validated bit-for-bit (rtol/atol 1e-10) against the Fortran reference
-(``baseline/velocity_full.f90`` driven by ``velocity_full_caller.f90``) across a
-matrix of these switches -- the same reference the DaCe SDFG / generated C++ are
-validated against (see ``test_reference.py``).
-
-Assumption (shared with the reference driver): the ICON ``get_indices_*``
-refinement ranges are full (start=1, end=nproma/nblks, owner_mask=1), so the
-kernel vectorises over the whole (nproma, nblks) plane with the level loop
-``jk`` explicit. Indirect stencils are numpy fancy-index gathers
-``A[idx-1, jk, blk-1]`` (1-based Fortran neighbour tables -> 0-based). Mutates
-its in/out buffers in place (no return).
-"""
+"""Complete numpy port of ICON mo_velocity_advection.velocity_tendencies, reproducing every Fortran branch/switch; mutates in place."""
 import numpy as np
 
 
@@ -194,8 +156,7 @@ def velocity_tendencies(
                 acc_vt += rbf[n, :, :] * gat(vn, qi, qb, n, jk)
             vt[:, jk, :] = acc_vt
 
-        # jk = 2..nlev  (0-based 1..nlev-1): vn_ie + z_kin_hor_e (always),
-        # z_vt_ie only when the w-tendency is needed (.not. lvn_only).
+        # jk=2..nlev: vn_ie + z_kin_hor_e always; z_vt_ie only when the w-tendency is needed (.not. lvn_only).
         for jk in range(1, nlev):
             we = wgtfac_e[:, jk, :]
             vn_ie[:, jk, :] = we * vn[:, jk, :] + (1.0 - we) * vn[:, jk - 1, :]
@@ -287,11 +248,7 @@ def velocity_tendencies(
     for jk in range(nf, nlev):
         z_w_con_c[:, jk, :] -= w_concorr_c[:, jk, :]
 
-    # CFL clipping band: Fortran jk = MAX(3, nrdmax-2) .. nlev-3 (1-based).
-    # Clips |z_w_con_c| where the vertical CFL exceeds 0.85, tracks the per-block
-    # max CFL (-> max_vcfl_dyn), and records which (cell, level) was clipped
-    # (cfl_clip / levmask) for the optional background diffusion. Empty (a no-op)
-    # when nrdmax-2 > nlev-3. Explicit element loop = the ICON Fortran original.
+    # CFL clipping band (jk=MAX(3,nrdmax-2)..nlev-3): clips |z_w_con_c| > 0.85*CFL, tracks max_vcfl_dyn/cfl_clip/levmask.
     vcflmax = np.zeros(nblks_c)
     cfl_clip = np.zeros((nproma, nlevp1, nblks_c), dtype=np.bool_)
     levmask = np.zeros((nblks_c, nlev), dtype=np.bool_)
@@ -316,8 +273,7 @@ def velocity_tendencies(
     for jk in range(nlev):
         z_w_con_c_full[:, jk, :] = 0.5 * (z_w_con_c[:, jk, :] + z_w_con_c[:, jk + 1, :])
 
-    # max_vcfl_dyn = MAX(prior, MAXVAL over the cell blocks). Full refinement
-    # range -> reduce over all blocks. p_diag_max_vcfl_dyn is a 1-elem in/out.
+    # max_vcfl_dyn = MAX(prior, MAXVAL over all cell blocks); p_diag_max_vcfl_dyn is a 1-elem in/out.
     p_diag_max_vcfl_dyn[0] = max(float(p_diag_max_vcfl_dyn[0]), float(vcflmax.max()))
 
     # ddt_w_adv_pc(:, jk, :, ntnd) -- only the w-tendency (.not. lvn_only).

@@ -1,21 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Canonical C-ABI binding generation (``optarena/support/bindings/``).
-
-Pins the load-bearing guarantees of ``optarena/docs/abi_contract.md`` for one
-dense kernel (``gemm``) and one sparse kernel (``spmv``):
-
-* §4 canonical order -- pointers alpha-sorted, then scalars+symbols
-  alpha-sorted, then the reserved ``workspace`` / ``workspace_size`` pair;
-* §5 const-ness -- scalars/symbols const, input pointers const, output
-  pointers non-const;
-* §3 packed group -- a sparse logical array unpacks into ordered member
-  pointers;
-* §2 phantom filter -- a captured ``np`` numpy module param never reaches the
-  signature;
-* §7 stub -- contains the signature symbol + a TODO and NOT a reference body;
-* §8 JSON round-trip.
-"""
+"""Canonical C-ABI binding generation: pins the load-bearing guarantees of abi_contract.md."""
 import pytest
 
 from optarena.support.bindings import (
@@ -35,9 +20,7 @@ def _load(name):
         pytest.skip(f"{name} spec unavailable: {exc}")
 
 
-# --------------------------------------------------------------------------- #
-# Dense kernel: gemm
-# --------------------------------------------------------------------------- #
+# --- Dense kernel: gemm --- #
 
 
 def test_gemm_canonical_order_and_constness():
@@ -134,9 +117,7 @@ def test_gemm_json_round_trip():
     assert cmap["C"] is False and cmap["A"] is True and cmap["alpha"] is True
 
 
-# --------------------------------------------------------------------------- #
-# Sparse kernel: spmv (packed group)
-# --------------------------------------------------------------------------- #
+# --- Sparse kernel: spmv (packed group) --- #
 
 
 def test_spmv_packed_group_and_order():
@@ -155,8 +136,7 @@ def test_spmv_packed_group_and_order():
     assert list(g.members) == sorted(g.members)
     assert set(g.members) == {"A_data", "A_indices", "A_indptr"}
 
-    # The members appear in the flat pointer block as ordinary const pointers,
-    # alpha-sorted with the other pointers (x), all before scalars (§4).
+    # The members appear in the flat pointer block as ordinary const pointers, alpha-sorted (§4).
     ptr_names = [a.name for a in b.args if a.kind == "ptr"]
     assert ptr_names == sorted(ptr_names)
     assert {"A_data", "A_indices", "A_indptr", "x"} <= set(ptr_names)
@@ -187,14 +167,11 @@ def test_spmv_host_glue_unpacks_handle():
         assert m in glue
 
 
-# --------------------------------------------------------------------------- #
-# Phantom-arg filter (§2)
-# --------------------------------------------------------------------------- #
+# --- Phantom-arg filter (§2) --- #
 
 
 def test_phantom_np_arg_filtered():
-    # A synthetic spec carrying a captured ``np`` numpy module param: it must
-    # never reach the binding (§2).
+    # A synthetic spec carrying a captured np numpy module param: it must never reach the binding (§2).
     raw = {
         "short_name": "phantom",
         "name": "phantom",
@@ -221,19 +198,9 @@ def test_phantom_np_arg_filtered():
     assert by["N"].role == "symbol" and by["N"].is_const is True
 
 
-# --------------------------------------------------------------------------- #
-# Scalar dtype honesty, over the WHOLE corpus                                  #
-# --------------------------------------------------------------------------- #
-# The binding is the agent-facing C ABI. It used to GUESS: every ``parameters`` key was
-# typed int64 (they are "size symbols") and every undeclared scalar float64. Both guesses
-# were wrong, in opposite directions, and neither is cosmetic -- int and float are
-# different x86-64 SysV argument register classes, so a wrong type is a wrong call.
-#   nbody declares dt: 0.05 / softening: 0.1 -> typed int64 -> native_call passed int(0.05)
-#   = 0, so a C port got a ZERO TIMESTEP and could not reproduce the reference at all.
-#   minres got tol=0; mandelbrot1's viewport collapsed to integers.
-#   Conversely tsvc_2_s122's n1 (a loop bound, declared 1) and velocity_tendencies'
-#   logical flags were typed double, disagreeing with the emitters.
-# These assert over every kernel because both bugs were corpus-wide and invisible per-kernel.
+# --- Scalar dtype honesty, over the WHOLE corpus --- #
+# The binding used to guess scalar dtype (int64 vs float64) and got it backwards for some kernels
+# (e.g. nbody's dt=0.05 -> 0); asserted corpus-wide since both bugs were invisible per-kernel.
 
 
 def _declared_value(spec, name):
@@ -257,10 +224,7 @@ def _corpus_specs():
 
 
 def test_no_fractional_scalar_is_bound_as_an_integer():
-    """A scalar whose declared value is fractional must never be bound integer.
-
-    This is the truncation bug directly: the ABI may not cast a float to an int, because
-    the value cannot survive it (dt=0.05 -> 0)."""
+    """A scalar whose declared value is fractional must never be bound integer (dt=0.05 -> 0)."""
     import numpy as np
 
     from optarena.support.bindings.contract import binding_from_spec
@@ -280,10 +244,7 @@ def test_no_fractional_scalar_is_bound_as_an_integer():
 
 
 def test_no_integer_scalar_is_bound_as_a_float():
-    """The mirror: an integer-declared scalar must not reach the kernel as a double.
-
-    Same register-class hazard, and it is how integer loop bounds / logical flags ended up
-    typed double while the emitters typed them int64_t."""
+    """The mirror: an integer-declared scalar must not reach the kernel as a double."""
     import numpy as np
 
     from optarena.support.bindings.contract import binding_from_spec
@@ -305,10 +266,7 @@ def test_no_integer_scalar_is_bound_as_a_float():
 
 
 def test_nbody_timestep_survives_the_abi():
-    """The concrete regression: nbody's dt/softening/G must be fp64, not int64.
-
-    Named explicitly because a corpus-wide assertion can be satisfied by deleting a kernel;
-    this one cannot."""
+    """The concrete regression: nbody's dt/softening/G must be fp64, not int64 (can't be deleted away)."""
     from optarena.spec import BenchSpec
     from optarena.support.bindings.contract import binding_from_spec
     by = {a.name: a for a in binding_from_spec(BenchSpec.load("nbody")).args}

@@ -1,9 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Inputs for lda_xc_potential: a strictly positive electron density rho on an N^3 grid,
-# the XC-potential output buffer vxc, a single-element XC-energy buffer exc, and the grid
-# cell volume dvol (h^3 with h = 0.2 bohr).
+# Inputs: density rho (N^3, >0), output buffers vxc/exc, and cell volume dvol = (0.2 bohr)^3.
 import numpy as np
 
 

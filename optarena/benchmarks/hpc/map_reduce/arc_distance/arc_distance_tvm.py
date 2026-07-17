@@ -1,18 +1,4 @@
-"""CPU TVM impl of ``arc_distance`` (pairwise great-circle distance).
-
-Reference (numpy)::
-
-    temp = sin((theta_2 - theta_1)/2)**2 +
-           cos(theta_1)*cos(theta_2)*sin((phi_2 - phi_1)/2)**2
-    distance = 2 * arctan2(sqrt(temp), sqrt(1 - temp))
-
-All inputs are ``(N,)`` float arrays. ``te`` has no ``atan2`` intrinsic,
-but here both arguments are non-negative square roots, so
-``arctan2(sqrt(temp), sqrt(1-temp))`` reduces to ``atan(sqrt(temp /
-(1-temp)))`` whenever ``temp < 1`` and to ``pi/2`` when ``temp == 1``
-(the ``x == 0`` axis). Both branches are emitted via ``te.if_then_else``;
-the division denominator is clamped away from zero in the unused branch.
-"""
+"""CPU TVM impl of arc_distance (pairwise great-circle distance)."""
 import tvm
 from tvm import te
 

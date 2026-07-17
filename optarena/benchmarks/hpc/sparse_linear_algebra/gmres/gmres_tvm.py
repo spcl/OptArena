@@ -1,10 +1,4 @@
-"""CPU TVM sparse GMRES solver (reference ``hand_gmres``).
-
-The Arnoldi mat-vec ``A @ Q[:, k]`` is a compiled TVM CSR SpMV; the
-modified-Gram-Schmidt orthogonalisation, the data-dependent breakdown break,
-and the least-squares solve run on the host (numpy ``lstsq``, matching the
-reference's conditioning).
-"""
+"""CPU TVM sparse GMRES (hand_gmres): compiled CSR SpMV for A @ Q[:, k]; rest runs on host (numpy lstsq)."""
 import numpy as np
 
 from optarena.support.helpers.sparse.tvm_sparse import TvmSpMV, to_numpy

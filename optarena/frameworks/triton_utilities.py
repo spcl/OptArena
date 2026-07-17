@@ -1,11 +1,5 @@
-"""
-This file contains generic kernels for matrix multiplication using Triton.
-The float32 kernel is the one that appears in the official tutorial, while
-the float64 was adapted from it. Since the float64 kernel cannot use tl.dot,
-it is significantly slower.
-Neither of the kernels were tuned specifically. The auto-tuning options are
-currently commented out for faster development.
-"""
+"""Generic Triton matrix-multiplication kernels: float32 is from the official tutorial, float64 is
+adapted from it (slower -- no tl.dot support). Neither kernel is specifically tuned."""
 import itertools
 import operator
 from functools import reduce
@@ -27,9 +21,7 @@ def powers_of_2(start, end=None):
 
 @triton.jit()
 def complex_mul(a_real, a_imag, b_real, b_imag):
-    """
-    Same as 'complex_mul2', but the real and imaginary components are passed and returned separately.
-    """
+    """Same as 'complex_mul2', but the real/imaginary components are passed and returned separately."""
     num_real = a_real * b_real - a_imag * b_imag
     num_imag = a_real * b_imag + a_imag * b_real
     return num_real, num_imag
@@ -37,12 +29,7 @@ def complex_mul(a_real, a_imag, b_real, b_imag):
 
 @triton.jit()
 def complex_mul2(a, b):
-    """
-    Performs a multiply operation of tiles of complex numbers.
-    The tiles may be of any shape where the last dimension is of size 2.
-    It represents the real and complex component respectively.
-    Returns a tile broadcast to the common shape where the last dimension is guaranteed to be of size 2.
-    """
+    """Multiplies tiles of complex numbers (last dim size 2 = real/imag); returns the same layout."""
 
     a_real, a_imag = tl.split(a)
     b_real, b_imag = tl.split(b)
@@ -59,25 +46,13 @@ def complex_div(a_real, a_imag, b_real, b_imag):
 
 @triton.jit()
 def micro_matmul(a, b):
-    """
-    Performs a matrix multiply of the tiles 'a' and 'b'.
-    'a' should be of shape (N, K), while 'b' should be of shape (K, M).
-
-    Returns a tile of shape (N, M).
-    Note: Always works unlike 'tl.dot', regardless of datatype and shape.
-    """
+    """Matrix multiply of tiles 'a' (N, K) and 'b' (K, M) -> (N, M); unlike tl.dot, works for any dtype/shape."""
     return tl.sum(a[:, :, None] * b[None, :, :], axis=1)
 
 
 @triton.jit()
 def complex_matmul2(a, b):
-    """
-    Performs a matrix multiply of the tiles 'a' and 'b'.
-    'a' should be of shape (N, K, 2), while 'b' should be of shape (K, M, 2).
-    The last dimension represents the real and imaginary component respectively.
-
-    Returns a tile of shape (N, M, 2).
-    """
+    """Matrix multiply of complex tiles 'a' (N, K, 2) and 'b' (K, M, 2) -> (N, M, 2) (last dim = real/imag)."""
     a_real, a_imag = tl.split(a)
     b_real, b_imag = tl.split(b)
     return tl.join(
@@ -86,16 +61,8 @@ def complex_matmul2(a, b):
 
 
 def derive_launch_arguments(extra_kw: Callable):
-    """
-    Function decorator capable of adding extra launch arguments by deriving them from existing.
-    This can be used to make triton kernels (functions annotated with @triton.jit) less verbose to call
-    (more like numpy and torch implementations).
-
-    All arguments passed to the kernel are first converted to keyword arguments and then passed to
-    ``extra_kw``.
-    ``extra_kw`` should return a dictionary with new keyword arguments that are to be added.
-    Values returned within this dictionary may also override existing keyword arguments.
-    """
+    """Decorator adding extra launch arguments derived from the existing (keyword-ized) ones via
+    ``extra_kw(**kwargs) -> dict``, so a @triton.jit kernel can be called less verbosely."""
 
     def decorator(fn):
 
@@ -116,10 +83,7 @@ def derive_launch_arguments(extra_kw: Callable):
 
 
 def use_grid(grid: Callable):
-    """
-    Decorator that can be added to always apply ``grid`` as the grid when calling
-    a triton kernel.
-    """
+    """Decorator that always applies ``grid`` as the grid when calling a triton kernel."""
 
     def decorator(fn):
         return fn[grid]
@@ -129,17 +93,8 @@ def use_grid(grid: Callable):
 
 @triton.jit
 def get_6d_tile_offsets(c0, c1, c2, c3, c4, c5, tile_dims: tl.constexpr, matrix_dims: tl.constexpr):
-    """
-    Generates a tile of offsets that when added to a tensor of dimensions 'matrix_dims',
-    yields a tile of size 'tile_dims' positioned at the given coordinates within the tensor.
-
-    All coordinates and dimensions are in 'number of elements' unit.
-    Assumes a fully contiguous tensor.
-
-    Returns:
-        - The offset tile of shape 'tile_dims'.
-        - A mask that can be used when loading and storing the tile to stay within the bounds of 'matrix_dims'.
-    """
+    """Offset tile of shape 'tile_dims' at coords (c0..c5) within a contiguous 'matrix_dims' tensor
+    (element units), plus the in-bounds mask; returns (offsets, mask)."""
     n0: tl.constexpr = tile_dims[0]
     n1: tl.constexpr = tile_dims[1]
     n2: tl.constexpr = tile_dims[2]
@@ -185,27 +140,14 @@ def get_4d_tile_offsets(c0, c1, c2, c3, tile_dims: tl.constexpr, matrix_dims: tl
 
 @triton.jit
 def grid_sync(barrier):
-    """
-    Performs a grid level synchronization among every thread block of the GPU. Threads leave the function as soon as
-    every thread has entered this function.
-    All memory effects performed prior to this function call are guaranteed to be visible to other threads.
-
-    'barrier' should be a pointer to an integer and is required to be 0 or 2^31 when the first thread enters.
-    The value is guaranteed to be 0 or 2^31 when all threads leave.
-
-    CAUTION: This function can deadlock if too many blocks are spawned such that they do not all fit into the warp
-    scheduler of all SMs! Add `launch_cooperative_grid=True` to the kernel launch call to cause an error if it would
-    deadlock.
-    A persistent kernel design that launches exactly as many blocks as there are SMs is recommended when using grid
-    level synchronization. See 'jacobi_1d_triton.py'.
-    """
+    """Grid-level sync barrier across every thread block; 'barrier' must be an int32 pointer set to 0 or
+    2^31 initially. CAUTION: can deadlock if more blocks are spawned than fit concurrently on the GPU --
+    use a persistent kernel (one block per SM) or ``launch_cooperative_grid=True`` to fail fast instead."""
 
     tl.static_assert(barrier.dtype.element_ty == tl.int32)
 
-    # Perform thread synchronization by incrementing a barrier by the value 2^31 in total, causing a sign bit flip.
-    # All threads but the one with id 0 increment by 1, the thread with id 0 increments by (2^31 - (num_threads - 1)).
-    # This makes it such that all threads observe the sign bit change (ie the change from 0 to 2^31 or vice versa) only
-    # as soon as every thread has performed the addition.
+    # Each thread but #0 increments the barrier by 1; thread 0 by (2^31 - (num_threads - 1)), so the
+    # sign bit flips only once every thread has added -- the observable "everyone arrived" signal.
     expected = tl.num_programs(0) * tl.num_programs(1) * tl.num_programs(2)
     first = (tl.program_id(0) + tl.program_id(1) + tl.program_id(2)) == 0
     nb = 1
@@ -231,20 +173,8 @@ def get_2d_tile_offsets(x: tl.int32,
                         matrix_width: tl.int32,
                         matrix_height: tl.int32) \
         -> tuple[tl.block_type, tl.block_type, tl.block_type, tl.block_type]:
-    """
-    Generates a tile of offsets that when added to a matrix of width 'matrix_width' and height 'matrix_height',
-    yields a tile of width 'tile_width' and height 'tile_height' positioned at 'x' and 'y' within the matrix.
-
-    All coordinates and dimensions are in 'number of elements' unit.
-    Assumes a fully contiguous matrix.
-
-    Returns:
-        - The offset tile of shape (tile_height, tile_width).
-        - A mask that can be used when loading and storing the tile to stay within the bounds of 'matrix_width' and
-          'matrix_height'.
-        - A vector containing the indices of all rows in the offset tile.
-        - A vector containing the indices of all columns in the offset tile.
-    """
+    """Offset tile (tile_height, tile_width) at (x, y) in a contiguous matrix (element units), plus the
+    in-bounds mask and the row/column index vectors; returns (offsets, mask, rows, columns)."""
     columns = x + tl.arange(0, tile_width)
     rows = y + tl.arange(0, tile_height)
     rows_2d = rows[:, None]
@@ -254,11 +184,7 @@ def get_2d_tile_offsets(x: tl.int32,
 
 @triton.jit
 def get_1d_tile_offsets(x, tile_width, vector_width):
-    """
-    Generates a tile of offsets that when added to a vector of length 'vector_width', yields 'tile_width' many elements
-    at the offset 'x'.
-    Additionally, yields a mask denoting whether every element in the offset tile is within bounds of the vector.
-    """
+    """Offset tile of 'tile_width' elements at 'x' in a 'vector_width'-length vector, plus the in-bounds mask."""
     tile, mask, rows, columns = get_2d_tile_offsets(x=x,
                                                     y=0,
                                                     tile_width=tile_width,
@@ -303,11 +229,8 @@ def kernel_mean_and_sumsq(
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
 ):
-    """
-    Calculates the mean and mean square sum of the 'M' dimension of 'data' and stores it into 'out_mean' and 'out_stddev'
-    respectively.
-    'out_mean' and 'out_stddev' must be initialized with zero.
-    """
+    """Mean and mean-square-sum of 'data' along dim M, accumulated into 'out_mean'/'out_stddev' (both
+    must be zero-initialized)."""
 
     i = tl.program_id(axis=0)
     j = tl.program_id(axis=1)
@@ -353,12 +276,8 @@ def kernel_compute_stddev(
         N,
         BLOCK_SIZE_N: tl.constexpr,
         post_process: tl.constexpr = unary_noop):
-    """
-    Given 'mean' and the mean of squares in 'stddev', calculates the standard deviation for every element of the
-    tensors and stores it back to 'stddev'.
-
-    'post_process' may be used to perform post-processing on 'stddev'.
-    """
+    """Computes the standard deviation from 'mean' and the mean-of-squares in 'stddev', stores it back
+    to 'stddev' (optionally post-processed by 'post_process')."""
 
     i = tl.program_id(axis=0)
     tile = tl.arange(0, BLOCK_SIZE_N) + i * BLOCK_SIZE_N
@@ -401,9 +320,7 @@ def matmul_kernel_float64(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
 ):
-    """
-    Triton kernel for float64 matrix multiplication.
-    """
+    """Triton kernel for float64 matrix multiplication."""
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
 
@@ -420,7 +337,6 @@ def matmul_kernel_float64(
         a = tl.load(a_ptrs, mask=(offs_am[:, None] < M) & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
         b = tl.load(b_ptrs, mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & (offs_bn[None, :] < N), other=0.0)
 
-        # Manual matrix multiplication
         accumulator += tl.sum(a[:, :, None] * b[None, :, :], axis=1)
 
         a_ptrs += BLOCK_SIZE_K * stride_ak
@@ -434,9 +350,7 @@ def matmul_kernel_float64(
 
 
 def matmul_float64(a: torch.Tensor, b: torch.Tensor):
-    """
-    Wrapper function for the float64 matrix multiplication kernel.
-    """
+    """Wrapper function for the float64 matrix multiplication kernel."""
     assert a.shape[1] == b.shape[0]
     M, K = a.shape
     K, N = b.shape
@@ -608,37 +522,27 @@ def matmul_float64(a: torch.Tensor, b: torch.Tensor):
     cache_results=True)
 @triton.jit
 def matmul_kernel_float32(
-        # Pointers to matrices
         a_ptr,
         b_ptr,
         c_ptr,
-        # Matrix dimensions
         M,
         N,
         K,
-        # The stride variables represent how much to increase the ptr by when moving by 1
-        # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
-        # by to get the element one row down (A has M rows).
+        # stride_am is how much to increase a_ptr per row (A has M rows), etc.
         stride_am,
         stride_ak,  #
         stride_bk,
         stride_bn,  #
         stride_cm,
         stride_cn,
-        # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr,
         BLOCK_SIZE_N: tl.constexpr,
         BLOCK_SIZE_K: tl.constexpr,  #
         GROUP_SIZE_M: tl.constexpr,  #
         ACTIVATION: tl.constexpr  #
 ):
-    """Kernel for computing the matmul C = A x B.
-    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
-    """
-    # -----------------------------------------------------------
-    # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse.
-    # See above `L2 Cache Optimizations` section for details.
+    """Kernel for computing the matmul C = A x B: A (M, K), B (K, N), C (M, N)."""
+    # Map program ids to C blocks in a grouped ordering to promote L2 data reuse.
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -649,10 +553,7 @@ def matmul_kernel_float32(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    # -----------------------------------------------------------
-    # Add some integer bound assumptions.
-    # This helps to guide integer analysis in the backend to optimize
-    # load/store offset address calculation
+    # Integer bound assumptions guide the backend's load/store offset address calculation.
     tl.assume(pid_m >= 0)
     tl.assume(pid_n >= 0)
     tl.assume(stride_am > 0)
@@ -662,41 +563,26 @@ def matmul_kernel_float32(
     tl.assume(stride_cm > 0)
     tl.assume(stride_cn > 0)
 
-    # ----------------------------------------------------------
-    # Create pointers for the first blocks of A and B.
-    # We will advance this pointer as we move in the K direction
-    # and accumulate
-    # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
-    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
-    # See above `Pointer Arithmetic` section for details
+    # a_ptrs/b_ptrs are [BLOCK_SIZE_M, BLOCK_SIZE_K] / [BLOCK_SIZE_K, BLOCK_SIZE_N] pointer blocks,
+    # advanced along K as we accumulate.
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-    # -----------------------------------------------------------
-    # Iterate to compute a block of the C matrix.
-    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
-    # of fp32 values for higher accuracy.
-    # `accumulator` will be converted back to fp16 after the loop.
+    # Accumulate into a [BLOCK_SIZE_M, BLOCK_SIZE_N] fp32 block for higher accuracy.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), warp_specialize=True):
-        # Load the next block of A and B, generate a mask by checking the K dimension.
-        # If it is out of bounds, set it to 0.
+        # Out-of-bounds K elements are masked to 0.
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-        # We accumulate along the K dimension.
         accumulator = tl.dot(a, b, accumulator)
-        # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # You can fuse arbitrary activation functions here
-    # while the accumulator is still in FP32!
+    # An activation function could be fused here while accumulator is still fp32.
     c = accumulator
 
-    # -----------------------------------------------------------
-    # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -705,11 +591,9 @@ def matmul_kernel_float32(
 
 
 def matmul_float32(a: torch.Tensor, b: torch.Tensor, activation=""):
-    # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     M, K = a.shape
     K, N = b.shape
-    # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=torch.float32)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )

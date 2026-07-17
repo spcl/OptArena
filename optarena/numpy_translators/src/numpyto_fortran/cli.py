@@ -1,15 +1,4 @@
-"""CLI for NumpyToFortran.
-
-Canonical front door is ``numpyto --target fortran`` (numpyto_common.cli);
-this per-package CLI is the backend that driver dispatches to.
-
-Usage::
-
-    numpyto_fortran emit \\
-        --kernel optarena/benchmarks/foundation/s111/s111_numpy.py \\
-        --bench-info bench_info/s111.json \\
-        --out optarena/benchmarks/foundation/s111/cpp_backend
-"""
+"""CLI for NumpyToFortran; backend for ``numpyto --target fortran``."""
 
 import argparse
 import pathlib
@@ -26,8 +15,7 @@ from numpyto_common.naming import native_base
 def cmd_emit(args: argparse.Namespace) -> int:
     kir = parse_kernel(args.kernel, args.bench_info, precision=args.precision)
     kir = lower(kir)
-    # Precision applied on the IR -- the Fortran emitter reads each
-    # array's dtype (float/complex remapped, ints unchanged).
+    # Precision applied on the IR: float/complex remapped, ints unchanged.
     if args.precision:
         kir = apply_precision(kir, args.precision)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -35,10 +23,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
     # Canonical native name: <short>[_<sparse>]_<fptype>, file == bind(C) symbol.
     base = native_base(short, precision=args.precision, sparse=args.config)
     if args.parallel:
-        # OpenMP variant: ``<base>_omp.f90`` with ``!$omp parallel do`` on each
-        # outermost independent / reduction loop (same bind(C) symbol as the
-        # sequential emit; compile with -fopenmp). Raises UnsupportedParallelError
-        # (nonzero exit) for a kernel with no sound parallel form.
+        # OpenMP variant, same bind(C) symbol as sequential.
         write_generated(args.out / f"{base}_omp.f90", emit_fortran_omp(kir, fn_name=base),
                         line_comment="! ", source=f"{short}_numpy.py")
         print(f"numpyto_fortran: emitted {base}_omp.f90 (OpenMP)")

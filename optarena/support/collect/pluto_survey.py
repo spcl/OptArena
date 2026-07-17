@@ -1,22 +1,9 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Survey how the Pluto polyhedral backend handles AFFINE kernels on preset S.
-
-For every foundation/hpc kernel whose emitted Pluto scop is AFFINE (the
-non-affine-index detector -- ``_scop_nonaffine_reason`` -- returns None, i.e. no
-integer-division / modulo / indirection in any array subscript), this emits the Pluto
-input, runs Pluto (``polycc``), compiles, runs, and compares the result against the
-NumPy reference via the shared numerical oracle. It then reports how many affine
-kernels are numerically correct, how many MISCOMPILE (wrong result / crash), and how
-many fail to compile or cannot be lowered by Pluto at all.
-
-Kernels that emit NO scop, or whose scop the detector flags as non-affine, are counted
-but NOT surveyed (Pluto's polyhedral model does not apply to them).
-
-The numerical oracle lives in ``tests/`` and imports as the top-level package module
-``tests.numerical_oracle``; this survey therefore runs from the repo root (where that
-package is importable).
-"""
+"""Survey how the Pluto polyhedral backend handles AFFINE kernels on preset S: for every foundation/hpc
+kernel with an affine emitted scop, runs Pluto, compiles, and compares against the NumPy reference,
+reporting correct / miscompiled / compile-failed counts. Non-affine or scop-less kernels are counted but
+not surveyed. Imports ``tests.numerical_oracle``, so this runs from the repo root."""
 import os
 
 # Keep any incidental jax on CPU (harmless -- the pluto sweep does not touch jax).
@@ -37,8 +24,7 @@ HIGHLIGHT = ("vadv", "hdiff")
 
 
 def stems() -> list:
-    """Every foundation + hpc kernel stem that loads as a registered spec (mirrors
-    tests/test_e2e_numerical.py)."""
+    """Every foundation + hpc kernel stem that loads as a registered spec."""
     out = []
     for key in sorted(KERNELS):
         stem = key.rsplit("/", 1)[-1]
@@ -52,15 +38,8 @@ def stems() -> list:
 
 
 def classify_affine(short: str) -> tuple:
-    """Emit the Pluto scop for ``short`` and classify it.
-
-    Returns ``(has_scop, affine, reason)``:
-      * ``has_scop`` -- numpyto_c emitted a ``*_pluto_input.c`` at all;
-      * ``affine``   -- a scop exists AND the detector found no non-affine index;
-      * ``reason``   -- ``None`` when affine, else ``"no-scop"`` or the detector's
-                        non-affine index kind (``modulo`` / ``integer-division`` /
-                        ``indirection``).
-    """
+    """Emit the Pluto scop for ``short`` and classify it: returns ``(has_scop, affine, reason)``, where
+    ``reason`` is None when affine, else "no-scop" or the non-affine index kind."""
     info = legacy_bench_info_dict(BenchSpec.load(short))["benchmark"]
     td = pathlib.Path(tempfile.mkdtemp(prefix="pluto_affine_"))
     try:

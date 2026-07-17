@@ -1,10 +1,4 @@
-"""CPU TVM sparse BiCG solver.
-
-BiCG needs both ``A @ p`` and ``A.T @ p_tilde``. TVM's CSR SpMV is explicit,
-so unlike the JAX path there *is* a close sparse representation: build a
-second SpMV over ``A.T`` (its own CSR). Both mat-vecs are compiled; the rest
-runs on the host.
-"""
+"""CPU TVM sparse BiCG: separate compiled CSR SpMV for A @ p and A.T @ p_tilde; rest runs on host."""
 import numpy as np
 
 from optarena.support.helpers.sparse.tvm_sparse import TvmSpMV, to_numpy

@@ -58,8 +58,7 @@ def test_claude_agent_requires_anthropic():
 
 
 def test_extract_json_object_balances_braces_in_source():
-    """The envelope parser tracks string state so C braces in `source` don't end
-    the object early; markdown fences + surrounding prose are tolerated."""
+    """The envelope parser tracks string state so C braces in `source` don't end the object early."""
     from optarena.harness.envelope import Submission, extract_json_object
     reply = ('Sure! Here is my implementation:\n```json\n'
              '{"language": "c", "source": "void k(double *a){ if (a[0]>0){ a[0]=1; } }", "build": []}\n'
@@ -87,8 +86,7 @@ def test_claude_agent_defaults_language_from_task():
 
 
 def test_ollama_agent_injected_complete():
-    """OllamaAgent parses an injected reply -> Submission (no server needed) and
-    needs no extra package (stdlib HTTP)."""
+    """OllamaAgent parses an injected reply -> Submission (no server needed, stdlib HTTP)."""
     from optarena.harness.agent import OllamaAgent
     reply = '{"language": "c", "source": "void gemm_fp64(){}", "build": []}'
     agent = OllamaAgent(complete_fn=lambda prompt: reply)
@@ -201,9 +199,7 @@ def test_python_submission_validates_and_roundtrips():
 
 
 def test_python_delivery_both_abis_score_correct():
-    """A `python` submission is graded via EITHER ABI, auto-detected on the return value:
-    in-place (writes the output buffers, returns None) or functional (returns the array).
-    No compiler needed -- the callable is run directly against the NumPy oracle."""
+    """A `python` submission is graded via either ABI, auto-detected on the return value."""
     from optarena.harness.envelope import Submission
     from optarena.harness.scoring import score
     task = Task("gemm", "restricted", "c")  # submission.language=python drives execution
@@ -227,9 +223,7 @@ def test_python_delivery_wrong_is_scored_not_raised():
 
 
 def test_bind_kernel_outputs_matches_reference_for_lists_and_tuples():
-    """_call_python and the numpy reference bind returns through the SAME helper, so a
-    functional kernel may return a bare array (single output), a tuple OR a list (multiple
-    outputs), or mutate buffers in place (None) -- all bind identically to output_args."""
+    """_call_python and the numpy reference bind returns through the SAME helper (array/tuple/list/None)."""
     import numpy as np
 
     from optarena.harness.grading import bind_kernel_outputs
@@ -248,9 +242,7 @@ def test_bind_kernel_outputs_matches_reference_for_lists_and_tuples():
 
 
 def test_submission_distribution_structural_validation():
-    """The optional MPI `distribution` selects the multi-node track; the envelope checks
-    only its STRUCTURE (grid ints, scheme in taxonomy) -- semantics vs the binding / rank
-    count are the descriptor's job. None (default) => the single-node path is unchanged."""
+    """The optional MPI `distribution` selects the multi-node track; the envelope checks only its structure."""
     ok = {
         "grid": [2, 2],
         "arrays": {
@@ -267,9 +259,7 @@ def test_submission_distribution_structural_validation():
     with pytest.raises(ValueError, match="scheme"):
         Submission(language="c", source="x",
                    distribution={"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "bogus"}]}}})
-    # 'replicated' is STRUCTURAL (grid_dim: null, or a whole-array replicated: true), not a
-    # per-axis split scheme -- an axis that names it is rejected here rather than crashing later
-    # in owned_indices.
+    # 'replicated' is structural (grid_dim: null or replicated: true), not a per-axis scheme.
     with pytest.raises(ValueError, match="scheme"):
         Submission(language="c", source="x",
                    distribution={"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "replicated"}]}}})
@@ -278,8 +268,7 @@ def test_submission_distribution_structural_validation():
 
 
 def test_reference_source_multitarget_renames_symbol():
-    """The auto path emits via the unified driver for c/cpp/fortran + renames to
-    the canonical symbol (cpp uses the C target; fortran its own)."""
+    """The auto path emits via the unified driver for c/cpp/fortran and renames to the canonical symbol."""
     import importlib.util
     if importlib.util.find_spec("numpyto_c") is None:
         pytest.skip("translators absent")
@@ -302,15 +291,13 @@ def test_score_stub_agent_gemm_fortran():
 
 
 def test_claude_agent_e2e_scores_via_injected_reply():
-    """Full loop through ClaudeAgent: model reply (JSON envelope wrapping a real
-    implementation) -> parse -> compile -> grade -> correct + speedup."""
+    """Full loop through ClaudeAgent: model reply -> parse -> compile -> grade -> correct + speedup."""
     if not _emitter_and_gcc_available():
         pytest.skip("NumpyToC emitter or gcc absent")
     import json
     from optarena.harness.scoring import score
     task = Task("gemm", "restricted", "c")
-    # The "model" returns the canonical reference wrapped in the envelope, with
-    # surrounding prose to exercise the parser end-to-end.
+    # The "model" returns the canonical reference wrapped in the envelope, with surrounding prose.
     impl = reference_source(task)
     reply = "Here you go:\n" + json.dumps({"language": "c", "source": impl, "build": []})
     agent = ClaudeAgent(complete_fn=lambda prompt: reply)
@@ -340,8 +327,7 @@ void gemm_fp64(const double *restrict A, const double *restrict B, double *restr
 
 
 def test_score_segfaulting_kernel_is_scored_not_fatal():
-    """A crashing agent kernel is a SCORED failure -- the runner survives (the
-    native call runs in a child process). Reaching the asserts proves it."""
+    """A crashing agent kernel is a scored failure; the runner survives (native call runs in a child)."""
     import shutil
     if not shutil.which("gcc"):
         pytest.skip("gcc absent")
@@ -372,9 +358,7 @@ def test_score_hanging_kernel_times_out():
     assert "exceeded" in result.detail.lower() or "native call" in result.detail.lower()
 
 
-#: A kernel that asks for 1 GiB. Under a 128 MiB budget the cap makes malloc
-#: fail, and the NULL deref is a scored crash -- the request never commits, so
-#: the test stays light even if the cap were broken.
+#: A kernel that asks for 1 GiB; under a 128 MiB budget malloc fails and the NULL deref is a scored crash.
 _MEMHOG_GEMM_C = """
 #include <stdlib.h>
 void gemm_fp64(const double *restrict A, const double *restrict B, double *restrict C,
@@ -391,10 +375,7 @@ void gemm_fp64(const double *restrict A, const double *restrict B, double *restr
 
 
 def test_score_memory_cap_enforced():
-    """A kernel that exceeds its memory budget fails inside the child (scored),
-    and the BUDGET -- not machine RAM -- is what trips it (128 MiB budget vs a
-    1 GiB request). The budget is additive over the harness baseline, so a small
-    cap like this is meaningful and a normal kernel under it still runs."""
+    """A kernel exceeding its memory budget fails inside the child (scored); the budget trips it, not RAM."""
     import os
     import shutil
     if not shutil.which("gcc"):
@@ -415,8 +396,7 @@ def test_score_memory_cap_enforced():
 
 
 def test_score_any_mode_prebuilt_library():
-    """`any` source-mode: the submission is a prebuilt C-ABI .so (built in the
-    agent's own tier), copied into the sandbox and scored like any other."""
+    """`any` source-mode: the submission is a prebuilt C-ABI .so, copied into the sandbox and scored."""
     if not _emitter_and_gcc_available():
         pytest.skip("NumpyToC emitter or gcc absent")
     import pathlib
@@ -472,9 +452,7 @@ def test_hidden_tests_firewalled():
     assert "optarena/harness/hidden_tests/" in ignore
 
 
-#: An OVERFIT submission: a real gemm at the public size, but with the S-preset
-#: dimensions HARD-CODED instead of using NI/NJ/NK -- correct on the visible
-#: inputs, wrong on a held-out case of a different shape.
+#: An overfit submission: S-preset dims hard-coded instead of NI/NJ/NK; correct visible, wrong held-out.
 _OVERFIT_GEMM_C = """
 void gemm_fp64(const double *restrict A, const double *restrict B, double *restrict C,
                  long NI, long NJ, long NK, double alpha, double beta) {
@@ -635,11 +613,7 @@ def test_cli_residency_rejects_bad_value():
 
 
 def test_score_device_residency_gated():
-    """Device scoring needs cupy + a GPU; absent, it's a clear scored error.
-
-    No GPU is ever touched here regardless of hardware: ``StubAgent`` has no cuda
-    reference, so ``run_task`` returns an ``agent_error`` BEFORE scoring would launch
-    anything -- so the guard is exercised unconditionally (no skip)."""
+    """Device scoring needs cupy + a GPU; absent, it's a clear scored error (exercised unconditionally)."""
     from optarena.harness.runner import run_task
     row = run_task(StubAgent(), Task("gemm", "restricted", "cuda", residency="device"))
     assert row.status in ("agent_error", "score_error") and row.correct is False
@@ -658,8 +632,7 @@ def _cuda_available():
         return False
 
 
-#: A device-resident CUDA gemm: pointers are already on the GPU, so the host
-#: entry only launches (no cudaMemcpy); the harness times it with GPU events.
+#: A device-resident CUDA gemm: pointers already on GPU, host entry only launches; timed via GPU events.
 _DEVICE_CUDA_GEMM = r"""
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -683,8 +656,7 @@ extern "C" void gemm_fp64(const double *A, const double *B, double *C,
 
 
 def test_score_device_residency_cuda_e2e():
-    """REAL GPU run: a device-resident CUDA gemm -> nvcc compile -> cupy H2D once
-    (outside timing) -> launch on device pointers -> GPU-event time -> D2H grade."""
+    """REAL GPU run: device-resident CUDA gemm -> nvcc compile -> launch on device pointers -> GPU-event time."""
     if not _cuda_available():
         pytest.skip("no CUDA device / nvcc / cupy")
     from optarena.harness.scoring import score

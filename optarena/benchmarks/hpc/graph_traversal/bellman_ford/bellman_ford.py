@@ -3,8 +3,7 @@
 
 import numpy as np
 
-# Large finite sentinel for "no edge" / "unreached"; kept finite (not np.inf)
-# so the relaxation sum stays well-defined in fp32 as well as fp64.
+# Finite sentinel for "no edge"/"unreached" (not inf, stays well-defined in fp32/fp64).
 INF = 1.0e9
 
 

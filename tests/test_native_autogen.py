@@ -1,16 +1,5 @@
-"""Native (C / C++ / Fortran) on-demand generation + the canonical ABI.
-
-Locks the post-collapse native scheme:
-
-* the emitter writes ``<short>_<fptype>.<ext>`` with the bare base as the
-  exported symbol (no ``_auto`` / per-compiler suffix), carrying the
-  ``optarena-autogen`` marker on line 1;
-* ``cpp_runtime.wrap_kernel`` builds ``lib<short>_<framework>.so`` per framework
-  (cc=gcc, llvm=clang, fortran=gfortran) and the result matches the numpy
-  reference for both precisions.
-
-Skips cleanly where the translators or a compiler are absent.
-"""
+"""Native (C / C++ / Fortran) on-demand generation + the canonical ABI. Skips cleanly where the
+translators or a compiler are absent."""
 import importlib.util
 import pathlib
 import shutil
@@ -24,13 +13,10 @@ from optarena import paths
 from optarena.spec import BenchSpec
 
 KERNEL = "tsvc_2_s212"  # 1-D: a,b outputs; c,d inputs; LEN_1D symbol
-#: A kernel whose manifest ``short_name`` is an ABBREVIATION of its registry stem
-#: (``arc_distance`` -> ``adist``); 26 of the corpus are like this. Nothing is
-#: registered or emitted under the abbreviation, so it is the shape that catches a
-#: short_name/stem mix-up -- ``KERNEL`` above cannot (its three names coincide).
+#: A kernel whose manifest ``short_name`` abbreviates its registry stem (``arc_distance`` -> ``adist``);
+#: catches a short_name/stem mix-up that KERNEL above cannot (its three names coincide).
 ABBREVIATED = "arc_distance"
-#: framework -> the compiler binary that must be present to build it. Polly/Pluto
-#: are flag presets on the C++ source, so they need clang(++) like llvm.
+#: framework -> the compiler binary that must be present to build it.
 _COMPILER = {"cc": "gcc", "llvm": "clang", "fortran": "gfortran", "polly": "clang", "pluto": "clang"}
 
 
@@ -39,22 +25,15 @@ def _emitter_present() -> bool:
 
 
 def test_abbreviated_kernel_premise():
-    """Guard for the two tests below: they are only meaningful while this kernel's
-    short_name really does differ from the stem its manifest/reference are named
-    after. If the corpus ever renames it, they must move, not silently pass."""
+    """Guard for the two tests below: only meaningful while short_name differs from the stem."""
     spec = BenchSpec.load(ABBREVIATED)
     assert spec.short_name != ABBREVIATED, "pick a kernel whose short_name abbreviates its stem"
     assert spec.module_name == ABBREVIATED
 
 
 def test_native_base_follows_the_module_stem():
-    """The native stem is the ``<module>_numpy.py`` stem, NOT ``short_name``.
-
-    numpyto_c.cli derives the file/symbol base from the reference filename it is
-    handed, deliberately independent of the manifest's short_name abbreviation. A
-    short_name-keyed base desyncs the loader from the emitter for all 26
-    abbreviating kernels: the emitter writes arc_distance_fp64.c while the loader
-    hunts for adist_fp64.c and declares the sources ungenerated."""
+    """The native stem is the ``<module>_numpy.py`` stem, not ``short_name`` -- a short_name-keyed base
+    would desync the loader from the emitter for every abbreviating kernel."""
     spec = BenchSpec.load(ABBREVIATED)
     assert spec.native_base() == "arc_distance"
     assert spec.native_base("dense") == "arc_distance"
@@ -64,12 +43,8 @@ def test_native_base_follows_the_module_stem():
 
 @pytest.mark.skipif(not _emitter_present(), reason="translators absent")
 def test_emit_native_resolves_the_manifest_by_stem():
-    """emit_native must emit for a kernel whose short_name != stem.
-
-    Manifests are registered under their STEM, so resolving one by
-    ``spec.short_name`` looks up an ``adist`` that no manifest is named after and
-    every native target fails with a KeyError -- leaving only the wrapper, whose
-    import then SUCCEEDS and defers the damage to an unrelated build error."""
+    """emit_native must emit for a kernel whose short_name != stem: manifests are registered under
+    their stem, so resolving by short_name would KeyError on every native target."""
     from optarena.autogen import emit_native
     spec = BenchSpec.load(ABBREVIATED)
     cppdir = paths.BENCHMARKS / spec.relative_path / "cpp_backend"
@@ -147,11 +122,7 @@ def test_wrap_kernel_matches_numpy(framework, dtype, fptype):
         assert np.allclose(eb, nb, rtol=rt, atol=rt)
 
 
-# A sparse kernel is emitted ONE source per configuration; the layout IS the
-# sub-benchmark. The buffer-style numpy ref takes the unpacked CSR buffers, so
-# the bench_info is flattened (emit_bridge) and the emitted source carries the
-# <short>_<config>_<fptype> name (no duplicate parameters). C/C++ match numpy
-# (Fortran also compiles now -- see the kind-unification tests below).
+# A sparse kernel is emitted ONE source per configuration; the layout IS the sub-benchmark.
 @pytest.mark.parametrize("framework", ["cc", "llvm"])
 @pytest.mark.parametrize("dtype,fptype", [(np.float64, "fp64"), (np.float32, "fp32")])
 def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype):
@@ -199,9 +170,7 @@ def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype):
 
 
 def test_symbols_and_iterators_are_int64():
-    """Every backend declares size symbols AND loop iterators at the int64 ABI
-    width (abi_contract.md): a 32-bit symbol/iterator would mix widths with the
-    int64 index arithmetic and (in Fortran) fail to compile."""
+    """Every backend declares size symbols AND loop iterators at the int64 ABI width (abi_contract.md)."""
     if not _emitter_present():
         pytest.skip("translators absent")
     from optarena.emit_bridge import emit_kernel
@@ -222,12 +191,8 @@ def test_symbols_and_iterators_are_int64():
 
 
 def test_pluto_emits_multidim_for_rank2_arrays():
-    """The Pluto input emits every rank>=2 array as a DIRECT VLA parameter
-    (``T name[restrict d0][d1]``) so pet extracts an affine scop from ``A[i][j]``.
-    The flat-pointer + local cast-view form yields ZERO statements -- pet drops the
-    whole scop and the kernel silently miscompiles to a no-op (the output write
-    vanishes). Because a VLA dim must be in scope, size symbols precede the arrays in
-    the signature; emit_pluto_binding matches that order. Locks the VLA form."""
+    """The Pluto input emits every rank>=2 array as a direct VLA parameter so pet extracts an affine
+    scop; the flat-pointer form yields zero statements and silently miscompiles to a no-op."""
     if not _emitter_present():
         pytest.skip("translators absent")
     import json
@@ -249,9 +214,7 @@ def test_pluto_emits_multidim_for_rank2_arrays():
 
 
 def test_pluto_keeps_rank1_arrays_flat():
-    """A purely rank-1 kernel keeps flat pointer params (``T *restrict a``) -- a 1-D
-    ``a[i]`` is already affine, so no VLA form is emitted. Kernels that CANNOT be made
-    multidim just choke in polycc and skip; that is acceptable, not a failure."""
+    """A purely rank-1 kernel keeps flat pointer params -- a 1-D ``a[i]`` is already affine, no VLA needed."""
     if not _emitter_present():
         pytest.skip("translators absent")
     from optarena.emit_bridge import emit_kernel
@@ -312,10 +275,8 @@ _INT32_BENCH = {
     ("fortran", "fortran", "gfortran", "f90"),
 ])
 def test_int32_array_promoted_on_read(framework, target, compiler, ext):
-    """A user-supplied int32 index/value array stays CORRECT: its elements are
-    promoted to int64 on read, so ``idx[i] * scale`` (int32 elem * int64 scalar)
-    is a single-width op. Without promotion the Fortran build fails outright
-    (mixed integer kinds) and any backend risks a narrow-width miscompile."""
+    """A user-supplied int32 array is promoted to int64 on read, so a mixed-width op stays single-width;
+    without it the Fortran build fails outright (mixed integer kinds)."""
     import ctypes
     import json
     import subprocess
@@ -328,8 +289,7 @@ def test_int32_array_promoted_on_read(framework, target, compiler, ext):
         numpy_py.write_text(_INT32_SRC)
         bi = out / "bi.json"
         bi.write_text(json.dumps(_INT32_BENCH))
-        # Always emit C (it writes the .c/.cpp + the canonical binding JSON, the
-        # single source of the ABI arg order); also emit Fortran when needed.
+        # Always emit C: it writes the canonical binding JSON (the single source of ABI arg order).
         mods = ["numpyto_c.cli"] + (["numpyto_fortran.cli"] if target == "fortran" else [])
         for mod in mods:
             r = subprocess.run([
@@ -344,8 +304,7 @@ def test_int32_array_promoted_on_read(framework, target, compiler, ext):
 
         base = "gather_scale_fp64"
         src = out / f"{base}.{ext}"
-        # The narrow int32 element is explicitly promoted on read (not a bare
-        # mixed-width op): cast in C, INT(..) in Fortran.
+        # Promoted on read: cast in C, INT(..) in Fortran.
         text = src.read_text()
         assert ("(int64_t)" in text) if target != "fortran" else ("INT(idx" in text)
 

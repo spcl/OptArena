@@ -1,20 +1,4 @@
-"""CPU TVM impl of the deep-learning ``conv2d_bias`` microbench.
-
-The numpy reference (``conv2d_numpy.py``) is a stride-1, ``valid`` (no-pad)
-2D convolution in NHWC layout::
-
-    input   : (N, H, W, C_in)
-    weights : (K, K, C_in, C_out)         # square kernel
-    bias    : (C_out,)
-    output  : (N, H-K+1, W-K+1, C_out)
-            = sum_{kh,kw,cin} input[n, i+kh, j+kw, cin] * weights[kh,kw,cin,co]
-              + bias[co]
-
-A single PrimFunc: one ``te.compute`` reducing over the (kh, kw, cin) window
-with three ``te.reduce_axis`` axes, then ``+ bias`` folded into the same
-expression. ``bench_info`` lists no ``output_args``, so the entry returns the
-freshly-computed output tensor.
-"""
+"""CPU TVM impl of the deep-learning ``conv2d_bias`` microbench."""
 import tvm
 from tvm import te
 

@@ -1,8 +1,4 @@
-"""Foundation adversarial kernel ``unroll_prime_17_uniform`` (numpy reference).
-
-Hand-authored: the source IS the bad code. The puzzle is to
-recognise the pathology and emit faster, correct replacement.
-"""
+"""Foundation adversarial kernel ``unroll_prime_17_uniform`` (numpy reference)."""
 
 
 def unroll_prime_17_uniform(N, a, b):

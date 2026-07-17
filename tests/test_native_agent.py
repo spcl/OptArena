@@ -1,16 +1,9 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Native (no-container) agent run mode + two run-loop fixes.
-
-Part A -- native mode: the ``native`` prompt variant is host-framed (no container),
-submissions land under ``optarena/native_runs/<run_id>/<kernel>/``, the CLI exposes
-``--native``, and a native run records ``execution="native"`` (pinned to win over any
-ambient container provenance).
-Part B -- the run summary counts correctness by ``row.correct`` (a timed-out-but-correct
-kernel counts), not by ``status == "ok"``.
-Part C -- once an attempt is correct the next repair round re-prompts with a
-"you are correct, current best = X, go faster" message, not the failure-framed one.
-"""
+"""Native (no-container) agent run mode + two run-loop fixes. Part A: native mode is host-framed, lands
+submissions under ``native_runs/<run_id>/<kernel>/``, and records ``execution="native"`` pinned over
+ambient provenance. Part B: the run summary counts correctness by ``row.correct``, not
+``status == "ok"``. Part C: once correct, the repair round re-prompts "go faster", not failure-framed."""
 import math
 from types import SimpleNamespace
 
@@ -98,9 +91,8 @@ def test_cli_agent_native_flag_parses():
 
 
 def test_agent_summary_counts_timeout_correct():
-    """A kernel whose run timed out AFTER reaching a correct best-so-far
-    (status='timeout', correct=True) is a real success and must count toward both
-    the correct-count and the geomean; a not-solved timeout must not."""
+    """A kernel that timed out AFTER reaching a correct best-so-far counts toward the correct-count
+    and geomean; a not-solved timeout must not."""
     from optarena.cli import _agent_summary
     rows = [
         SimpleNamespace(status="ok", correct=True, speedup=2.0),
@@ -139,8 +131,8 @@ def test_failure_feedback_still_renders_the_repair_branch():
 
 
 def _correct_score(submission, task, **kwargs):
-    """A correct :class:`Score` with a fixed speedup, replacing runner.score so the
-    control flow is exercised without a real compile."""
+    """A correct :class:`Score` with a fixed speedup, replacing runner.score to exercise control flow
+    without a real compile."""
     return Score(True,
                  0.0,
                  1,
@@ -170,10 +162,8 @@ class _PromptCapturingAgent(StubAgent):
 
 
 def test_solve_rounds_reprompts_go_faster_after_correct(monkeypatch):
-    """Once round 1 is correct, round 2's prompt is the 'you are correct, best = X, go
-    faster' message (carrying the running best speedup), NOT the failure-framed repair
-    prompt. Driven directly against _solve_rounds (in-process, no fork) so the prompt the
-    agent saw can be inspected."""
+    """Once round 1 is correct, round 2's prompt is the go-faster message, not the failure-framed
+    repair prompt. Driven directly against _solve_rounds (in-process) so the prompt is inspectable."""
     monkeypatch.setattr(runner, "score", _correct_score)
     agent = _PromptCapturingAgent()
     row, sub = runner._solve_rounds(agent, TASK, max_rounds=2)
@@ -194,9 +184,8 @@ def _emitter_and_gcc():
 
 
 def test_native_run_records_native_and_saves_submission(tmp_path, monkeypatch):
-    """A full native CLI run: submissions land under the (redirected) native_runs tree,
-    and the recorded execution is pinned to 'native' EVEN WITH an ambient
-    OPTARENA_RECORD_EXECUTION=container -- the in-process override wins."""
+    """A full native CLI run: submissions land under native_runs, and execution is pinned to 'native'
+    even with an ambient OPTARENA_RECORD_EXECUTION=container -- the in-process override wins."""
     if not _emitter_and_gcc():
         pytest.skip("NumpyToC emitter or gcc absent")
     import sqlite3

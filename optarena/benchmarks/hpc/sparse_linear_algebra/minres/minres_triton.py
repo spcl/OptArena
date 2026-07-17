@@ -1,9 +1,4 @@
-"""Triton sparse MINRES-style solver.
-
-Sparse mat-vec A @ p via the shared Triton CSR SpMV; the dense Krylov vector
-arithmetic and the convergence loop run in torch on the GPU, matching the
-numpy reference. GPU-only (unverified in the CPU-only sandbox).
-"""
+"""Triton sparse MINRES-style: shared CSR SpMV for A @ p; Krylov loop runs in torch on GPU (GPU-only)."""
 import torch
 
 from optarena.support.helpers.sparse.triton_sparse import TritonSpMV

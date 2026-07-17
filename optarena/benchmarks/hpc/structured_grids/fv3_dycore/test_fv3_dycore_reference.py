@@ -1,28 +1,6 @@
 # Copyright 2026 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Correctness gate for the numpy FV3 dycore-transport reference.
-
-PRIMARY validation: cross-check each ported stencil against the SAME math run
-through the GT4Py ``backend="numpy"`` GTScript (the actual pyfv3 DSL) on
-identical inputs -- exactly as the sibling fv3_xppm test does. GT4Py installs
-from PyPI and HAS a pure-numpy backend; pyfv3/ndsl themselves are not on PyPI,
-so the GTScript stencils are reconstructed here verbatim from the pyfv3 source.
-
-Coverage (each validated bit-exact / array_equal vs GT4Py where a GTScript exists):
-  * xppm get_flux + compute_al (interior + grid_type<3 edge regions)
-  * yppm get_flux + compute_al (interior + grid_type<3 edge regions)
-  * q_i_stencil, q_j_stencil           (fvtp2d eq 4.18)
-  * final_fluxes                        (fvtp2d eq 4.17)
-  * fx_calculation / fy_calculation / d2_damp_interval (delnflux nord==0)
-  * copy_corners_x / copy_corners_y     (pure-numpy: identity transcription)
-  * finite_volume_transport composition (grid_type>=3 interior) end-to-end
-
-If GT4Py is not importable the cross-check is skipped and the port is validated
-by physics invariants instead (constant-field preservation through the PPM/
-transport operators, shape/finiteness).
-
-Provenance/licence of the math: NOAA-GFDL/PyFV3 (pyfv3), Apache-2.0.
-"""
+"""Correctness gate: cross-checks each ported stencil vs GT4Py's numpy GTScript backend (from pyfv3)."""
 import importlib.util
 from pathlib import Path
 
@@ -615,8 +593,7 @@ if HAVE_GT4PY:
                 heat_source = delp * (heat_source - kefrac * dampterm)
 
     # ---------- nonhydro vertical GTScript (sim1 / riem_c / updatedzc) ----------
-    # FV3 physical constants (ndsl UFS/GFDL default set); kept identical to the
-    # numpy port so the two pipelines are comparable.
+    # FV3 physical constants (ndsl UFS/GFDL default set), kept identical to the numpy port.
     _RDGAS = 8314.47 / 28.965
     _GRAV = 9.80665
     _DZ_MIN = 6.0
@@ -1218,9 +1195,7 @@ if HAVE_GT4PY:
             q = (q * dp1 + (fx - fx[1, 0, 0] + fy - fy[0, 1, 0]) * rarea) / dp2
 
 
-# ===========================================================================
 # xppm / yppm bit-exact vs GT4Py
-# ===========================================================================
 def _setup(ni, nj, nk, hord, grid_type):
     init = _load("fv3_dycore")
     st = init.initialize(ni, nj, nk, hord, grid_type)
@@ -1299,9 +1274,7 @@ def test_yppm_matches_gt4py(jord, grid_type):
     assert np.array_equal(yflux[sl], gt[sl])
 
 
-# ===========================================================================
 # fvtp2d helpers bit-exact vs GT4Py
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_q_i_stencil_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
@@ -1382,9 +1355,7 @@ def test_final_fluxes_matches_gt4py():
     assert np.array_equal(yf[i0:i1 + 1, j0:j1 + 2], gyf[i0:i1 + 1, j0:j1 + 2])
 
 
-# ===========================================================================
 # delnflux pieces bit-exact vs GT4Py
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_delnflux_fx_fy_d2_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
@@ -1421,16 +1392,7 @@ def test_delnflux_fx_fy_d2_matches_gt4py():
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 @pytest.mark.parametrize("nord", [2])
 def test_delnflux_higher_order_matches_gt4py(nord):
-    """del-4 (nord=2) diffusive fluxes fx2/fy2 bit-exact vs a GT4Py
-    reconstruction of DelnFluxNoSG that walks the identical origin/domain
-    sequence. copy_corners is the shared plain-numpy op (pyfv3 itself runs the
-    blind corner copy on ndarrays), applied to both sides, so the validated GT4Py
-    parts are the flux / d2-highorder stencils.
-
-    nord=3 (del-6) is implemented identically but needs nhalo>=4 (its preamble
-    block reaches isc-1-nord .. iec+1+nord); this benchmark fixes nhalo=3, so
-    del-6 is exercised only where a 4-halo tile is supplied (not here).
-    """
+    """del-4 (nord=2) fluxes bit-exact vs a GT4Py DelnFluxNoSG reconstruction; del-6 needs nhalo>=4, unexercised."""
     npy = _load("fv3_dycore_numpy")
     d = _setup(24, 24, 6, 5, 3)
     nhalo, ni, nj, nk = d["nhalo"], d["ni"], d["nj"], d["nk"]
@@ -1499,9 +1461,7 @@ def test_delnflux_higher_order_matches_gt4py(nord):
     assert np.array_equal(fy2[i0a:i1a + 2, j0a:j1a + 2], gfy2[i0a:i1a + 2, j0a:j1a + 2])
 
 
-# ===========================================================================
 # copy_corners: identity transcription of pyfv3 (no GT4Py needed)
-# ===========================================================================
 def test_copy_corners_identity():
     npy = _load("fv3_dycore_numpy")
     rng = np.random.default_rng(2)
@@ -1521,18 +1481,11 @@ def test_copy_corners_identity():
     assert np.array_equal(fy[-2, -2], f[-7, -2])
 
 
-# ===========================================================================
 # finite_volume_transport composition (grid_type>=3 interior) end-to-end
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 @pytest.mark.parametrize("hord", [5, 6, 7])
 def test_fvtp2d_composition_matches_gt4py(hord):
-    """Full fv_tp_2d (no del-n) composed in numpy vs the same chain in GT4Py.
-
-    Uses grid_type=3 so compute_al has no edge regions (and the q copy-corners
-    are no-ops in the interior compute window), making the two pipelines
-    identical on the compute domain.
-    """
+    """Full fv_tp_2d (no del-n) composed in numpy vs the same chain in GT4Py (grid_type=3, no edge regions)."""
     npy = _load("fv3_dycore_numpy")
     d = _setup(24, 24, 6, hord, 3)
     nhalo, ni, nj, nk = d["nhalo"], d["ni"], d["nj"], d["nk"]
@@ -1601,21 +1554,15 @@ def test_fvtp2d_composition_matches_gt4py(hord):
         origin=(nhalo, nhalo, 0),
         domain=(ni + 1, nj + 1, nk))
 
-    # Compare the deep interior only: the GT4Py reference computes each
-    # intermediate (q_y_advected_mean, q_advected_y, ...) over the widest window
-    # its own origin/domain bounds allow, which is a few cells narrower than the
-    # numpy port near the tile boundary; the two pipelines are identical wherever
-    # every intermediate the final flux reads is fully resolved in both. A 4-cell
-    # inset from each interior edge guarantees that.
+    # Compare the deep interior only: GT4Py's intermediates are narrower near the tile boundary; a
+    # 4-cell inset guarantees every intermediate the final flux reads is fully resolved in both.
     m = 4
     i0, i1, j0, j1 = nhalo + m, nhalo + ni - 1 - m, nhalo + m, nhalo + nj - 1 - m
     assert np.array_equal(qxf[i0:i1 + 1, j0:j1 + 1], gxf[i0:i1 + 1, j0:j1 + 1])
     assert np.array_equal(qyf[i0:i1 + 1, j0:j1 + 1], gyf[i0:i1 + 1, j0:j1 + 1])
 
 
-# ===========================================================================
 # GT4Py-free invariants
-# ===========================================================================
 @pytest.mark.parametrize("grid_type", [0, 1, 2, 3])
 def test_constant_field_preserved_xppm_yppm(grid_type):
     npy = _load("fv3_dycore_numpy")
@@ -1646,17 +1593,12 @@ def test_fvtp2d_runs_and_finite():
     assert np.all(np.isfinite(qyf[i0:i1 + 1, j0:j1 + 2]))
 
 
-# ===========================================================================
 # c_sw leaf stencils bit-exact vs GT4Py (interior / pointwise bodies)
-# ===========================================================================
 NI_C, NJ_C, NK_C = 24, 24, 6
 
 
 def _csw_fields(seed=7):
-    """Random k-replicated SoA fields for the c_sw leaf tests. Metric fields are
-    constant in k (the FloatFieldIJ originals); winds vary in all three axes.
-    sina/sin_sg are bounded away from 0 so the velocity-update division is safe.
-    """
+    """Random k-replicated SoA fields for the c_sw leaf tests; sina/sin_sg bounded away from 0 for safe division."""
     nhalo = 3
     ni, nj, nk = NI_C, NJ_C, NK_C
     nx, ny = nhalo + ni + nhalo, nhalo + nj + nhalo
@@ -1893,13 +1835,10 @@ def test_divergence_corner_gt4_matches_gt4py():
     assert np.array_equal(divg[1:, 1:], gd[1:, 1:])
 
 
-# ===========================================================================
 # d2a2c_vect leaf stencils + grid_type==4 composition bit-exact vs GT4Py
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_d2a2c_leaf_stencils_match_gt4py():
-    """The d2a2c leaf stencils (lagrange interp, contravariant components,
-    ut_main, vt_main) each bit-exact vs GT4Py over their compute windows."""
+    """The d2a2c leaf stencils (lagrange interp, contravariant components, ut_main, vt_main) each bit-exact vs GT4Py."""
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
     nhalo, ni, nj, nk, nx, ny = f["nhalo"], f["ni"], f["nj"], f["nk"], f["nx"], f["ny"]
@@ -1977,9 +1916,7 @@ def test_d2a2c_leaf_stencils_match_gt4py():
 
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_d2a2c_gt4_composition_matches_gt4py():
-    """Full d2a2c_vect (grid_type==4) composed in numpy vs the identical chain in
-    GT4Py (set_tmps -> lagrange_y_p1/x_p1 -> contravariant_components ->
-    ut_main -> vt_main), compared over the deep interior."""
+    """Full d2a2c_vect (grid_type==4) composed in numpy vs the identical chain in GT4Py, over the deep interior."""
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
     nhalo, ni, nj, nk, nx, ny = f["nhalo"], f["ni"], f["nj"], f["nk"], f["nx"], f["ny"]
@@ -2046,21 +1983,11 @@ def test_d2a2c_gt4_composition_matches_gt4py():
     assert np.array_equal(vtc[s], gvtc[s])
 
 
-# ===========================================================================
 # c_sw (grid_type==4) FULL composition bit-exact vs GT4Py over the interior
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 @pytest.mark.parametrize("nord", [0, 1])
 def test_c_sw_gt4_composition_matches_gt4py(nord):
-    """The full c_sw C-grid solver step for grid_type==4 composed in numpy vs the
-    identical chain reconstructed in GT4Py, compared over the deep interior.
-
-    grid_type==4 compiles OUT every ``__INLINED(grid_type < 3)`` edge block, so
-    the c_sw computation is exactly: d2a2c -> [divergence_corner if nord>0] ->
-    geoadjust -> nonhydro_fluxes_x -> transportdelp -> KE/vort -> circulation ->
-    absolute_vorticity -> update_y_velocity -> update_x_velocity. Both pipelines
-    walk the same stencils with the same windows, so they agree bit-exact.
-    """
+    """The full c_sw C-grid solver step for grid_type==4 vs the identical GT4Py chain, deep interior."""
     npy = _load("fv3_dycore_numpy")
     f = _csw_fields()
     nhalo, ni, nj, nk, nx, ny = f["nhalo"], f["ni"], f["nj"], f["nk"], f["nx"], f["ny"]
@@ -2238,9 +2165,7 @@ def test_c_sw_gt4_composition_matches_gt4py(nord):
     assert np.array_equal(vc[s], gvc[s]), "vc"
 
 
-# ===========================================================================
 # d_sw leaf stencils bit-exact vs GT4Py (interior / pointwise bodies)
-# ===========================================================================
 def _dsw_fields(seed=21):
     """Random k-replicated SoA fields for the d_sw leaf tests. delp positive."""
     nhalo = 3
@@ -2564,9 +2489,7 @@ def test_dsw_advect_v_along_y_matches_gt4py(jord):
     assert np.array_equal(vp[:, j0:j1 + 2], gvp[:, j0:j1 + 2])
 
 
-# ===========================================================================
 # fxadv + divergence_damping + d_sw KE/heat (grid_type>=3) bit-exact vs GT4Py
-# ===========================================================================
 def _ddamp_fields(seed=41):
     nhalo = 3
     ni, nj, nk = NI_C, NJ_C, NK_C
@@ -2723,9 +2646,7 @@ def test_smag_corner_matches_gt4py():
       domain=(ni + 1, nj + 1, nk))
     i0, i1, j0, j1 = nhalo, nhalo + ni - 1, nhalo, nhalo + nj - 1
     sl = (slice(i0, i1 + 2), slice(j0, j1 + 2))
-    # smag_corner's doubly_periodic_a2b_ord4 shear differs from the GT4Py inline
-    # by at most 1 ULP at a handful of points (FMA / sum-association in the
-    # backend); the math is identical. Validate to float64 round-off.
+    # shear can differ from GT4Py by up to 1 ULP (FMA/sum-association); validate to float64 round-off.
     assert np.allclose(sc[sl], gsc[sl], rtol=0, atol=1e-14)
 
 
@@ -2805,8 +2726,7 @@ def test_heat_source_from_vort_damping_matches_gt4py():
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 @pytest.mark.parametrize("nord", [1, 2])
 def test_divergence_damping_gt4_composition_matches_gt4py(nord):
-    """Full divergence_damping (grid_type>=3, uniform nord, do_zero_order=False)
-    composed in numpy vs the identical chain in GT4Py over the deep interior."""
+    """Full divergence_damping (grid_type>=3, uniform nord, do_zero_order=False) vs the identical GT4Py chain."""
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields()
     nhalo, ni, nj, nk, nx, ny = f["nhalo"], f["ni"], f["nj"], f["nk"], f["nx"], f["ny"]
@@ -2883,15 +2803,11 @@ def test_divergence_damping_gt4_composition_matches_gt4py(nord):
     assert np.allclose(drv[s], gdrv[s], rtol=0, atol=1e-14), "damped_rel_vort"
 
 
-# ===========================================================================
 # fvtp2d mass-flux + del-n damping variant bit-exact vs GT4Py
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 @pytest.mark.parametrize("with_mass", [False, True])
 def test_fvtp2d_massflux_delnflux_matches_gt4py(with_mass):
-    """_fv_tp_2d with x/y mass fluxes + nord==0 del-n damping vs the same chain
-    reconstructed in GT4Py (transport leaves + final_fluxes with mass unit flux +
-    delnflux nord==0). Compared over the deep interior."""
+    """_fv_tp_2d with x/y mass fluxes + nord==0 del-n damping vs the same chain reconstructed in GT4Py."""
     npy = _load("fv3_dycore_numpy")
     d = _setup(24, 24, 6, 6, 3)
     nhalo, ni, nj, nk = d["nhalo"], d["ni"], d["nj"], d["nk"]
@@ -2928,9 +2844,7 @@ def test_fvtp2d_massflux_delnflux_matches_gt4py(with_mass):
                   del6_u=d["del6_u"],
                   damp=damp)
 
-    # GT4Py reference: transport chain (as in test_fvtp2d_composition) with mass
-    # unit fluxes in final_fluxes, then nord==0 delnflux applied via the validated
-    # GT4Py flux/d2 stencils + shared plain-numpy copy_corners.
+    # GT4Py reference: transport chain with mass unit fluxes, then nord==0 delnflux via GT4Py stencils.
     def run_x(qq, c, mord):
         out = np.zeros((nx, ny, nk))
         s = gtscript.stencil(backend="numpy", definition=_x_flux_interior, externals={"mord": mord})
@@ -3023,9 +2937,7 @@ def test_fvtp2d_massflux_delnflux_matches_gt4py(with_mass):
     assert np.array_equal(qyf[sx], gyf[sx]), "q_y_flux"
 
 
-# ===========================================================================
 # d_sw (grid_type==4) FULL composition vs GT4Py-stencil chain over interior
-# ===========================================================================
 def _dsw_full_fields(seed=99):
     nhalo = 3
     ni, nj, nk = NI_C, NJ_C, NK_C
@@ -3056,15 +2968,7 @@ def _dsw_full_fields(seed=99):
 
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_d_sw_gt4_composition_matches_gt4py():
-    """Full d_sw(...) for grid_type==4 composed in numpy vs a GT4Py-stencil
-    reconstruction of the SAME __call__ chain, compared over the deep interior.
-
-    The fvtp2d transport sub-steps are taken via the numpy `_fv_tp_2d` (whose
-    bit-exactness vs the GT4Py fvtp2d chain -- incl. mass-flux + del-n -- is
-    independently established by the fvtp2d/massflux tests); every other step is
-    run through its verbatim GT4Py stencil. This validates the d_sw ORCHESTRATION
-    (which buffer feeds which stencil, in which order) against GT4Py.
-    """
+    """Full d_sw(...) for grid_type==4 vs a GT4Py reconstruction of the same __call__ chain; validates ORCHESTRATION."""
     npy = _load("fv3_dycore_numpy")
     f = _dsw_full_fields()
     nhalo, ni, nj, nk, nx, ny = f["nhalo"], f["ni"], f["nj"], f["nk"], f["nx"], f["ny"]
@@ -3451,9 +3355,7 @@ def test_d_sw_gt4_composition_matches_gt4py():
         assert np.allclose(a[name][s], g[name][s], rtol=0, atol=1e-12), name
 
 
-# ===========================================================================
 # Nonhydrostatic vertical machinery (C-grid side) bit-exact vs GT4Py
-# ===========================================================================
 def _vert_fields(seed=51, nk=NK_C):
     """k-interface (kz=nk+1) and layer fields for the vertical-solver tests."""
     nhalo = 3
@@ -3728,9 +3630,7 @@ def test_p_grad_c_nonhydro_matches_gt4py():
     assert np.allclose(vc[sl], gvc[sl], rtol=1e-13, atol=0), "vc"
 
 
-# ===========================================================================
 # Nonhydrostatic vertical machinery (D-grid side) bit-exact vs GT4Py
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_riem_solver3_matches_gt4py():
     """D-grid Riemann solver (precompute -> sim1 -> finalize) vs GT4Py chain."""
@@ -3970,11 +3870,7 @@ def test_nh_p_grad_leaves_match_gt4py():
 
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_update_dz_d_gt4_runs_and_matches_components():
-    """update_dz_d_gt4 (cubic-spline interp -> fvtp2d -> delnflux -> apply_height)
-    runs end-to-end and its cubic-spline + apply_height_fluxes components agree
-    with GT4Py (validated separately); here we gate that the composition runs and
-    produces finite interior output, with the height monotone-thickness invariant.
-    """
+    """update_dz_d_gt4 composition runs end-to-end with finite output and the height monotone-thickness invariant."""
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields(seed=65)
     nhalo, ni, nj, nk, nx, ny, kz = (f["nhalo"], f["ni"], f["nj"], f["nk"], f["nx"], f["ny"], f["kz"])
@@ -4005,9 +3901,7 @@ def test_update_dz_d_gt4_runs_and_matches_components():
 
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_nh_p_grad_gt4_composition_matches_gt4py():
-    """nh_p_grad_gt4 (gt==4) vs a GT4Py reconstruction: a2b (doubly-periodic) of
-    pp/pk3/gz/delp via the validated doubly_periodic_a2b_ord4, then set_k0 +
-    calc_u/calc_v through their GT4Py stencils. Compared over the deep interior."""
+    """nh_p_grad_gt4 (gt==4) vs a GT4Py reconstruction: a2b of pp/pk3/gz/delp, then set_k0 + calc_u/calc_v."""
     npy = _load("fv3_dycore_numpy")
     f = _vert_fields(seed=66)
     nhalo, ni, nj, nk, nx, ny, kz = (f["nhalo"], f["ni"], f["nj"], f["nk"], f["nx"], f["ny"], f["kz"])
@@ -4031,9 +3925,7 @@ def test_nh_p_grad_gt4_composition_matches_gt4py():
     pk3n = pk3.copy()
     npy.nh_p_grad_gt4(un, vn, ppn, gzn, pk3n, delp.copy(), rdx, rdy, dt, ptop, akap, nhalo, ni, nj, nk)
 
-    # GT4Py reference: a2b via the validated numpy doubly_periodic_a2b_ord4 (its
-    # GT4Py equivalence is established by smag/divergence tests), then the calc_*
-    # GT4Py stencils.
+    # GT4Py reference: a2b via the validated numpy doubly_periodic_a2b_ord4, then the calc_* GT4Py stencils.
     gpp = pp.copy()
     gpk3 = pk3.copy()
     ggz = gz.copy()
@@ -4081,9 +3973,7 @@ def test_nh_p_grad_gt4_composition_matches_gt4py():
     assert np.allclose(vn[slv], gv[slv], rtol=1e-12, atol=0), "v"
 
 
-# ===========================================================================
 # dyn_core (gt==4) acoustic-loop ORCHESTRATION validation
-# ===========================================================================
 def _dyncore_state_and_grid(seed=71):
     nhalo = 3
     ni, nj, nk = NI_C, NJ_C, NK_C
@@ -4145,22 +4035,7 @@ def _dyncore_state_and_grid(seed=71):
 
 
 def test_dyn_core_gt4_orchestration():
-    """The dyn_core(...) gt==4 nonhydrostatic acoustic loop is composed from the
-    individually GT4Py-validated sub-solvers (c_sw, update_dz_c, riem_solver_c,
-    p_grad_c, d_sw, update_dz_d, riem_solver3, nh_p_grad). This test validates the
-    ORCHESTRATION -- arg routing, buffer wiring, the gz<->zh copy logic, and the
-    n_split iteration -- by running dyn_core_gt4 and an explicit hand-wired
-    reference that calls the SAME sub-solvers in the documented order, and
-    asserting the two agree exactly (equal_nan: a random fixture is not a
-    self-consistent atmosphere, so the nonlinear vertical solver may produce NaN;
-    identical NaN patterns still prove the wiring matches). The sub-solvers'
-    GT4Py bit-exactness is established by the dedicated tests above.
-
-    NOTE: this is NOT an independent end-to-end GT4Py check of the whole loop --
-    that needs a physically consistent (baroclinic) state, which a unit fixture
-    cannot supply. It validates that the composition wires the validated pieces
-    together correctly.
-    """
+    """Validates dyn_core_gt4 ORCHESTRATION vs a hand-wired reference of the sub-solvers; NOT end-to-end physical."""
     npy = _load("fv3_dycore_numpy")
     st_a, g, nhalo, ni, nj, nk = _dyncore_state_and_grid()
     # deep-copy the state for the reference run
@@ -4207,9 +4082,7 @@ def test_dyn_core_gt4_orchestration():
 def _dyn_core_reference(st, g, npy, *, dt_acoustic, n_split, ptop, akap, p_fac, nord, nord_v, nord_w, dddmp, d4_bg,
                         d_con, da_min_c, da_min, hord_dp, hord_tm, hord_vt, hord_mt, beta, use_logp, n_map, k_split,
                         nhalo, ni, nj, nk):
-    """Hand-wired re-statement of the dyn_core_gt4 loop body, independent of the
-    dyn_core_gt4 function, calling the same validated sub-solvers. Used only to
-    cross-check the orchestration."""
+    """Hand-wired re-statement of the dyn_core_gt4 loop body, used only to cross-check the orchestration."""
     dt = dt_acoustic
     dt2 = 0.5 * dt
 
@@ -4260,9 +4133,7 @@ def _dyn_core_reference(st, g, npy, *, dt_acoustic, n_split, ptop, akap, p_fac, 
                           akap, nhalo, ni, nj, nk)
 
 
-# ===========================================================================
 # Vertical remapping leaves bit-exact vs GT4Py
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_fix_tracer_matches_gt4py():
     """fillz.fix_tracer (negative-tracer borrow/fill column pass) vs GT4Py."""
@@ -4306,8 +4177,7 @@ def test_map_single_set_dp_matches_gt4py():
 
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_lagrangian_contributions_matches_gt4py():
-    """map_single.lagrangian_contributions (PPM remap with the data-dependent
-    source-layer while-loop) vs GT4Py."""
+    """map_single.lagrangian_contributions (PPM remap, data-dependent source-layer while-loop) vs GT4Py."""
     npy = _load("fv3_dycore_numpy")
     nhalo, ni, nj, nk = 3, 12, 12, 8
     nx, ny, kz = nhalo + ni + nhalo, nhalo + nj + nhalo, nk + 1
@@ -4353,9 +4223,7 @@ def test_lagrangian_contributions_matches_gt4py():
     assert np.allclose(q[sl], gq[sl], rtol=1e-12, atol=1e-12)
 
 
-# ===========================================================================
 # moist_cv leaves bit-exact vs GT4Py
-# ===========================================================================
 def _moist_fields(seed=91):
     nhalo, ni, nj, nk = 3, 12, 12, 8
     nx, ny = nhalo + ni + nhalo, nhalo + nj + nhalo
@@ -4447,19 +4315,10 @@ def test_moist_pt_last_step_matches_gt4py():
     assert np.allclose(gz[sl], ggz[sl], rtol=1e-13, atol=1e-13), "gz"
 
 
-# ===========================================================================
 # remap_profile (iv=1, kord<9) bit-exact vs GT4Py
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_remap_profile_iv1_kordsmall_matches_gt4py():
-    """RemapProfile (iv=1, kord<9 -> kord=8) q4 reconstruction vs the verbatim
-    pyfv3 GTScript (set_initial_vals -> apply_constraints -> set_interp_coeffs).
-
-    Bit-exact for all layers including the edges. The earlier mismatch was the
-    bottom interface: GTScript's set_initial_vals interval(-1, None) writes the
-    LAST layer q[nk-1] with field-relative offsets and leaves the q[nk] slot at 0
-    (so a4_3[nk-1] is set by posdef_iv1); the port previously computed a separate
-    q[nk] with shifted indices, which perturbed the whole column via back-sub."""
+    """RemapProfile (iv=1, kord=8) vs verbatim pyfv3 GTScript; bit-exact incl. edges (prior bug: q[nk] mis-indexed)."""
     npy = _load("fv3_dycore_numpy")
     nhalo, ni, nj, nk = 3, 12, 12, 10
     nx, ny, kz = nhalo + ni + nhalo, nhalo + nj + nhalo, nk + 1
@@ -4472,9 +4331,7 @@ def test_remap_profile_iv1_kordsmall_matches_gt4py():
     a4 = np.zeros((nx, ny, nk))
     npy.remap_profile_iv1_kordsmall(a4_1, a2, a3, a4, delp, 0.0, nhalo, ni, nj, nk)
 
-    # GT4Py: all remap_profile scratch on K-INTERFACE (kz) so the set_initial_vals
-    # [0,0,1] / [0,0,-2] reads stay in bounds; a4_1/delp padded to kz (last level
-    # unused). apply_constraints/set_interp_coeffs run over the nk layers.
+    # GT4Py: scratch on K-INTERFACE (kz) so set_initial_vals' [0,0,1]/[0,0,-2] reads stay in bounds.
     def kpad(a):
         return np.concatenate([a, a[:, :, -1:]], axis=2)
 
@@ -4532,9 +4389,7 @@ def test_remap_profile_iv1_kordsmall_matches_gt4py():
     assert np.allclose(a4[sl], ga4[sl], rtol=1e-12, atol=1e-11), "a4_4"
 
 
-# ===========================================================================
 # tracer_2d_1l leaves bit-exact vs GT4Py
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_tracer_flux_compute_matches_gt4py():
     npy = _load("fv3_dycore_numpy")
@@ -4626,15 +4481,10 @@ def test_divide_fluxes_and_apply_flux_matches_gt4py():
     assert np.allclose(qn[sl], gq[sl], rtol=1e-13, atol=1e-13)
 
 
-# ===========================================================================
 # tracer_advection (gt==4) orchestration validation
-# ===========================================================================
 @pytest.mark.skipif(not HAVE_GT4PY, reason="gt4py not installed")
 def test_tracer_advection_gt4_orchestration():
-    """tracer_advection_gt4 (flux_compute -> divide -> loop[apply_mass_flux ->
-    fvtp2d -> apply_tracer_flux]) is composed from individually-GT4Py-validated
-    leaves + _fv_tp_2d. Validate the ORCHESTRATION against an independent
-    hand-wired reference calling the same pieces (array_equal)."""
+    """tracer_advection_gt4 validated: ORCHESTRATION of GT4Py-validated leaves vs a hand-wired reference."""
     npy = _load("fv3_dycore_numpy")
     f = _ddamp_fields(seed=131)
     nhalo, ni, nj, nk, nx, ny = f["nhalo"], f["ni"], f["nj"], f["nk"], f["nx"], f["ny"]
@@ -4707,26 +4557,9 @@ def _tracer_adv_reference(npy, tracers, dp1, mfx, mfy, cx, cy, args, hord, nhalo
             npy.apply_tracer_flux(q, dp1, xflux, yflux, rarea2, dp2, nhalo, ni, nj, nk)
 
 
-# ===========================================================================
 # fv_dynamics (gt==4, dry) k_split-loop ORCHESTRATION validation
-# ===========================================================================
 def test_fv_dynamics_gt4_orchestration():
-    """fv_dynamics_gt4 (the k_split loop: dp1=copy(delp) -> dyn_core_gt4 ->
-    tracer_advection_gt4 -> dry Lagrangian->Eulerian remap) is composed from
-    pieces that are individually GT4Py-validated (dyn_core orchestration-validated;
-    tracer_advection orchestration-validated; the remap leaves set_dp /
-    lagrangian_contributions / fix_tracer / moist_cv / remap_profile all bit-exact).
-
-    This validates the fv_dynamics ORCHESTRATION -- the k_split iteration, the
-    delp->dp1 copy timing, and the dyn_core/tracer/remap call wiring -- against an
-    independent hand-wired reference calling the same sub-pieces (array_equal,
-    equal_nan: a synthetic fixture is not a self-consistent atmosphere, so the
-    coupled solver may diverge identically in both).
-
-    VALIDATION LEVEL: orchestration only (like dyn_core). NOT a physical
-    end-to-end check (every leaf, incl. remap_profile, is now bit-exact, but the
-    coupled trajectory is not validated against a real serialized atmosphere).
-    """
+    """fv_dynamics_gt4 k_split loop: ORCHESTRATION only vs a hand-wired reference; NOT a physical end-to-end check."""
     npy = _load("fv3_dycore_numpy")
     st_a, g, nhalo, ni, nj, nk = _dyncore_state_and_grid(seed=141)
     nx, ny, kz = nhalo + ni + nhalo, nhalo + nj + nhalo, nk + 1
@@ -4810,8 +4643,7 @@ def test_fv_dynamics_gt4_orchestration():
 
 
 def _fv_dynamics_reference(npy, st, g, *, bdt, k_split, dyn_params, hord_tr, kord_tr, nhalo, ni, nj, nk):
-    """Hand-wired re-statement of the fv_dynamics_gt4 k_split loop, independent of
-    fv_dynamics_gt4, calling the same sub-pieces."""
+    """Hand-wired re-statement of the fv_dynamics_gt4 k_split loop, calling the same sub-pieces."""
     for ks in range(k_split):
         n_map = ks + 1
         last_step = ks == k_split - 1

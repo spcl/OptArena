@@ -1,8 +1,4 @@
-"""Foundation adversarial kernel ``unroll_reduction_11_accs`` (numpy reference).
-
-Hand-authored: the source IS the bad code. The puzzle is to
-recognise the pathology and emit faster, correct replacement.
-"""
+"""Foundation adversarial kernel ``unroll_reduction_11_accs`` (numpy reference)."""
 
 
 def unroll_reduction_11_accs(N, a, out):

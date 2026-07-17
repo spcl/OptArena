@@ -1,16 +1,4 @@
-"""CPU TVM impl of ``compute`` (clip-multiply-add over 2D int64 arrays).
-
-Reference (numpy)::
-
-    np.clip(array_1, 2, 10) * a + array_2 * b + c
-
-``array_1`` / ``array_2`` are ``(M, N)`` int64 arrays; ``a`` / ``b`` / ``c``
-arrive as scalar ints. ``np.clip`` has no ``te`` intrinsic, so it is
-expressed as ``te.max(te.min(x, 10), 2)``. meta_schedule's autotuner
-rejects scalar (non-buffer) PrimFunc parameters, so the scalars are baked
-in as ``te.const`` — they are fixed integers for a given problem, and the
-compile cache key carries them so a changed triple re-tunes cleanly.
-"""
+"""CPU TVM impl of compute (clip-multiply-add over 2D int64 arrays); scalars a/b/c baked in as te.const."""
 import tvm
 from tvm import te
 

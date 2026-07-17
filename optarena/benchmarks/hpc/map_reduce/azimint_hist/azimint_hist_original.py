@@ -1,8 +1,4 @@
-# Original source for OptArena kernel azimint_hist.
-# Upstream: SPCL npbench (github.com/spcl/npbench) azimint_hist/azimint_hist_numpy.py.
-# License: npbench, BSD-3-Clause.
-# Copied by scripts/collect_original_sources.py; not the scoring oracle
-# (the numpy reference remains the correctness oracle).
+# Upstream npbench source (BSD-3-Clause); not the scoring oracle (azimint_hist_numpy.py is).
 
 # Copyright 2014 Jérôme Kieffer et al.
 # This is an open-access article distributed under the terms of the

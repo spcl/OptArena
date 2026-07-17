@@ -12,9 +12,7 @@ import numpy as np
 
 
 def solve_three_levels(count_a, count_b, count_c, size, log_v, target_f, target_b):
-    # Solve for the three group log-probabilities of a three-level distribution
-    # (count_a heavy, count_b middle, count_c light atoms) that meets both KL
-    # targets, via a damped Newton iteration with a probability upper bound.
+    # damped Newton iteration for the 3 group log-probabilities meeting both KL targets
     counts = np.array([count_a, count_b, count_c], dtype=np.float64)
 
     def residual(vec):

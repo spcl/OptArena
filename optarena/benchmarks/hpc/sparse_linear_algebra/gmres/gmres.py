@@ -6,11 +6,7 @@ from optarena.support.helpers.sparse.generators import build_sparse, make_diag_d
 
 
 def initialize(n: int, nnz: int, datatype=np.float64, variant_spec=None):
-    """Build inputs for the sparse GMRES benchmark. GMRES handles general
-    non-symmetric matrices; we shift the matrix to be diagonally dominant so the
-    iteration converges in both fp64 and fp32 (a raw uniform-random sparse matrix
-    is near-singular -- GMRES stalls on it, matching the other Krylov solvers here).
-    """
+    """Sparse GMRES inputs: A shifted diagonally dominant so fp32/fp64 iteration converges, not stalls."""
     if variant_spec is None:
         variant_spec = {"format": "csr", "distribution": "uniform"}
 

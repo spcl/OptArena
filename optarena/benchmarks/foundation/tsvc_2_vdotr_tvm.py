@@ -1,11 +1,4 @@
-"""CPU TVM impl of TSVC ``vdotr`` (``dot_out[0] = sum(a*b)``).
-
-Subtle output contract: ``dot_out`` has shape ``(LEN_1D,)`` but the numpy
-reference writes only element 0, leaving ``dot_out[1:]`` at its (random)
-initial values. So the TIR has two stages: a scalar dot-product reduction,
-then a select that keeps ``dot_out[i]`` for ``i > 0`` and substitutes the
-reduction at ``i == 0`` — otherwise the untouched tail would mismatch.
-"""
+"""CPU TVM impl of TSVC ``vdotr`` (``dot_out[0] = sum(a*b)``)."""
 import tvm
 from tvm import te
 

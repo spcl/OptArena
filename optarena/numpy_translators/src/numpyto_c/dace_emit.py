@@ -1,23 +1,4 @@
-"""Emit a DaCe ``@dc.program`` from the canonical numpy reference.
-
-The Foundation-track numpy kernels are already dace-shaped (they were
-ported FROM ``@dace.program`` bodies), and they now carry every size
-symbol as an explicit scalar argument plus a per-array shape. That is
-exactly the metadata a numpy->dace converter needs:
-
-* size SYMBOLS (``LEN_1D``, ``K``, ...) become module-level
-  ``dc.symbol(...)`` declarations and are DROPPED from the program
-  signature (dace passes them implicitly via the array shapes);
-* ARRAY arguments are typed ``<dctype>[shape]`` -- ``dc_float`` for the
-  precision-driven floats, ``dc.int32`` / ``dc.int64`` for index arrays
-  (the dtype the original ``dace.int*`` annotation carried, recovered
-  from bench_info ``init.dtypes``);
-* kernel SCALARS (``alpha``, s174's ``M``, ...) stay typed scalar args.
-
-The body is the numpy reference verbatim. Reuses :func:`parse_kernel`
-so the array/symbol/scalar classification is the single source of
-truth shared with the C/Fortran emitters.
-"""
+"""Emit a DaCe @dc.program from the canonical numpy reference, sharing IR/classification with the C/Fortran emitters."""
 
 import ast
 import copy
@@ -31,10 +12,7 @@ _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
 class _ShapeToSymbol(ast.NodeTransformer):
-    """dace has no runtime ``.shape``: an array carries a SYMBOLIC shape (the
-    ``a: dc_float[M + 1]`` annotation), so ``a.shape[k]`` IS that symbolic dimension.
-    Replace each ``<array>.shape[<const k>]`` with the array's k-th declared shape
-    token (``A_indptr.shape[0]`` -> ``M + 1``)."""
+    """Replace each <array>.shape[<const k>] with the array's k-th declared symbolic shape token."""
 
     def __init__(self, arr_shapes: Dict[str, List[str]]):
         self.arr_shapes = arr_shapes
@@ -52,9 +30,7 @@ class _ShapeToSymbol(ast.NodeTransformer):
 
 
 class _DropSymbolAssign(ast.NodeTransformer):
-    """Drop ``<sym> = ...`` where ``<sym>`` is a declared size symbol. A dc.symbol is a
-    compile-time constant the harness supplies via the array shapes, so recomputing it
-    in the body (``M = A_indptr.shape[0] - 1``) is both redundant and illegal in dace."""
+    """Drop <sym> = ... where <sym> is a declared size symbol (dace symbols are immutable)."""
 
     def __init__(self, symbols):
         self.symbols = set(symbols)
@@ -66,36 +42,7 @@ class _DropSymbolAssign(ast.NodeTransformer):
 
 
 class _ResolveZeros(ast.NodeTransformer):
-    """A LOWERED kir marks each allocation-init intermediate with ``<name> =
-    __optarena_zeros__()`` (a placeholder the C emitter turns into malloc + fill). For
-    dace, resolve it to ``<name> = np.zeros/np.ones((<shape>,), dtype=<dctype>)`` from
-    the kir's ``zeros_locals`` shape map and ``zeros_fills`` kind map (np/dace need an
-    explicit shape + dtype). The marker is shared by every allocator alias, so pick the
-    constructor from the recorded fill kind: ``ones``/``ones_like`` -> ``np.ones``,
-    everything else (``zeros``/``empty``/``ndarray``) -> ``np.zeros`` (a safe defined
-    value for the uninitialised ``empty`` too). Used when a logical sparse ``A @ x`` was
-    lowered to CSR loops over a fixed-shape accumulator (the Krylov solvers, spmm).
-
-    Fill semantics match the C emit's ``is_reassign`` branch, detected the same way it is
-    there -- the FIRST marker arg is the ``'__reassign__'`` string constant, not merely
-    "the call carries an arg":
-    * a ``'__reassign__'`` marker is a whole-array assignment (the lowered ``r = r - alpha
-      * Ap``). Once a buffer of that shape exists, a re-marked reassign is an in-place
-      reuse whose following loop may READ the old values (``r`` on both sides), so DROP it
-      -- re-zeroing would clear the buffer before that read and corrupt it. The FIRST
-      marker for a name still allocates: a self-referential reassign can never BE the first
-      occurrence (Python must define the name before reading it, so its allocating write
-      -- e.g. ``r = b - A@x`` -- came earlier), so a first-seen reassign is always a full
-      overwrite (``Ap = A@p``) and zeroing the fresh buffer is correct even inside a loop;
-    * a genuine reset marker (no sentinel, e.g. a fresh ``__mm`` matmul accumulator) is
-      ALWAYS emitted, so one sitting inside a loop re-fills every iteration.
-    The drop is keyed on the SHAPE, not just the name: a same-name local re-bound to a
-    different shape (a reshape/transpose transient) is a real re-allocation, and dace
-    rebinds the transient, so it re-emits rather than keeping the stale first shape.
-    A marker on a name the lowering did NOT register as a zeros-local is a reassignment
-    of an EXISTING buffer -- an output param, e.g. spmm's C in ``C[:] = alpha*(A@B) +
-    beta*C`` -- and is dropped (never allocated, so a live input like ``beta*C`` is not
-    clobbered)."""
+    """Resolve a lowered kir's __optarena_zeros__() allocation marker to an explicit np.zeros/np.ones() call."""
 
     def __init__(self, zeros_locals: Dict[str, tuple], zeros_fills: Dict[str, str], local_dtypes: Dict[str, str],
                  default_dtype: str):
@@ -103,7 +50,7 @@ class _ResolveZeros(ast.NodeTransformer):
         self.zeros_fills = zeros_fills
         self.local_dtypes = local_dtypes
         self.default_dtype = default_dtype
-        self.allocated: Dict[str, tuple] = {}  # name -> the shape it was last allocated with
+        self.allocated: Dict[str, tuple] = {}  # name -> last-allocated shape
 
     def visit_Assign(self, node: ast.Assign):
         if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Call)
@@ -112,13 +59,11 @@ class _ResolveZeros(ast.NodeTransformer):
         name = node.targets[0].id
         if name not in self.zeros_locals:
             return None  # a reassigned param (spmm's output C): update in place, never allocate
-        # Detect the self-referential sentinel exactly as the C/Fortran emitters do (first
-        # arg is the ``"__reassign__"`` constant), so the three backends agree.
+        # Detect the self-referential sentinel the same way the C/Fortran emitters do.
         is_reassign = any(isinstance(a, ast.Constant) and a.value == "__reassign__" for a in node.value.args)
         shape = self.zeros_locals[name] or ("1", )
         prev_shape = self.allocated.get(name)
-        # An in-place reuse (same buffer, same shape) whose following loop reads the OLD
-        # values -> drop the re-zero. A shape change (or first sight) still allocates.
+        # An in-place reuse whose loop reads OLD values -> drop the re-zero; a shape change still allocates.
         if is_reassign and prev_shape == shape:
             return None
         self.allocated[name] = shape
@@ -128,9 +73,7 @@ class _ResolveZeros(ast.NodeTransformer):
         return ast.copy_location(ast.parse(f"{name} = {ctor}(({elts}), dtype={dtype})").body[0], node)
 
 
-#: numpy dtype tag -> dace type expression. Floats route through the
-#: precision-driven ``dc_float`` / ``dc_complex_float`` globals the dace
-#: framework rebinds per run; integers carry a fixed width.
+#: numpy dtype tag -> dace type expression (floats route through the precision-driven globals).
 _DTYPE_TO_DACE = {
     "float64": "dc_float",
     "float32": "dc_float",
@@ -159,23 +102,12 @@ def _array_annotation(arr) -> str:
     return f"{_dace_dtype(arr.dtype)}[{shape}]"
 
 
-#: The numpy reference imports the framework's precision-driven dtype globals
-#: (``from optarena.frameworks.framework import np_float, np_complex``) and uses
-#: them as ``dtype=`` / ``.astype(...)`` arguments. The shared python-backend desugar
-#: carries those tokens through verbatim (e.g. ``np.linspace(a, b, n, dtype=np_float)``
-#: -> ``np.linspace(a, b, n).astype(np_float)``), but the dace module binds the *dace*
-#: precision globals instead -- so a bare ``np_float`` is an undefined variable to
-#: dace's frontend (mandelbrot's ``.astype(np_float)`` / ``dtype=np_complex``). Map each
-#: framework precision global to the ``dc_float`` / ``dc_complex_float`` the module imports.
+#: Map framework precision globals (np_float/np_complex) to the dace globals the module imports.
 _FRAMEWORK_DTYPE_TO_DACE = {"np_float": "dc_float", "np_complex": "dc_complex_float"}
 
 
 class _RewriteFrameworkDtype(ast.NodeTransformer):
-    """Rewrite every framework precision-global dtype token (``np_float`` /
-    ``np_complex``) leaked into a ``dtype=`` / ``.astype(...)`` argument to the dace
-    precision global the emitted module binds. Records whether a complex token was seen
-    so the ``dc_complex_float`` import is emitted even when no array/scalar parameter is
-    itself complex."""
+    """Rewrite leaked np_float/np_complex tokens to the dace precision global; tracks complex usage for the import."""
 
     def __init__(self):
         self.used_complex = False
@@ -190,10 +122,7 @@ class _RewriteFrameworkDtype(ast.NodeTransformer):
 
 
 class _TernaryValueHoister(ast.NodeTransformer):
-    """Replace each conditional expression used as a VALUE inside ONE statement with a
-    fresh scalar temp, appending the guarding ``if/else`` that assigns it to ``prelude``
-    (innermost ternary first, so an inner temp is defined before an outer one reads it).
-    The owning :class:`_DesugarTernary` supplies the shared temp counter."""
+    """Hoist each ternary-used-as-value to a scalar temp assigned by a guarding if/else appended to prelude."""
 
     def __init__(self, owner: "_DesugarTernary", prelude: List[ast.stmt]):
         self.owner = owner
@@ -211,16 +140,7 @@ class _TernaryValueHoister(ast.NodeTransformer):
 
 
 class _DesugarTernary(ast.NodeTransformer):
-    """dace's frontend rejects a conditional expression both as an assignment RHS
-    (``t = A if C else B`` -> "the rhs may only be data, numerical/boolean constants
-    and symbols") and as a VALUE nested inside a larger expression (nussinov's
-    ``table[i+1, j-1] + (1 if seq[i]+seq[j]==3 else 0)`` -> "Operator Add is not defined
-    for types Scalar and IfExp"). Lower both to the ``if/else`` statement dace traces: a
-    whole-RHS ternary rewrites in place; a nested ternary is hoisted to a scalar temp
-    assigned in both branches of a preceding if/else, then referenced by name. The
-    if/else keeps each branch guarded -- only one side is evaluated -- so a divide-by-zero
-    guard (gmres's ``factor = H[r,p] / H[p,p] if H[p,p] != 0.0 else 0.0``) stays safe with
-    no double evaluation of the dividing branch."""
+    """Lower a ternary (assignment RHS or nested value) to the if/else statement dace's frontend accepts."""
 
     def __init__(self):
         self.ctr = 0
@@ -267,13 +187,7 @@ class _DesugarTernary(ast.NodeTransformer):
 
 
 class _DesugarOuter(ast.NodeTransformer):
-    """dace's frontend has no ``np.outer`` -- it treats the call as an untyped
-    Python callback (``Trying to operate on a callback return value with an
-    undefined type``). For 1-D operands ``np.outer(a, b)`` is exactly the
-    broadcast product, which dace lowers, so rewrite it to ``a[:, None] * b[None,
-    :]`` (gemver's rank-1 updates). The ufunc form ``np.add.outer`` is already
-    handled upstream by the shared python-backend desugar; this covers the bare
-    ``np.outer`` it leaves untouched."""
+    """Rewrite np.outer(a, b) to a[:, None] * b[None, :] -- dace's frontend has no np.outer."""
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
@@ -287,13 +201,7 @@ class _DesugarOuter(ast.NodeTransformer):
 
 
 class _DesugarReverseSlice(ast.NodeTransformer):
-    """dace rejects a negative-stride subscript (``Negative strides are not
-    supported in subscripts. Please use a Map scope``). A full reverse
-    ``x[::-1]`` is exactly ``np.flip(x)``, which dace lowers (even on a dynamic
-    slice, ``np.flip(r[:k])``), so rewrite it. durbin's ``r[:k][::-1]`` /
-    ``y[:k][::-1]``. Runs AFTER the shared python-backend desugar, which lowers
-    ``np.flip`` back to ``x[::-1]`` for pythran -- so this re-lifts every reverse
-    (original or desugar-introduced) to the form dace accepts."""
+    """Rewrite x[::-1] to np.flip(x) -- dace rejects negative-stride subscripts."""
 
     @staticmethod
     def _is_neg_one(node: ast.AST) -> bool:
@@ -315,19 +223,7 @@ class _DesugarReverseSlice(ast.NodeTransformer):
 
 
 class _DesugarArrayIteration(ast.NodeTransformer):
-    """dace's frontend rejects element iteration over an array VALUE (``for z in
-    int_pts: ...`` -> ``Iterator of ast.For must be a function or a subscript``): a
-    ``for`` iterator must be a ``range``/subscript/map, not an array. Rewrite ``for
-    <var> in <array>`` -- whose iterator is a bare Name bound to a declared array param
-    (not a ``range()``/subscript, which dace already traces) -- to the indexed range
-    form dace lowers: ``for <idx> in range(<extent>): <var> = <array>[<idx>]; ...``.
-    The loop variable is bound to ``<array>[<idx>]`` as the FIRST body statement, so
-    every downstream use of it is unchanged (a 1-D array yields the scalar element, a
-    2-D array the row -- the same value ``for x in A`` iterates). ``<extent>`` is the
-    array's declared first dimension token (contour_integral's ``for z in int_pts`` over
-    ``int_pts: [num_int_pts]``), a symbol dace evaluates -- so this is independent of the
-    ``.shape`` resolution done later by :class:`_ShapeToSymbol`. A fresh non-colliding
-    index name is used per rewritten loop."""
+    """Rewrite 'for x in array' to an indexed range form -- dace's frontend rejects element iteration over an array."""
 
     def __init__(self, arr_shapes: Dict[str, List[str]]):
         self.arr_shapes = arr_shapes
@@ -352,10 +248,7 @@ class _DesugarArrayIteration(ast.NodeTransformer):
 
 
 class _FlipReplacer(ast.NodeTransformer):
-    """Replace each materialisable ``np.flip(base[lo:hi])`` inside ONE statement with
-    a reversing-copy workspace slice, appending the copy loop to ``prelude`` (so the
-    owner can splice it in front of the statement). Delegates the match/build to the
-    owning :class:`_MaterializeDynamicFlip`."""
+    """Replace a materialisable np.flip(base[lo:hi]) with a reversing-copy workspace slice, via the owner."""
 
     def __init__(self, owner: "_MaterializeDynamicFlip", prelude: List[ast.stmt]):
         self.owner = owner
@@ -370,32 +263,7 @@ class _FlipReplacer(ast.NodeTransformer):
 
 
 class _MaterializeDynamicFlip(ast.NodeTransformer):
-    """dace rejects ``np.flip`` over a *dynamic-length* slice: the reversed slice is a
-    View access node, and a View feeding a reduction (``np.dot(np.flip(r[:k]), y[:k])``)
-    or a self-referential update (``y[:k] += alpha * np.flip(y[:k])``) is an
-    ``InvalidSDFGNodeError: Ambiguous or invalid edge to/from a View access node``. The
-    dynamic dot / dynamic-slice augassign themselves lower fine -- only the reversed View
-    is the blocker (durbin, the Levinson-Durbin Toeplitz solve).
-
-    Desugar: for each ``np.flip(base[lo:hi])`` whose length is dynamic (``hi`` is not a
-    pure symbol/constant, i.e. a loop variable), snapshot the reverse into a fresh
-    fixed-``[extent]`` workspace via an explicit copy loop placed IMMEDIATELY BEFORE the
-    consuming statement, then replace the flip with a plain (dace-lowerable) dynamic slice
-    of that workspace:
-
-        for __fi in range(hi - lo):        # reversed(base[lo:hi])[i] == base[hi-1-i]
-            __flip[__fi] = base[hi - 1 - __fi]
-        ... __flip[0:hi - lo] ...          # in place of np.flip(base[lo:hi])
-
-    The workspace is a real transient (not a View), so no View edge crosses into the
-    reduction. The snapshot ALSO fixes the write-after-read hazard of the self-update for
-    free: ``y[:k] += alpha * np.flip(y[:k])`` reads the OLD ``y`` through the workspace,
-    which the copy captured before the augassign mutates ``y``.
-
-    Only fires on a 1-D ``base`` that is a declared array (so the extent is known and the
-    axis-0 reverse is unambiguous) with a dynamic upper bound; a static/whole-array flip
-    (``np.flip(x)``, ``np.flip(x[:5])``, ``np.flip(x[:N])``) lowers in dace as-is and is
-    left untouched."""
+    """Materialise a dynamic-length np.flip into a fixed-extent reversing-copy workspace -- dace rejects a View there."""
 
     def __init__(self, arr_shapes: Dict[str, List[str]], arr_dtypes: Dict[str, str], symbols: set):
         self.arr_shapes = arr_shapes
@@ -460,9 +328,7 @@ class _MaterializeDynamicFlip(ast.NodeTransformer):
         if base not in self.arr_shapes or len(self.arr_shapes[base]) != 1 or arg.slice.step is not None:
             return None
         hi = arg.slice.upper
-        # A whole-array or static-length reverse (``hi`` absent, or a pure symbol/const)
-        # lowers in dace on its own; only a runtime-length reverse (``hi`` a loop var) needs
-        # materialising.
+        # A whole-array or static-length reverse lowers on its own; only a runtime-length reverse needs materialising.
         if hi is None or _is_symbol_expr(hi, self.symbols):
             return None
         return base, arg.slice.lower, hi
@@ -480,16 +346,7 @@ class _MaterializeDynamicFlip(ast.NodeTransformer):
 
 
 class _DesugarBroadcastAugAssign(ast.NodeTransformer):
-    """An in-place augmented assign that BROADCASTS a lower-rank operand into a
-    whole array (``data -= mean``: ``data`` is ``[N, M]``, ``mean`` is ``[M]``)
-    parses, but dace builds an invalid SDFG -- the reduction edge subset ``[0:M]``
-    cannot map onto ``data[0:N, 0:M]`` (``Dimensionality mismatch between src/dst
-    subsets``). The equivalent out-of-place binop written back through a full-array
-    store lowers cleanly (covariance2's ``centered = data - mean`` builds), so
-    rewrite ``A <op>= b`` -> ``A[:] = A <op> b`` for a whole-array (bare Name)
-    target. Semantically identical for a same-rank operand too, so it is safe to
-    apply to every array-target augassign (covariance / correlation ``data -=
-    mean``)."""
+    """Rewrite 'A <op>= b' to 'A[:] = A <op> b' -- dace builds an invalid SDFG for a broadcasting in-place augassign."""
 
     def __init__(self, array_names: set):
         self.array_names = set(array_names)
@@ -507,13 +364,7 @@ class _DesugarBroadcastAugAssign(ast.NodeTransformer):
 
 
 class _DesugarChainedAssign(ast.NodeTransformer):
-    """dace cannot codegen a multi-target assignment whose targets are slices
-    (``cov[i:M, i] = cov[i, i:M] = rhs`` -> ``Write slicing not implemented``).
-    Split it into a single evaluation of ``rhs`` into a temp followed by one
-    assignment per target (covariance / correlation's symmetric fill). Semantics
-    are preserved: Python evaluates the chained RHS once and assigns left-to-right,
-    which is exactly ``t = rhs; a = t; b = t`` -- and on any overlap the last
-    target still wins."""
+    """Split a chained slice assignment (a = b = rhs) into a temp plus one assignment per target -- dace can't codegen it."""
 
     def __init__(self):
         self.ctr = 0
@@ -556,15 +407,12 @@ class _DropAliasAssign(ast.NodeTransformer):
         return node
 
 
-#: numpy allocators whose FIRST argument is a shape tuple (so the identifiers inside it
-#: are array DIMENSIONS that dace requires to be symbolic, not runtime scalars).
+#: numpy allocators whose first arg is a shape tuple (dims dace requires to be symbolic).
 _ALLOC_FUNCS = frozenset({"zeros", "empty", "ones"})
 
 
 def _is_symbol_expr(node: ast.AST, allowed: set) -> bool:
-    """True iff ``node`` is a shape expression dace can evaluate as a symbol: names drawn
-    from ``allowed``, integer constants, ``+ - * // %`` / unary sign, and ``min``/``max``
-    (the closed-form the caller can re-evaluate to bind the promoted symbol)."""
+    """True iff node is a shape expression dace can evaluate as a symbol (names, int consts, + - * // %, min/max)."""
     if isinstance(node, ast.Name):
         return node.id in allowed
     if isinstance(node, ast.Constant):
@@ -579,17 +427,13 @@ def _is_symbol_expr(node: ast.AST, allowed: set) -> bool:
 
 
 def _shape_ident_candidates(fn_ast: ast.AST, known: set) -> set:
-    """Identifiers used inside an ``np.zeros/empty/ones`` shape argument that are not
-    already an array / scalar / symbol -- body-computed scalars that feed a transient's
-    shape, which dace forbids (shapes must be symbolic). These are promoted to symbols."""
+    """Identifiers in an np.zeros/empty/ones shape arg not already array/scalar/symbol -- promotion candidates."""
     names = set()
     for node in ast.walk(fn_ast):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _ALLOC_FUNCS
                 and node.args):
             shape_arg = node.args[0]
-            # ``<x>.shape[k]`` is x's OWN dimension (a symbolic expression dace evaluates),
-            # not a scalar dimension identifier -- exclude the base x so it is neither
-            # promoted to a symbol nor treated as a size scalar.
+            # <x>.shape[k] is x's own dimension, not a scalar dim identifier -- exclude base x.
             shape_bases = {id(a.value) for a in ast.walk(shape_arg)
                            if isinstance(a, ast.Attribute) and a.attr == "shape" and isinstance(a.value, ast.Name)}
             for sub in ast.walk(shape_arg):
@@ -599,9 +443,7 @@ def _shape_ident_candidates(fn_ast: ast.AST, known: set) -> set:
 
 
 def _scan_size_assigns(fn_ast: ast.AST, targets: set):
-    """For each name in ``targets`` assigned in the body: its FIRST (defining) RHS, the
-    first-def order, and which names are assigned more than once. ``ast.walk`` is
-    breadth-first, so a top-level def is always seen before a loop-nested reassignment."""
+    """For each name in targets: its first (defining) RHS, def order, and which names are reassigned."""
     first_rhs, order, counts = {}, [], {}
     for node in ast.walk(fn_ast):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -616,20 +458,7 @@ def _scan_size_assigns(fn_ast: ast.AST, targets: set):
 
 
 def _inline_symbol_aliases(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST:
-    """Inline a shape scalar that is defined as a pure SYMBOLIC expression over the
-    already-declared dc.symbols, instead of promoting it to a fresh symbol.
-
-    A column reduction lowers ``data.mean(axis=0)`` to an accumulator sized by a
-    fresh dim ``__rd0_d1``, with a body def ``__rd0_d1 = M`` (after
-    :class:`_ShapeToSymbol` resolves ``data.shape[1]``). If that name is promoted
-    to its OWN ``dc.symbol``, the frontend cannot prove ``__rd0_d1 == M``, so the
-    later ``data -= mean`` (``mean`` shaped ``[__rd0_d1]``) fails to broadcast into
-    ``[N, M]`` (covariance / covariance2 / correlation). Substituting the RHS makes
-    the transient ``np.empty((M,))`` -- expressed in the arrays' OWN symbols -- and
-    the broadcast is provable. Only single-assignment shape idents whose def is a
-    pure symbol expression qualify; a runtime-derived size (gmres
-    ``m = min(max_iter, n)`` with a scalar ``max_iter``) is not pure-symbolic, so it
-    is left for :func:`_plan_size_promotion` to bind as a symbol."""
+    """Inline a shape scalar defined as a pure symbolic expression over existing dc.symbols instead of promoting it."""
     shape_idents = _shape_ident_candidates(fn_ast, known)
     if not shape_idents:
         return fn_ast
@@ -649,23 +478,13 @@ def _inline_symbol_aliases(fn_ast: ast.AST, symbols: set, known: set) -> ast.AST
 
 
 def _is_shape_subscript(node: ast.AST) -> bool:
-    """True iff ``node`` is ``<expr>.shape[k]`` -- a single dimension read off a descriptor.
-    Param shapes are already resolved to symbols by :class:`_ShapeToSymbol`, so a residual
-    ``.shape`` here reads a body-local TRANSIENT's dimension."""
+    """True iff node is <expr>.shape[k] -- a residual .shape read of a body-local transient's dimension."""
     return (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
             and node.value.attr == "shape")
 
 
 def _inline_transient_shape_scalars(fn_ast: ast.AST, known: set) -> ast.AST:
-    """Inline a transient's dimension used to size a reduction accumulator. A column
-    reduction over a body-local transient (nbody's ``__rsrc0 = mass * vel`` then
-    ``__rd0_d1 = __rsrc0.shape[1]``, feeding ``np.empty((__rd0_d1,), ...)``) leaves a scalar
-    dace cannot host: the name is both a data descriptor (the assignment) and a symbol (its
-    use in the transient's shape), so ``to_sdfg`` raises ``Cannot create symbol "__rd0_d1",
-    the name is used by a data descriptor``. Substitute the ``.shape[k]`` read into the uses
-    and drop the assignment, so dace evaluates the transient's own dimension directly.
-    :func:`_inline_symbol_aliases` handles the pure-symbol alias case (``__rd0_d1 = M``);
-    this handles the ``.shape`` case it leaves."""
+    """Inline a transient's own .shape[k] dimension read into its uses -- dace forbids a name being both data and symbol."""
     cand = _shape_ident_candidates(fn_ast, known)
     if not cand:
         return fn_ast
@@ -683,15 +502,7 @@ def _inline_transient_shape_scalars(fn_ast: ast.AST, known: set) -> ast.AST:
 
 
 def _plan_size_promotion(fn_ast: ast.AST, known: set):
-    """Plan the promotion of body-computed size scalars to dace symbols.
-
-    Returns ``(order, symbol_defs, reassigned)``: ``order`` the names to declare as
-    ``dc.symbol`` (dependency order); ``symbol_defs`` ``[(name, rhs_src)]`` so the caller
-    can re-evaluate each dimension to bind it (an ABI value, not a program argument);
-    ``reassigned`` the subset the body also mutates (a runtime iteration count that must
-    be split off the allocation symbol). Empty when nothing needs promotion, or when a
-    def is not a pure symbol expression (then the kernel is left unchanged / unbuildable
-    rather than silently mis-lowered)."""
+    """Plan promotion of body-computed size scalars to dace symbols; returns (order, symbol_defs, reassigned)."""
     cand = _shape_ident_candidates(fn_ast, known)
     if not cand:
         return [], [], set()
@@ -700,8 +511,7 @@ def _plan_size_promotion(fn_ast: ast.AST, known: set):
         for a in ast.walk(fn_ast)
         if isinstance(a, ast.Assign) and len(a.targets) == 1 and isinstance(a.targets[0], ast.Name)
     }
-    # Transitive closure: a promoted def's own operands must be symbols too, so pull in
-    # any body-assigned dependency (m = min(max_iter, n) drags in n).
+    # Transitive closure: a promoted def's operands must be symbols too (m = min(max_iter, n) drags in n).
     first_rhs, order, reassigned = _scan_size_assigns(fn_ast, cand)
     changed = True
     while changed:
@@ -719,23 +529,14 @@ def _plan_size_promotion(fn_ast: ast.AST, known: set):
         if not _is_symbol_expr(first_rhs[nm], allowed):
             return [], [], set()  # non-symbolic size -> not safely promotable
         symbol_defs.append((nm, ast.unparse(first_rhs[nm])))
-    # Every candidate must have a def we can bind; a shape ident with no body assignment
-    # would be an unbound symbol, so refuse the whole promotion (leave the kernel as-is).
+    # Every candidate must have a def to bind, else refuse the whole promotion.
     if set(order) != cand:
         return [], [], set()
     return order, symbol_defs, reassigned
 
 
 class _SplitReassignedSize(ast.NodeTransformer):
-    """A promoted size symbol the body also REASSIGNS (gmres's ``m = k + 1`` on early
-    convergence) can't remain a single symbol: dace symbols are immutable, and that
-    reassignment is the *runtime* iteration count, not the allocation size. Keep the
-    symbol for ALLOCATION shapes (dace needs a symbol there) and route every other use --
-    loop bounds, indices -- through a runtime scalar ``<name>_iter`` seeded from the
-    symbol and updated by the reassignment. The workspace is allocated to the symbolic
-    upper bound; the tail past ``<name>_iter`` stays zero and is never read into the
-    result, so this matches the reference exactly. The defining assignment (the first,
-    e.g. ``m = min(max_iter, n)``) is dropped -- the caller binds the symbol's value."""
+    """Split a size symbol the body also reassigns: keep the symbol for allocation, route other uses through <name>_iter."""
 
     def __init__(self, names):
         self.names = set(names)
@@ -774,10 +575,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     arrays = {a.name: a for a in kir.arrays}
     scalars = {s.name: s for s in kir.scalars}
     symbol_names = [s.name for s in kir.symbols]
-    # Sparse kirs carry their size symbols (nnz, M, N) ONLY in the array shapes, not
-    # kir.symbols -- collect every free identifier in a shape that is not itself an
-    # array or scalar, so it is declared as a dc.symbol below (otherwise the shape
-    # annotation ``A_indptr: dc.int64[M + 1]`` references an undefined name).
+    # Sparse kirs carry size symbols only in array shapes; collect free idents so each is declared as a dc.symbol.
     arr_shapes = {a.name: [str(s) for s in a.shape] for a in kir.arrays}
     _known = set(arrays) | set(scalars)
     for _toks in arr_shapes.values():
@@ -786,8 +584,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
                 if _ident not in _known and _ident not in symbol_names:
                     symbol_names.append(_ident)
 
-    # Program signature: arrays + scalars in their original input_args
-    # order; symbols are module-level, not parameters.
+    # Program signature: arrays + scalars in original input_args order; symbols are module-level.
     params: List[str] = []
     for arg in kir.input_args:
         if arg in arrays:
@@ -799,13 +596,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     needs_complex = any(_dace_dtype(a.dtype) == "dc_complex_float"
                         for a in kir.arrays) or any(_dace_dtype(s.dtype) == "dc_complex_float" for s in kir.scalars)
 
-    # Body: the numpy reference desugared for the verbatim-body backends -- the
-    # SAME pass numba/pythran use, so dace gains feature parity (np.fft, fancy
-    # multi-index gather, np.add.at scatter, axis reductions, boolean-mask
-    # assignment, ... lower to the plain loops a @dc.program traces). The
-    # function is renamed to kir.kernel_name first so the desugar seeds its rank/
-    # dtype tables from the kir arrays; falls back to the verbatim body if the
-    # desugar cannot parse (it never should for a valid kernel).
+    # Desugar the body with the same pass numba/pythran use for feature parity; falls back to verbatim on parse failure.
     fn_ast = copy.deepcopy(kir.tree)
     fn_ast.name = kir.kernel_name
     try:
@@ -813,69 +604,38 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
     except Exception:  # noqa: BLE001 -- keep the verbatim body if desugar fails
         fn_ast = kir.tree
-    # The shared desugar carries framework precision-global dtype tokens (np_float /
-    # np_complex) through verbatim into ``.astype(...)`` / ``dtype=`` arguments; the dace
-    # module binds the ``dc_float`` / ``dc_complex_float`` globals, so rewrite each token
-    # to the dace global it maps to (mandelbrot).
+    # Rewrite leaked np_float/np_complex tokens to the dace precision global the module binds.
     framework_dtype = _RewriteFrameworkDtype()
     fn_ast = framework_dtype.visit(fn_ast)
-    # dace's frontend has no conditional expression, whether as an assignment RHS
-    # (``t = A if C else B`` -- the divide-by-zero guards in the lowered solves) or nested
-    # as a value (nussinov's ``... + (1 if seq[i]+seq[j]==3 else 0)``): lower both to the
-    # if/else statement dace traces, hoisting a nested ternary to a guarded scalar temp.
+    # dace's frontend has no conditional expression (RHS or nested value): lower both to if/else.
     fn_ast = _DesugarTernary().visit(fn_ast)
-    # dace has no ``np.outer`` (untyped callback) and rejects a negative-stride
-    # subscript. Rewrite ``np.outer(a, b)`` -> ``a[:, None] * b[None, :]`` (gemver) and
-    # ``x[::-1]`` -> ``np.flip(x)`` (durbin). Runs after the shared python-backend
-    # desugar, which lowers np.flip BACK to ``x[::-1]`` for pythran.
+    # dace has no np.outer and rejects negative-stride subscripts; rewrite both to forms dace accepts.
     fn_ast = _DesugarOuter().visit(fn_ast)
     fn_ast = _DesugarReverseSlice().visit(fn_ast)
-    # dace's frontend rejects element iteration over an array value (``for z in int_pts``,
-    # contour_integral): rewrite it to the indexed range form ``for __optarena_idx in
-    # range(num_int_pts): z = int_pts[__optarena_idx]`` -- keyed on the declared array params.
+    # dace's frontend rejects element iteration over an array value: rewrite to an indexed range form.
     fn_ast = _DesugarArrayIteration(arr_shapes).visit(fn_ast)
-    # dace rejects a reversed *dynamic-length* slice (a View edge into a reduction / self
-    # update): ``np.flip(r[:k])`` inside the durbin recurrence. Snapshot each such flip
-    # into a fixed-[extent] reversing-copy workspace right before its use, then reference a
-    # plain dynamic slice of that workspace -- which dace lowers, and which also removes the
-    # self-update's write-after-read hazard (the copy captures the old values).
+    # dace rejects a reversed dynamic-length slice (a View edge); snapshot it into a fixed-extent workspace first.
     arr_dtypes = {a.name: _dace_dtype(a.dtype) for a in kir.arrays}
     fn_ast = _MaterializeDynamicFlip(arr_shapes, arr_dtypes, set(symbol_names)).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
-    # dace cannot codegen a chained slice assignment (``a[s1] = a[s2] = rhs``):
-    # evaluate rhs into a temp, then assign each target (covariance symmetric fill).
+    # dace cannot codegen a chained slice assignment: evaluate rhs into a temp, then assign each target.
     fn_ast = _DesugarChainedAssign().visit(fn_ast)
-    # A broadcasting in-place augassign into a whole array (``data -= mean``) builds an
-    # invalid SDFG; rewrite it to an explicit write-back binop (covariance/correlation).
+    # A broadcasting in-place augassign builds an invalid SDFG; rewrite to an explicit write-back binop.
     fn_ast = _DesugarBroadcastAugAssign(set(arrays)).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
-    # A logical sparse ``A @ x`` lowered to CSR loops leaves ``<acc> =
-    # __optarena_zeros__()`` markers for its fixed-shape accumulators -- turn them into
-    # ``np.zeros`` / ``np.ones`` (per the recorded fill kind) so the @dc.program
-    # allocates the transient with its declared initial value.
+    # Turn __optarena_zeros__() markers into np.zeros/np.ones with the declared initial value.
     zeros_locals = kir.zeros_locals
     zeros_fills = kir.zeros_fills
     local_dtypes = kir.local_dtypes
     default_dtype = kir.float_precision or "float64"
     fn_ast = _ResolveZeros(zeros_locals, zeros_fills, local_dtypes, default_dtype).visit(fn_ast)
-    # dace has no runtime ``.shape`` and its symbols are immutable: rewrite
-    # ``arr.shape[k]`` to the symbolic dimension and drop any recompute of a size
-    # symbol (``M = A_indptr.shape[0] - 1``), which is redundant + illegal in dace.
+    # dace has no runtime .shape: rewrite arr.shape[k] to the symbolic dim and drop redundant/illegal symbol recomputes.
     fn_ast = _ShapeToSymbol(arr_shapes).visit(fn_ast)
-    # A shape scalar that is just a pure symbolic alias of an existing dc.symbol (a
-    # reduction's ``__rd0_d1 = M``) is INLINED to that symbol, so the transient it sizes
-    # is expressed in the arrays' own symbols and the frontend can prove the broadcast
-    # (covariance ``data -= mean``) -- rather than promoting it to a fresh symbol dace
-    # cannot prove equal to ``M``.
+    # Inline a shape scalar that's a pure symbolic alias of an existing dc.symbol, rather than promoting a fresh one.
     fn_ast = _inline_symbol_aliases(fn_ast, set(symbol_names), set(arrays) | set(scalars) | set(symbol_names))
-    # A reduction over a body-local transient sizes its accumulator by the transient's own
-    # dimension (nbody ``__rd0_d1 = __rsrc0.shape[1]``); inline that .shape read so the name
-    # is not both a data descriptor and a symbol (dace forbids the clash).
+    # Inline a transient's own .shape read used to size an accumulator (dace forbids name-as-both).
     fn_ast = _inline_transient_shape_scalars(fn_ast, set(arrays) | set(scalars) | set(symbol_names))
-    # dace forbids a data-dependent (runtime-scalar) array shape, but the lowered Krylov
-    # workspaces have body-computed dims (gmres ``Q = zeros((n, m + 1))`` with
-    # ``m = min(max_iter, n)``). Promote those size scalars to dc.symbols the caller
-    # binds; split off a runtime iteration count for a size the body also reassigns.
+    # dace forbids a data-dependent array shape; promote body-computed size scalars to dc.symbols the caller binds.
     promoted, symbol_defs, reassigned = _plan_size_promotion(fn_ast, set(arrays) | set(scalars) | set(symbol_names))
     for nm in promoted:
         if nm not in symbol_names:
@@ -910,9 +670,7 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
                        f"for s in ({srcs}))")
         out.append("")
     if symbol_defs:
-        # Per-dimension binding recipe for the harness: each promoted symbol is not a
-        # program argument, so the caller evaluates these (in order) over the known
-        # symbol values to supply them at call time. See sparse_oracle._run_dace.
+        # Per-dimension binding recipe: caller evaluates these in order at call time. See sparse_oracle._run_dace.
         out.append(f"__optarena_symbol_defs__ = {symbol_defs!r}")
         out.append("")
     out.append("")

@@ -1,9 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Inputs for fragment_patch_density: nfrag fragments, each a Lb^3 box of k wavefunctions
-# (psi_frag), with integer corner offsets on the global N^3 grid and per-fragment signs
-# alpha in {+1, -1} (the LS3DF inclusion-exclusion signs). rho is the global output grid.
+# offsets = fragment corners on the N^3 grid; alpha = LS3DF inclusion-exclusion signs (see kernel()).
 import numpy as np
 
 

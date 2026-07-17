@@ -1,8 +1,4 @@
-"""Foundation adversarial kernel ``jacobi_2d_tile_4lvl_silly`` (numpy reference).
-
-Hand-authored: the source IS the bad code. The puzzle is to
-recognise the pathology and emit faster, correct replacement.
-"""
+"""Foundation adversarial kernel ``jacobi_2d_tile_4lvl_silly`` (numpy reference)."""
 
 
 def jacobi_2d_tile_4lvl_silly(N, TSTEPS, A, B):

@@ -1,21 +1,6 @@
-"""scipy.stats-backed input distributions for fuzzing.
-
-The fuzz ``data_distributions`` axis (per-kernel, cycled across iterations) draws
-input VALUES from a named distribution. These wrap :mod:`scipy.stats` families so
-a kernel can be probed with realistically-shaped inputs (heavy-tailed, skewed,
-bounded) beyond the plain numpy ``uniform`` / ``gaussian`` already registered:
-
-* ``normal``       -- Gaussian ``N(loc, scale)`` (scipy ``norm``).
-* ``lognormal``    -- heavy right tail, all-positive (scipy ``lognorm``).
-* ``exponential``  -- positive, memoryless (scipy ``expon``).
-* ``gamma``        -- positive, shape-tunable (scipy ``gamma``).
-* ``beta``         -- bounded on ``[0, 1]`` then scaled (scipy ``beta``).
-* ``laplace``      -- sharper peak / heavier tails than normal (scipy ``laplace``).
-
-Each respects the seeded ``spec['rng']`` stream (scipy accepts a numpy
-``Generator`` as ``random_state``) and clips to the target precision's safe range
-so a downcast never yields ``inf``.
-"""
+"""scipy.stats-backed fuzz input distributions beyond plain uniform/gaussian: normal, lognormal,
+exponential, gamma, beta, laplace. Each respects the seeded spec['rng'] stream and clips to the target
+precision's safe range so a downcast never yields inf."""
 import numpy as np
 
 from optarena.support.distributions import register_distribution
@@ -23,8 +8,7 @@ from optarena.precision import Precision, numpy_dtype, safe_max
 
 
 def _draw(name, factory):
-    """Register ``name`` -> a generator that samples ``factory(spec)`` (a frozen
-    scipy.stats distribution) at the requested shape/precision."""
+    """Register ``name`` -> a generator sampling ``factory(spec)`` at the requested shape/precision."""
 
     @register_distribution(name)
     def gen(shape, precision: Precision, spec):

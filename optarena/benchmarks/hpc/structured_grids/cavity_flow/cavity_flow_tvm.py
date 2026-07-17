@@ -1,26 +1,4 @@
-"""CPU TVM impl of ``cavity_flow`` (lid-driven cavity, CFD Python step 11).
-
-The numpy reference runs an outer ``nt`` time loop; each step:
-
-1. ``un = u.copy(); vn = v.copy()``
-2. ``build_up_b(b, ...)`` -- interior-only source term from ``u, v``.
-3. ``pressure_poisson(nit, p, ...)`` -- ``nit`` Jacobi sweeps on ``p``
-   with Neumann/Dirichlet wall BCs.
-4. update ``u, v`` interiors from ``un, vn, p`` then re-apply velocity
-   wall BCs.
-
-Like ``jacobi_2d`` / ``floyd_warshall`` the loop-carried structure is
-driven in Python; each *spatial* sweep is a compiled, autotuned
-``te.compute`` PrimFunc taking the float coefficients (``dt, dx, dy,
-rho, nu``) as runtime ``te.var`` scalars, so a single compiled kernel
-serves every timestep. Buffers are ping-ponged so each sweep reads the
-previous sweep's full state (matching numpy's ``pn = p.copy()``).
-
-Every PrimFunc is full-domain: interior cells get the stencil formula,
-boundary cells get the exact value the numpy reference's *last*
-in-place BC assignment leaves there (precedence derived by hand and
-inlined), so the returned arrays match numpy bit-region for bit-region.
-"""
+"""CPU/GPU TVM impl of ``cavity_flow``: full-domain PrimFuncs where boundaries match numpy's last BC write."""
 import tvm
 from tvm import te
 
@@ -28,8 +6,7 @@ from optarena.frameworks.tvm_build import TvmKernel, cpu_target, gpu_target, act
 
 
 def _build_b(ny, nx, dtype):
-    """``b`` interior source term; boundary cells set to 0 (numpy leaves
-    ``b`` zero outside ``[1:-1, 1:-1]``)."""
+    """``b`` interior source term; boundary cells 0 (numpy leaves ``b`` zero outside ``[1:-1, 1:-1]``)."""
     u = te.placeholder((ny, nx), name="u", dtype=dtype)
     v = te.placeholder((ny, nx), name="v", dtype=dtype)
     rho = te.var("rho", dtype=dtype)
@@ -50,13 +27,7 @@ def _build_b(ny, nx, dtype):
 
 
 def _build_poisson(ny, nx, dtype):
-    """One pressure-Poisson sweep with the cavity wall BCs.
-
-    Returns ``p_next`` from ``p_cur`` (= the ``pn`` copy) and ``b``.
-    Interior: the 5-point average. Boundaries: the value numpy's
-    sequential BC block leaves, applied in order
-    ``p[:,-1]=p[:,-2]; p[0,:]=p[1,:]; p[:,0]=p[:,1]; p[-1,:]=0``.
-    """
+    """One pressure-Poisson sweep: p_next from p_cur, b; boundaries match numpy's sequential BC order."""
     pn = te.placeholder((ny, nx), name="pn", dtype=dtype)
     b = te.placeholder((ny, nx), name="b", dtype=dtype)
     dx = te.var("dx", dtype=dtype)
@@ -69,19 +40,13 @@ def _build_poisson(ny, nx, dtype):
                 dx * dx * dy * dy / denom * b[i, j])
 
     def body(i, j):
-        # Boundary precedence (last writer wins):
-        #   row ny-1            -> 0
-        #   col 0 (i<ny-1)      -> P[i,1]   (col3 rule, latest on col0)
-        #   row 0 (j>=1)        -> P[1,j]   (row2 rule)
-        #   col nx-1 (1<=i<=ny-2)-> P[i,nx-2]
+        # Boundary precedence (last writer wins): row ny-1 -> 0; col 0 -> P[i,1]; row 0 -> P[1,j]; col nx-1 -> P[i,nx-2].
         last_row = te.const(0.0, dtype)
-        # P[i,1]: interior if 1<=i<=ny-2 else (i==0 -> row0 rule gives P[1,1])
         col0_val = te.if_then_else(i >= 1, interior_at(te.min(te.max(i, 1), ny - 2), 1), interior_at(1, 1))
         row0_val = interior_at(1, te.min(te.max(j, 1), nx - 2))
         colN_val = interior_at(te.min(te.max(i, 1), ny - 2), nx - 2)
         interior = interior_at(te.min(te.max(i, 1), ny - 2), te.min(te.max(j, 1), nx - 2))
-        # Resolve in precedence order: row ny-1 wins outright; then col0;
-        # then row0; then colN; else interior.
+        # Resolve in precedence order: row ny-1, then col0, then row0, then colN, else interior.
         val = te.if_then_else(
             i == ny - 1, last_row,
             te.if_then_else(j == 0, col0_val,
@@ -93,12 +58,7 @@ def _build_poisson(ny, nx, dtype):
 
 
 def _build_velocity(ny, nx, dtype):
-    """Update ``u`` and ``v`` interiors then apply velocity wall BCs.
-
-    Boundaries (numpy order, all absolute so no precedence subtlety):
-      u: u[0,:]=0; u[:,0]=0; u[:,-1]=0; u[-1,:]=1
-      v: v[0,:]=0; v[-1,:]=0; v[:,0]=0; v[:,-1]=0
-    """
+    """Updates ``u``/``v`` interiors then applies velocity wall BCs (all absolute, no precedence subtlety)."""
     un = te.placeholder((ny, nx), name="un", dtype=dtype)
     vn = te.placeholder((ny, nx), name="vn", dtype=dtype)
     p = te.placeholder((ny, nx), name="p", dtype=dtype)
@@ -128,8 +88,7 @@ def _build_velocity(ny, nx, dtype):
 
     def u_body(i, j):
         interior = u_interior(ci(i), cj(j))
-        # BCs: bottom(-1) row = 1 wins last; then left/right cols = 0;
-        # then top row 0. Order: u[0,:]=0; u[:,0]=0; u[:,-1]=0; u[-1,:]=1
+        # BC precedence (numpy order u[0,:]=0; u[:,0]=0; u[:,-1]=0; u[-1,:]=1): bottom row=1 wins last.
         return te.if_then_else(
             i == ny - 1, one,
             te.if_then_else(j == 0, zero, te.if_then_else(j == nx - 1, zero, te.if_then_else(i == 0, zero, interior))))
@@ -145,8 +104,7 @@ def _build_velocity(ny, nx, dtype):
                                 v_out]).with_attr("global_symbol", "cavity_velocity")
 
 
-# Three independent kernels; build_primfunc dispatches by a tag in the key
-# so the shared GPU module can reuse them all through one importable symbol.
+# build_primfunc dispatches by a tag in the key so the GPU module reuses one importable symbol.
 def build_primfunc(kind, ny, nx, dtype):
     if kind == "b":
         return _build_b(ny, nx, dtype)

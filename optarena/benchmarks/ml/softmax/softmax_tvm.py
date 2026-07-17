@@ -1,17 +1,4 @@
-"""CPU TVM impl of numerically-stable ``softmax`` over the last axis.
-
-Reference (numpy)::
-
-    tmp_max = np.max(x, axis=-1, keepdims=True)
-    tmp_out = np.exp(x - tmp_max)
-    tmp_sum = np.sum(tmp_out, axis=-1, keepdims=True)
-    return tmp_out / tmp_sum
-
-``x`` is 4D ``(N, H, SM, SM)``; the softmax runs over the trailing axis.
-Four TIR stages: a max-reduction, the shifted exponential, a
-sum-reduction, and the final divide. Reductions keep the leading three
-axes and collapse the last to length 1 (matching ``keepdims=True``).
-"""
+"""CPU TVM impl of numerically-stable ``softmax`` over the last axis."""
 import tvm
 from tvm import te
 

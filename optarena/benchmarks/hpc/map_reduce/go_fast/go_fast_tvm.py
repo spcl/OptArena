@@ -1,16 +1,4 @@
-"""CPU TVM impl of ``go_fast``.
-
-Reference (numpy)::
-
-    trace = 0.0
-    for i in range(a.shape[0]):
-        trace += np.tanh(a[i, i])
-    return a + trace
-
-``a`` is a square ``(N, N)`` matrix. Two TIR stages: a reduction of
-``tanh`` over the diagonal producing a scalar ``trace``, then an
-elementwise ``a[i, j] + trace`` broadcast.
-"""
+"""CPU TVM impl of go_fast: reduce tanh(diag(a)) to a scalar trace, then broadcast-add it to every element."""
 import tvm
 from tvm import te
 

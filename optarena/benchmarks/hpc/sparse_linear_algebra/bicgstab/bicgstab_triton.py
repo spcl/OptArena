@@ -1,9 +1,4 @@
-"""Triton sparse BiCGSTAB solver.
-
-Sparse mat-vecs A @ p and A @ s via the shared Triton CSR SpMV; the dense Krylov vector
-arithmetic and the convergence loop run in torch on the GPU, matching the
-numpy reference. GPU-only (unverified in the CPU-only sandbox).
-"""
+"""Triton sparse BiCGSTAB: shared CSR SpMV for A @ p / A @ s; Krylov loop runs in torch on GPU."""
 import torch
 
 from optarena.support.helpers.sparse.triton_sparse import TritonSpMV

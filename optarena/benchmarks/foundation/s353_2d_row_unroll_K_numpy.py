@@ -1,8 +1,4 @@
-"""Foundation adversarial kernel ``s353_2d_row_unroll_K`` (numpy reference).
-
-Hand-authored: the source IS the bad code. The puzzle is to
-recognise the pathology and emit faster, correct replacement.
-"""
+"""Foundation adversarial kernel ``s353_2d_row_unroll_K`` (numpy reference)."""
 
 
 def s353_2d_row_unroll_K(N, ip, a, b):

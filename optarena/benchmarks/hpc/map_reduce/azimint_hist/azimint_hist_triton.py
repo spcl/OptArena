@@ -28,12 +28,7 @@ def azimint_hist_kernel(
     rmax,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """
-    Kernel 1: Computes weighted and unweighted histograms for azimuthal integration.
-    Equivalent to
-    histu = np.histogram(radius, npt)[0]
-    histw = np.histogram(radius, npt, weights=data)[0]
-    """
+    """Kernel 1: computes weighted and unweighted histograms for azimuthal integration."""
     pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
 
@@ -52,8 +47,7 @@ def azimint_hist_kernel(
     histw_offsets = histw_ptr + bin_idx
     histu_offsets = histu_ptr + bin_idx
 
-    # TODO(triton): fp32 fails ~1.5e-4 — atomic ordering between histw/histu is
-    # undefined; plus rmax==rmin still triggers division by zero above.
+    # TODO(triton): fp32 fails ~1.5e-4 (atomic-add order is undefined; rmax==rmin still divides by zero).
     tl.atomic_add(histw_offsets, d, mask=mask)
     tl.atomic_add(histu_offsets, 1.0, mask=mask)
 
@@ -71,12 +65,7 @@ def azimint_div_kernel(
     npt,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """
-    Kernel 2: Computes the final azimuthal integration result by dividing
-    the weighted histogram by the unweighted histogram.
-    Equivalent to
-    return histw / histu
-    """
+    """Kernel 2: divides the weighted histogram by the unweighted histogram."""
     pid = tl.program_id(axis=0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
 
@@ -88,11 +77,7 @@ def azimint_div_kernel(
 
 
 def azimint_hist(data: torch.Tensor, radius: torch.Tensor, npt: int):
-    """
-    histu = np.histogram(radius, npt)[0]
-    histw = np.histogram(radius, npt, weights=data)[0]
-    return histw / histu
-    """
+    """Host driver: runs azimint_hist_kernel then azimint_div_kernel (equivalent to the numpy reference)."""
     rmin = radius.min().to(data.dtype)
     rmax = radius.max().to(data.dtype)
 

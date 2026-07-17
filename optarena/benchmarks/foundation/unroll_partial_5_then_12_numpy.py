@@ -1,8 +1,4 @@
-"""Foundation adversarial kernel ``unroll_partial_5_then_12`` (numpy reference).
-
-Hand-authored: the source IS the bad code. The puzzle is to
-recognise the pathology and emit faster, correct replacement.
-"""
+"""Foundation adversarial kernel ``unroll_partial_5_then_12`` (numpy reference)."""
 
 
 def unroll_partial_5_then_12(N, a, b):

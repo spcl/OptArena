@@ -3,9 +3,7 @@ import numpy as np
 
 # Solves A @ x = b where A is a Compressed Sparse Row matrix using the Minimum Residual method
 def hand_minres(A, b, x, max_iter=100, tol=1e-6):
-    # Residual vector
     r = b - A @ x
-    # Initial search direction
     p = r
     for _ in range(max_iter):
         Ap = A @ p

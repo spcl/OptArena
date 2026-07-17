@@ -6,10 +6,7 @@ from optarena.support.helpers.sparse.generators import build_sparse, make_diag_d
 
 
 def initialize(n: int, nnz: int, datatype=np.float64, variant_spec=None):
-    """Build inputs for the sparse MINRES benchmark. MINRES requires a
-    symmetric matrix; we then shift it to be SPD (and well-conditioned)
-    so the iteration converges cleanly in fp64 and fp32.
-    """
+    """Sparse MINRES inputs: symmetric A shifted SPD and well-conditioned for clean fp32/fp64 convergence."""
     if variant_spec is None:
         variant_spec = {"format": "csr", "distribution": "uniform"}
 

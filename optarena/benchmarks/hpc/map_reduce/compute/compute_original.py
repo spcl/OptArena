@@ -1,8 +1,4 @@
-# Original source for OptArena kernel compute.
-# Upstream: SPCL npbench (github.com/spcl/npbench) compute/compute_numpy.py.
-# License: npbench, BSD-3-Clause.
-# Copied by scripts/collect_original_sources.py; not the scoring oracle
-# (the numpy reference remains the correctness oracle).
+# Upstream npbench source (BSD-3-Clause); not the scoring oracle (compute_numpy.py is).
 
 # https://cython.readthedocs.io/en/latest/src/userguide/numpy_tutorial.html
 

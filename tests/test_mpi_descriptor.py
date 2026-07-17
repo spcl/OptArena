@@ -1,14 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exhaustive host-side tests for the MPI data-distribution math
-(``optarena.harness.mpi_descriptor``) -- the correctness core the whole MPI track
-rests on. No cluster / mpi4py needed: scatter/gather are pure numpy, so the full
-scheme x dimensionality x grid x ragged-size x dtype matrix runs in ordinary CI.
-
-The two load-bearing invariants:
-  * ``gather(scatter(A)) == A`` bit-exact (scatter/gather come from the SAME descriptor),
-  * the owned interiors form an exact PARTITION (disjoint + complete).
-"""
+"""Tests for optarena.harness.mpi_descriptor: scatter/gather roundtrip and partition invariants."""
 import math
 
 import numpy as np
@@ -48,7 +40,7 @@ def test_grid_rank_coords_roundtrip(dims):
         assert all(0 <= ci < di for ci, di in zip(c, dims))
         assert g.rank_of(c) == r
         seen.add(c)
-    assert len(seen) == g.nranks  # every coordinate hit exactly once
+    assert len(seen) == g.nranks
 
 
 # --- 1D block bounds: balanced + contiguous + complete ------------------------------
@@ -188,25 +180,21 @@ def test_more_ranks_than_elements(scheme):
 
 
 def test_is_partition_false_for_overlapping_dist():
-    """is_partition must REJECT a bad layout, not just accept good ones (else a regression
-    to always-True would pass the whole suite silently)."""
-    # both array axes bound to the SAME 1-D grid dim -> ranks own only the diagonal
-    # quadrants, leaving the off-diagonal ones uncovered.
+    """is_partition must reject a bad layout, not just accept good ones."""
+    # both axes bound to the same grid dim -> ranks own only the diagonal, off-diagonal uncovered
     g = Grid((2, ))
     dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"), AxisDist(grid_dim=0, scheme="block")))
     assert is_partition((4, 4), dist, g) is False
 
 
 def test_axis_count_mismatch_is_a_clear_error():
-    """A descriptor whose axis count != array ndim fails clearly, not with an opaque
-    IndexError deep inside scatter/gather."""
+    """A descriptor whose axis count != array ndim fails clearly, not with an opaque IndexError."""
     with pytest.raises(ValueError, match="axes but the array"):
         scatter(np.zeros((4, )), ArrayDist(), Grid((2, )))
 
 
 def test_default_distribution_replicates_trailing_axes():
-    """More array axes than grid dims -> trailing axes replicate whole, still an exact
-    roundtrip partition."""
+    """More array axes than grid dims -> trailing axes replicate whole; still an exact partition."""
     shape, g = (6, 6), Grid((2, ))  # a 1-D grid over a 2-D array
     dist = default_distribution(shape, g, block_size=2)
     assert dist.axes[1].grid_dim is None  # trailing axis replicated
@@ -217,17 +205,12 @@ def test_default_distribution_replicates_trailing_axes():
 
 
 def test_default_distribution_rejects_grid_wider_than_array():
-    """A grid that splits more dims than the array has axes would double-own the data;
-    default_distribution refuses it rather than silently producing a non-partition."""
+    """A grid that splits more dims than the array has axes is refused, not silently mis-partitioned."""
     with pytest.raises(ValueError, match="beyond the array"):
         default_distribution((12, ), Grid((2, 2)))
 
 
-# --- Descriptor.from_submission: the semantic layer over the raw distribution dict -------
-#
-# A synthetic 2-D kernel: input A + output C both (M, N); size symbols M, N; a value
-# scalar alpha. Declarative shapes let the descriptor derive that M sizes axis 0 and N
-# axis 1, so a distributed axis makes the matching symbol's LOCAL value the local extent.
+# --- Descriptor.from_submission: semantic layer over the raw distribution dict -------
 
 
 def _binding_2d() -> Binding:
@@ -255,8 +238,7 @@ def test_from_submission_resolves_declared_and_replicates_the_rest():
     sub = _sub({"grid": [2, 1], "arrays": {"A": _block_axis0(), "C": _block_axis0()}})
     d = Descriptor.from_submission(sub, b, ranks=2)
     assert d.grid.dims == (2, 1)
-    # A and C are laid out as declared; there is no un-named array here, but a scalar is
-    # never in `arrays` (scalars are broadcast by value).
+    # A and C are laid out as declared; scalars are never in `arrays` (broadcast by value).
     assert set(d.arrays) == {"A", "C"}
     assert d.arrays["A"].axes[0].grid_dim == 0 and d.arrays["A"].axes[1].grid_dim is None
     assert not d.arrays["A"].replicated
@@ -380,8 +362,7 @@ def test_local_size_scalars_ragged_split():
 
 
 def test_local_size_scalars_no_shapes_leaves_symbols_global():
-    """A legacy binding (pointer shape unknown) has no shapes-derived symbol map, so every
-    symbol stays global until an explicit `symbol_axes` override (the manifest mpi: block)."""
+    """A legacy binding (no shapes-derived symbol map) stays global until an explicit `symbol_axes` override."""
     args = (
         Arg(name="A", kind="ptr", dtype="float64", is_const=True),  # shape=None (legacy init)
         Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
@@ -397,12 +378,6 @@ def test_local_size_scalars_no_shapes_leaves_symbols_global():
 
 
 # --- Nrow/Ncol decouple: a size symbol's per-rank value must be unambiguous -----------------
-#
-# A symbol may size several axes, but only if they all yield the SAME per-rank value (all
-# decomposed identically, or all replicated). A symbol that sizes a DECOMPOSED axis AND a
-# replicated one (the classic square `N` on an `N x N` field: N = local rows AND global columns)
-# has no single value; the harness rejects it (a scored error) so the agent decouples it into a
-# local row symbol and a global column symbol, rather than silently taking the first.
 
 
 def _binding_square() -> Binding:
@@ -425,8 +400,7 @@ def test_local_size_scalars_rejects_row_col_coupled_symbol():
 
 
 def test_local_size_scalars_allows_decoupled_row_col_symbols():
-    # The decouple: A[Nrow, Ncol] with DISTINCT symbols -- Nrow decomposed (local), Ncol whole
-    # (global). A genuinely NON-SQUARE field (Nrow != Ncol) must localise only the row extent.
+    # Decoupled: Nrow decomposed (local), Ncol whole (global); non-square, so only Nrow localises.
     args = (
         Arg(name="A", kind="ptr", dtype="float64", is_const=True, shape=("Nrow", "Ncol")),
         Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("Nrow", ), role="output"),
@@ -461,8 +435,7 @@ def test_local_size_scalars_allows_decoupled_row_col_symbols():
 
 
 def test_local_size_scalars_allows_symbol_on_several_identically_split_axes():
-    # LEN_1D-style: one symbol sizing two axes decomposed the SAME way is NOT ambiguous (both give
-    # the same local value), so it localises without error (regression: the guard is not over-eager).
+    # One symbol sizing two identically-decomposed axes is not ambiguous (regression: guard not over-eager).
     args = (
         Arg(name="x", kind="ptr", dtype="float64", is_const=True, shape=("LEN", )),
         Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("LEN", ), role="output"),
@@ -491,11 +464,7 @@ def test_local_size_scalars_allows_symbol_on_several_identically_split_axes():
 
 
 def test_local_size_scalars_allows_symbol_on_count_equivalent_schemes():
-    # Regression (false-positive guard): one symbol sizing two axes declared with DIFFERENT scheme
-    # spellings that owned_indices treats identically -- `cyclic` and `block_cyclic` with block_size 1
-    # both deal round-robin in unit blocks, so the per-rank COUNT is the same. The old signature keyed
-    # on (grid_dim, scheme, block_size) and rejected this as a conflict; keying on the effective block
-    # size (both -> 1) localises it cleanly.
+    # Regression: `cyclic` and `block_cyclic(block_size=1)` give the same per-rank count, not a conflict.
     args = (
         Arg(name="x", kind="ptr", dtype="float64", is_const=True, shape=("LEN", )),
         Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("LEN", ), role="output"),
@@ -526,20 +495,10 @@ def test_local_size_scalars_allows_symbol_on_count_equivalent_schemes():
 
 
 # --- A real v2 no-halo kernel: CLOUDSC column physics decomposed over `klon` --------------
-#
-# CLOUDSC's columns (the `klon` axis) are independent -- the vertical loop couples LEVELS
-# within a column, not across columns -- so a block split over `klon` needs NO communication.
-# `klon` is the LAST axis of the 2-D/3-D fields but axis 0 of the 1-D ones, so this is the
-# case the default array-axis-d -> grid-dim-d layout cannot express: the split axis is
-# per-array. These tests prove the EXISTING descriptor handles it end to end, on the real
-# binding, through the same Submission -> Descriptor path an agent would drive.
 
 
 def _split_over_klon(binding: Binding, ranks: int) -> dict:
-    """Block-split every array over its own `klon` axis on a 1-D grid of `ranks` (klon sits at a
-    different axis index per array: 0 for the 1-D fields, 1 for 2-D, 2 for 3-D). This is exactly
-    the shipped `distribution_over_symbol` helper -- delegating keeps the cloudsc e2e tests on the
-    same code path the NoOpMPIOptimizer / a klon-decomposed submission uses."""
+    """Block-split every array over its own `klon` axis on a 1-D grid of `ranks`."""
     return distribution_over_symbol(binding, ["klon"], ranks)
 
 
@@ -554,8 +513,7 @@ def test_distribution_over_symbol_scaled_add_1d():
 
 
 def test_distribution_over_symbol_splits_klon_at_its_per_array_axis():
-    """The last-axis / per-array case default_distribution cannot express: `klon` is grid_dim-0
-    block on axis 0 / 1 / 2 depending on the field's rank, every other axis replicated."""
+    """`klon` splits at its own per-array axis (0/1/2 by field rank); default_distribution can't do this."""
     dist = distribution_over_symbol(_cloudsc_binding(), ["klon"], 4)
     assert dist["grid"] == [4]
     assert dist["arrays"]["ktype"]["axes"] == [{"grid_dim": 0, "scheme": "block"}]  # 1-D: axis 0
@@ -589,8 +547,7 @@ def test_distribution_over_symbol_no_matching_axis_raises():
         ("pclv", (5, 8, 14)),  # 3-D (nclv, nlev, klon): klon at axis 2
     ])
 def test_cloudsc_klon_split_roundtrips_per_array(name, shape):
-    """gather(scatter(A)) is bit-exact and the owned interiors partition the array, for a
-    representative field of each rank (klon is axis 0 / 1 / 2 depending on the field)."""
+    """gather(scatter(A)) is bit-exact and the owned interiors partition the array, per field rank."""
     b = _cloudsc_binding()
     d = Descriptor.from_submission(_sub(_split_over_klon(b, 4)), b, ranks=4)
     a = _arange(shape, np.float64 if name != "ktype" else np.int32)
@@ -603,9 +560,7 @@ def test_cloudsc_klon_split_roundtrips_per_array(name, shape):
 
 
 def test_cloudsc_klon_localises_only_klon_not_nlev():
-    """Per-rank size scalars: `klon` becomes the LOCAL column count (ragged 14/4 -> 4,4,3,3)
-    while `nlev` (the un-decomposed vertical extent) stays global on every rank -- so each
-    rank's `8*nlev*klon`-style scratch scales with its own tile."""
+    """`klon` localises to the ragged per-rank column count; un-decomposed `nlev` stays global."""
     b = _cloudsc_binding()
     d = Descriptor.from_submission(_sub(_split_over_klon(b, 4)), b, ranks=4)
     g = {"klon": 14, "nlev": 8}
@@ -615,9 +570,7 @@ def test_cloudsc_klon_localises_only_klon_not_nlev():
 
 
 def test_cloudsc_weak_scaling_grows_only_klon():
-    """The manifest `mpi:` block decomposes over `klon` (work linear in klon => work_exponent
-    1), so weak scaling multiplies klon by R and leaves nlev fixed -- per-rank column work is
-    held constant as ranks grow."""
+    """Weak scaling multiplies `klon` by R and leaves `nlev` fixed (work_exponent=1), holding per-rank work constant."""
     spec = BenchSpec.load("cloudsc")
     axis = spec.mpi["decomposition"]["axis"]
     k = spec.mpi["decomposition"]["work_exponent"]
@@ -627,10 +580,6 @@ def test_cloudsc_weak_scaling_grows_only_klon():
 
 
 # --- Block-cyclic on an equal-edge processor hypercube -------------------------------------
-#
-# Block-cyclic (ScaLAPACK MB/NB round-robin) is defined on a hypercube whose every grid edge is
-# the same size: the agent picks the cube's DIMENSIONALITY (line / square / cube), the edge follows
-# from the rank count. hypercube_grid builds it; the envelope rejects a non-equal grid for cyclic.
 
 
 @pytest.mark.parametrize("nranks,ndim,dims", [(4, 1, (4, )), (4, 2, (2, 2)), (8, 3, (2, 2, 2)), (9, 2, (3, 3))])
@@ -706,10 +655,7 @@ def test_envelope_allows_block_cyclic_on_equal_hypercube():
                })
 
 
-# --- 2-D block-cyclic builder: the default a block_cyclic/grid_ndim>1 kernel serves -----------
-# blockcyclic_distribution_from_shapes is the N-D analog of the 1-D block builder: it deals each
-# array's leading grid_ndim axes block-cyclic over an equal-edge hypercube. distribution_for_kernel
-# dispatches to it when the mpi: decomposition names scheme=block_cyclic + grid_ndim>1.
+# --- 2-D block-cyclic builder: default for block_cyclic/grid_ndim>1 kernels -----------
 
 
 def test_blockcyclic_builder_deals_leading_axes_over_hypercube():
@@ -744,8 +690,7 @@ def test_blockcyclic_builder_replicates_low_rank_arrays_and_rejects_bad_ranks():
 
 
 def test_distribution_for_kernel_dispatches_blockcyclic_2d():
-    # The mat_scaled_add mpi: block (scheme=block_cyclic, grid_ndim=2) routes to the hypercube
-    # builder; a plain block decomposition (default) stays a 1-D grid.
+    # scheme=block_cyclic, grid_ndim=2 routes to the hypercube builder; default stays 1-D.
     binding = binding_from_spec(BenchSpec.load("mat_scaled_add"))
     mpi = {"decomposition": {"axis": ["M", "N"], "scheme": "block_cyclic", "grid_ndim": 2, "block_size": 2}}
     dist = distribution_for_kernel(mpi, binding, 4)
@@ -757,9 +702,7 @@ def test_distribution_for_kernel_dispatches_blockcyclic_2d():
 
 
 def test_distribution_for_kernel_1d_block_cyclic_keeps_block_size():
-    # Regression: a 1-D (grid_ndim omitted / 1) block_cyclic decomposition must carry block_size
-    # through to the emitted axis, else owned_indices reads the default 1 and it degrades to
-    # unit-block cyclic. `block` (contiguous) still omits the irrelevant key.
+    # Regression: 1-D block_cyclic must carry block_size through, else it degrades to unit-block cyclic.
     binding = binding_from_spec(BenchSpec.load("mat_scaled_add"))
     bc = distribution_for_kernel({"decomposition": {
         "axis": ["M"],

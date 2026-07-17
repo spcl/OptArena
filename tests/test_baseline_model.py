@@ -1,22 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The per-track + per-language-autopar BASELINE model.
-
-Locks the speedup-denominator design:
-
-* the ``track -> default baseline`` map (foundation / hpc -> ``c-autopar``, ml ->
-  ``numpy``) and its resolution: the ``auto`` sentinel / ``None`` resolves per
-  kernel track, an explicit concrete kind overrides it;
-* each ``*-autopar`` kind maps to its reference language + an ORDERED tuple of
-  CANDIDATE compilers, and the denominator is the STRONGEST (fastest) available one:
-  clang + LLVM Polly and gcc + GCC autopar for c / cpp, gfortran + GCC autopar for
-  fortran -- all compiled ``Mode.MULTI_CORE`` (the autopar flags), NOT single-core;
-* the vocabularies (``BASELINE_CHOICES`` / ``BASELINE_OPTIONS``) and the surfaces
-  that expose them (the API enum, the service config).
-
-The end-to-end build/timing of an autopar reference is gated on the emitter + the
-compilers actually being present, so the suite stays green on a stock box.
-"""
+"""The per-track + per-language-autopar baseline model: track defaults, candidate compilers, vocabularies."""
 import importlib.util
 import pathlib
 import shutil
@@ -36,8 +20,7 @@ _HPC = "gemm"
 
 
 def _flag_string(language: str, compiler: str, mode: Mode) -> str:
-    """The space-joined compile+link flag string a compiler block produces for ``mode``
-    (the value ``{baseline}`` expands to), via the SAME matrix the harness compiles with."""
+    """The space-joined compile+link flag string a compiler block produces for `mode`, via the same matrix."""
     ext = languages.LANG_EXT[language]
     cmds = languages.build_shared_lib_commands(language,
                                                pathlib.Path(f"x.{ext}"),
@@ -62,8 +45,7 @@ def test_baseline_choices_include_the_autopar_kinds():
 
 
 def test_autopar_baselines_map_language_and_candidate_compilers():
-    # Each autopar kind -> (reference language, ordered candidate compiler blocks). The denominator
-    # is the fastest AVAILABLE candidate (strongest baseline); c / cpp try both Polly and GCC autopar.
+    # Each autopar kind -> (reference language, ordered candidate compilers); denominator is the fastest available.
     assert grading.AUTOPAR_BASELINES == {
         "c-autopar": ("c", ("clang", "gcc")),
         "cpp-autopar": ("cpp", ("clangpp", "gpp")),
@@ -139,8 +121,7 @@ _AUTOPAR_FLAG = {"clang": "-polly-parallel", "clangpp": "-polly-parallel", "gcc"
 
 
 def test_c_autopar_candidates_are_multicore_autopar():
-    """Every c-autopar candidate auto-parallelizes under MULTI_CORE and ONLY then (mode-gated):
-    clang -> LLVM Polly, gcc -> GCC ``-ftree-parallelize-loops``."""
+    """Every c-autopar candidate auto-parallelizes under MULTI_CORE and only then (mode-gated)."""
     lang, compilers = grading.AUTOPAR_BASELINES["c-autopar"]
     assert compilers == ("clang", "gcc")
     for compiler in compilers:
@@ -186,8 +167,7 @@ def test_service_config_default_and_validation():
     from optarena.harness.service import ServiceConfig, from_config
     # The per-track default is None internally (the "auto" boundary token).
     assert ServiceConfig().baseline is None and from_config().baseline is None
-    # Every concrete option is accepted + coerced (str-enum compares equal to its string);
-    # the "auto" sentinel resolves to None.
+    # Every concrete option is accepted + coerced; the "auto" sentinel resolves to None.
     for b in grading.BASELINE_CHOICES:
         assert ServiceConfig(baseline=b).baseline == b
     assert ServiceConfig(baseline="auto").baseline is None
@@ -199,17 +179,14 @@ def test_service_config_default_and_validation():
 
 
 def _emitter_and_any(compilers) -> bool:
-    """The C emitter is present AND at least one of ``compilers`` is on PATH (the
-    strongest-baseline path needs only ONE candidate to build)."""
+    """The C emitter is present and at least one of `compilers` is on PATH (only one candidate needed)."""
     if importlib.util.find_spec("numpyto_c") is None:
         return False
     return any(shutil.which(c) for c in compilers)
 
 
 def test_c_autopar_reference_builds_and_times():
-    """A c-autopar baseline actually compiles the multi-core autopar reference (the fastest of the
-    available candidates -- clang + Polly / gcc + GCC autopar) and returns a positive time
-    (verification #5, the smallest harness path -- measure_baselines only)."""
+    """A c-autopar baseline compiles the multi-core autopar reference (fastest candidate) and times it."""
     if not _emitter_and_any(["clang", "gcc"]):
         pytest.skip("NumpyToC emitter or a C autopar compiler (clang/gcc) absent")
     from optarena.harness.scoring import measure_baselines
@@ -217,16 +194,14 @@ def test_c_autopar_reference_builds_and_times():
     # Explicit c-autopar AND the auto (per-track) default must both land on the c-autopar reference.
     for baseline in ("c-autopar", "auto"):
         out = measure_baselines(task, preset="S", repeat=2, baseline=baseline)
-        # Either the autopar reference timed, or (no candidate built) it fell back to numpy --
-        # both are honest labels; whichever ran must be a positive time.
+        # Either the autopar reference timed or it fell back to numpy; whichever ran must be positive.
         assert out, f"{baseline}: no baseline timed"
         label = "c-autopar" if "c-autopar" in out else "numpy"
         assert out[label] > 0
 
 
 def test_hpc_resolves_to_c_autopar_and_times():
-    """An hpc kernel resolves to the c-autopar baseline under the track sentinel (ask2) and times
-    the strongest available candidate -- mirroring foundation, not numpy."""
+    """An hpc kernel resolves to the c-autopar baseline and times the strongest available candidate."""
     if not _emitter_and_any(["clang", "gcc"]):
         pytest.skip("NumpyToC emitter or a C autopar compiler (clang/gcc) absent")
     from optarena.harness.scoring import measure_baselines

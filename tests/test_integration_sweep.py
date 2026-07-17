@@ -1,56 +1,11 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""End-to-end integration sweep: the real CLI, the real DB, the real plot.
-
-Every other suite exercises a layer. This one exercises the PIPELINE the way a user
-drives it -- ``optarena run-benchmark`` twice into one ``optarena.db``, then
-``optarena plot`` -- through :func:`run_cli`, a genuine subprocess of the shipped CLI.
-Nothing here re-implements the sweep: a bug that only appears when the layers are
-composed (the emit -> build -> load chain reporting a missing ``cpp_backend/build``
-directory rather than the manifest lookup that actually failed) is invisible to a unit
-test and is exactly what this file is for.
-
-Two legs, one database
-----------------------
-
-* **numpy** -- the whole ``hpc@lvl1`` track (18 kernels, ~5 s).
-* **native + autopar** -- ``hpc/unstructured_grids@lvl1`` under ``polly``: the
-  auto-generated C++ built by clang with the Polly auto-parallelizer.
-
-They share ONE cwd, hence one ``optarena.db``, because that is the only way a speedup
-exists: a native sweep records ONLY its own rows -- the NumPy reference it validates
-against is run but never persisted -- and ``plot`` asserts a ``numpy`` column is
-present. The numpy leg supplies the baseline the native rows are divided by.
-
-Why polly is the autopar leg
-----------------------------
-
-``polly`` is the only framework reachable from ``run-benchmark`` that actually requests
-auto-parallelization. The ``autopar_ref`` in ``compilers.yaml`` (``GCC_AUTOPAR`` for
-``cc``) flows through :func:`optarena.flags.compose_autopar`, which appends the delta
-ONLY at :attr:`Mode.MULTI_CORE` -- and the native build path
-(:func:`optarena.benchmarks.cpp_runtime._ensure_built`) never passes a mode, so it
-composes at the default :attr:`Mode.SINGLE_CORE` and ``cc`` gets no autopar at all.
-``polly``'s delta arrives by the OTHER route: ``FRAMEWORK_FLAGS["polly"] ->
-POLLY_PAR``, appended unconditionally as ``extra_flags``. Hence
-:func:`test_native_leg_requests_autopar`, which pins that the flags are really composed
--- a Polly-less clang accepts ``-mllvm -polly`` with only a warning (exit 0), so a
-validated native row alone would NOT prove autopar was ever requested.
-
-Why this selection
-------------------
-
-``hpc@lvl1`` needs no smaller track: 18 kernels in ~5 s. The native leg is the smallest
-HONEST dwarf-level selection -- ``hpc/map_reduce@lvl1`` is 2 kernels and would be
-cheaper, but ``compute`` does not validate natively (its arrays are all int64, so
-``wrap_kernel`` dispatches the fp32 symbol against int64-marshalled data), a real
-pre-existing bug this file must not paper over by exempting it.
-
-No ``-d``: an explicit ``--datatype`` is appended POSITIONALLY to an ``initialize``
-that declares no ``datatype`` parameter (``benchmark.py``), which is a ``TypeError`` for
-5 of these 18 kernels. The default already materializes + records float64 for both
-legs, so the comparison is float64-vs-float64 either way.
-"""
+"""End-to-end integration sweep: the real CLI, the real DB, the real plot -- ``run-benchmark`` twice
+into one ``optarena.db`` then ``plot``, through a genuine subprocess of the shipped CLI, so a bug
+that only appears when the layers are composed is caught. Two legs share one cwd/db so a speedup
+exists: numpy (``hpc@lvl1``, the baseline) and native+autopar (``hpc/unstructured_grids@lvl1`` under
+``polly``, the only framework reachable from ``run-benchmark`` that actually requests
+auto-parallelization -- see :func:`test_native_leg_requests_autopar`)."""
 import os
 import pathlib
 import re
@@ -89,16 +44,11 @@ MIN_PDF_BYTES = 8_000
 
 
 def run_cli(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
-    """Run the shipped CLI as a real subprocess in ``cwd``, asserting it exits 0.
-
-    ``cwd`` is load-bearing, not incidental: ``run-benchmark`` writes ``optarena.db``
-    into the process's working directory, so a tmp cwd is what keeps the sweep out of
-    the repo. ``MPLBACKEND=Agg`` because the plot leg must render headless.
-    """
+    """Run the shipped CLI as a real subprocess in ``cwd`` (load-bearing: keeps optarena.db out of the
+    repo), asserting it exits 0. ``MPLBACKEND=Agg`` since the plot leg must render headless."""
     env = dict(os.environ)
     env["MPLBACKEND"] = "Agg"
-    # The repo root, so ``-m optarena.cli`` resolves from a tmp cwd whether or not the
-    # package is pip-installed (CI installs it editable; a bare checkout does not).
+    # The repo root, so `-m optarena.cli` resolves from a tmp cwd whether pip-installed or not.
     env["PYTHONPATH"] = str(pathlib.Path(optarena.__file__).resolve().parent.parent)
     proc = subprocess.run([sys.executable, "-m", "optarena.cli", *args],
                           cwd=str(cwd),
@@ -112,13 +62,8 @@ def run_cli(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def short_names_for(selector: str) -> Set[str]:
-    """The ``benchmark``-column values a sweep of ``selector`` must record.
-
-    The registry is keyed by manifest stem; a row records ``short_name``, which 26 of
-    the 349 kernels spell differently (``arc_distance`` -> ``adist``). The assert is
-    the premise of every row-count check below: two kernels sharing a short_name would
-    silently collapse the expected count and hide a shrunk sweep.
-    """
+    """The ``benchmark``-column values a sweep of ``selector`` must record, keyed by ``short_name``
+    (which some kernels spell differently from their registry stem)."""
     keys = KERNELS.select_keys(selector)
     names = [BenchSpec.load(k).short_name for k in keys]
     assert len(set(names)) == len(keys), f"{selector}: short_name collision across {keys}"
@@ -138,11 +83,8 @@ def rows_for(db: pathlib.Path, framework: str) -> List[Dict[str, object]]:
 
 @pytest.fixture(scope="module")
 def sweep(tmp_path_factory) -> pathlib.Path:
-    """Drive the whole pipeline once: both sweeps + the plot, in one tmp cwd.
-
-    Module-scoped because the two legs MUST land in the same ``optarena.db`` for a
-    speedup to exist, and because the native leg compiles.
-    """
+    """Drive the whole pipeline once: both sweeps + the plot, in one tmp cwd. Module-scoped since the
+    two legs must land in the same ``optarena.db`` for a speedup to exist."""
     cwd = tmp_path_factory.mktemp("integration_sweep")
     run_cli(cwd, "run-benchmark", "-b", NUMPY_SELECTOR, "-f", "numpy", "-p", PRESET, "-r", "1")
     run_cli(cwd, "run-benchmark", "-b", NATIVE_SELECTOR, "-f", NATIVE_FRAMEWORK, "-p", PRESET, "-r", "1")
@@ -166,12 +108,8 @@ def test_results_db_carries_the_shipped_schema(sweep):
 
 
 def test_numpy_leg_records_every_selected_kernel(sweep):
-    """One validated row per kernel in the selection -- a silently-shrunk sweep fails.
-
-    The count is asserted against the SELECTOR, not against whatever landed in the DB,
-    so a sweep that quietly stops after 9 kernels (as an explicit ``-d float64`` does
-    today) cannot pass by agreeing with itself.
-    """
+    """One validated row per kernel in the selection; counted against the selector, not against
+    whatever landed in the DB, so a silently-shrunk sweep can't pass by agreeing with itself."""
     expected = short_names_for(NUMPY_SELECTOR)
     rows = rows_for(sweep / "optarena.db", "numpy")
     assert {r["benchmark"] for r in rows} == expected
@@ -196,12 +134,8 @@ def test_plot_renders_a_real_pdf(sweep):
 
 
 def test_native_autopar_leg_validates(sweep):
-    """The auto-generated native kernels were emitted, built, ran, and validated.
-
-    This is the leg the emit -> build -> load chain has to survive end to end; a row
-    here means the C++ source was generated from the numpy reference, compiled, dlopened
-    and agreed with NumPy.
-    """
+    """The auto-generated native kernels were emitted, built, ran, and validated: the C++ source was
+    generated from the numpy reference, compiled, dlopened, and agreed with NumPy."""
     expected = short_names_for(NATIVE_SELECTOR)
     rows = rows_for(sweep / "optarena.db", NATIVE_FRAMEWORK)
     assert {r["benchmark"] for r in rows} == expected
@@ -212,27 +146,17 @@ def test_native_autopar_leg_validates(sweep):
         assert row["datatype"] == DATATYPE
 
 
-#: The autopar flavors and the flag each must actually reach the compiler with.
-#: ``cc_autopar`` is gcc's half of the axis; its GCC_AUTOPAR carries a ``{n}`` field that
-#: MUST be substituted -- gcc rejects a literal ``-ftree-parallelize-loops={n}``.
+#: The autopar flavors and the flag each must actually reach the compiler with. cc_autopar's
+#: ``{n}`` field must be substituted -- gcc rejects a literal ``-ftree-parallelize-loops={n}``.
 AUTOPAR_FRAMEWORKS = [("polly", "-polly-parallel"), ("cc_autopar", "-ftree-parallelize-loops=")]
 
 
 @pytest.mark.parametrize("framework,want_flag", AUTOPAR_FRAMEWORKS, ids=[f for f, _ in AUTOPAR_FRAMEWORKS])
 def test_native_leg_requests_autopar(framework, want_flag, monkeypatch):
-    """The autopar delta reaches the REAL compile, observed where the build path composes it.
-
-    Asserted on the compile command rather than on a runtime speedup: clang accepts
-    ``-mllvm -polly`` with a warning even when its LLVM has no Polly, and gcc's autopar may
-    decline every loop, so a validated row proves the pipeline works but NOT that
-    parallelization was requested.
-
-    It must be SPIED, not re-derived. Composing the command here with the preset passed in
-    and asserting it comes back out is a tautology that never touches the build: with that
-    shape, deleting ``extra_flags`` from ``_ensure_built`` entirely -- so every autopar
-    kernel compiles with zero autopar -- still passed. So this drives ``_ensure_built`` for
-    real and captures the kwargs it actually hands the composer.
-    """
+    """The autopar delta reaches the REAL compile, observed where the build path composes it (asserted
+    on the compile command, not a runtime speedup, since clang accepts ``-mllvm -polly`` with only a
+    warning when its LLVM has no Polly). Spies on ``_ensure_built`` for real rather than re-deriving
+    the command, which would be a tautology that never touches the build."""
     assert framework in cpp_runtime.FRAMEWORK_FLAGS, f"{framework} has no autopar flag preset"
     spec = BenchSpec.load(sorted(KERNELS.select_keys(NATIVE_SELECTOR))[0].rsplit("/", 1)[-1])
     cpp_backend = pathlib.Path(optarena.__file__).parent / "benchmarks" / spec.relative_path / "cpp_backend"
@@ -260,12 +184,8 @@ def test_native_leg_requests_autopar(framework, want_flag, monkeypatch):
 
 
 def test_speedup_against_numpy_is_computable(sweep):
-    """Both legs are in ONE db, so every native kernel has a numpy baseline to divide.
-
-    No speedup VALUE is asserted -- CI runners are noisy and a threshold would flake.
-    What must hold is that the comparison EXISTS and is finite: a numpy row and a
-    validated native row for the same kernel, both with positive runtimes.
-    """
+    """Both legs are in one db, so every native kernel has a numpy baseline to divide. No speedup value
+    is asserted (CI runners are noisy); only that the comparison exists and is finite."""
     db = sweep / "optarena.db"
     baseline = {r["benchmark"]: r["time"] for r in rows_for(db, "numpy")}
     native = {r["benchmark"]: r["time"] for r in rows_for(db, NATIVE_FRAMEWORK)}

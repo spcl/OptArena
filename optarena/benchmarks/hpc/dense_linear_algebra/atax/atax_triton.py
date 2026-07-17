@@ -34,8 +34,7 @@ def _kernel(
     tl.static_assert(BLOCK_SIZE_M < 2 * M)
     i = tl.program_id(axis=0)
 
-    # First matvec computes an entire tile in the temporary vector resulting from the first matvec.
-    # There is no reduction parallelization, just tiling of the M dimension and N many accumulators.
+    # First matvec: tile over M with N accumulators, no reduction parallelization.
     x_sum = tl.zeros((BLOCK_SIZE_M, ), dtype=out.dtype.element_ty)
     for j in range(0, tl.cdiv(N, BLOCK_SIZE_N)):
         tile, mask, row, column = get_2d_tile_offsets(
@@ -51,9 +50,7 @@ def _kernel(
 
         x_sum += tl.sum(a * x[None, :], axis=1)
 
-    # x_sum now contains an entire tile of the intermediate vector.
-    # Now we can use a grid parallel reduction and add its contributions to the output.
-
+    # Second matvec: grid-parallel reduction over the intermediate tile, atomic-added into out.
     # Improve cache hits by iterating in reverse.
     for j in range(tl.cdiv(N, BLOCK_SIZE_N) - 1, -1, -1):
         tile, mask, row, column = get_2d_tile_offsets(

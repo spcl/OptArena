@@ -1,11 +1,4 @@
-"""Validate the standalone kernel extraction in this directory.
-
-These tests compare the NumPy adaptation with the standalone C/C++/Fortran
-reference implementation built as a shared library. They also cross-check
-against an independent Python reference implementation when present.
-Deterministic, edge-case, invalid-input, and randomized cases are included
-where applicable.
-"""
+"""Validates the standalone kernel extraction against the C/C++/Fortran reference and a Python reference."""
 
 import ctypes
 import subprocess

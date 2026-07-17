@@ -1,16 +1,4 @@
-"""Emit a small JSON file the harness's ``wrap_kernel`` consumes.
-
-The binding declares the C function's positional signature in a
-language-agnostic shape so the Python wrapper at ``<short>_cpp.py``
-can build the matching ctypes argtypes list without reading the C
-source. Two pieces of info per argument: its ``kind`` (``int`` /
-``double`` / ``ptr_double`` / ``ptr_int``) and (for arrays) the
-source-level shape.
-
-The harness side reads the file once per kernel; the produced
-ctypes argtypes go into the same lazy-binding path
-:mod:`optarena.benchmarks.cpp_runtime` already uses.
-"""
+"""Emit the JSON binding file ``wrap_kernel`` uses to build ctypes argtypes without reading the C source."""
 
 import json
 import pathlib
@@ -37,8 +25,7 @@ def _scalar_kind(dtype: str) -> str:
 
 
 def _arg_entry(name: str, sym_by_name, arr_by_name, sca_by_name) -> Dict[str, Any]:
-    """One ``{name, kind[, shape]}`` binding entry, classified from the IR: a size
-    symbol (int64), an array (ptr kind + shape), or a scalar (scalar kind)."""
+    """One ``{name, kind[, shape]}`` binding entry, classified from the IR."""
     if name in sym_by_name:
         return {"name": name, "kind": _scalar_kind("int")}  # int64 (canonical)
     if name in arr_by_name:
@@ -50,24 +37,14 @@ def _arg_entry(name: str, sym_by_name, arr_by_name, sca_by_name) -> Dict[str, An
 def emit_binding(kir: KernelIR,
                  out_path: pathlib.Path,
                  base_name: str = None) -> Dict[str, Any]:
-    """Write ``<out_path>`` and return the dictionary that was serialised.
-
-    The schema captures the C-ABI contract every backend honours: an ordered
-    list of ``{name, kind, shape}`` entries plus the symbol name and source file
-    per language. ``base_name`` is the canonical ``<short>[_<sparse>]_<fptype>``
-    stem (see :func:`numpyto_common.naming.native_base`); the symbol equals it
-    for every language (each compiler variant builds its own library, so no
-    per-language suffix is needed).
-    """
+    """Write ``<out_path>`` (the C-ABI arg list + symbol/source names per language) and return it."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
     args: List[Dict[str, Any]] = [
         _arg_entry(name, sym_by_name, arr_by_name, sca_by_name) for name in kir.param_order()
     ]
-    # ``base_name`` is the canonical <short>[_<sparse>]_<fptype> stem the emitter
-    # used for the file AND the exported symbol, so the binding's symbols MATCH
-    # the .so exactly. Fall back to the IR's short_name/kernel_name when omitted.
+    # base_name must match the emitted file/symbol exactly; falls back if omitted.
     base = base_name or kir.short_name or kir.kernel_name
     payload = {
         "kernel": base,
@@ -92,12 +69,7 @@ def emit_binding(kir: KernelIR,
 def emit_pluto_binding(kir: KernelIR,
                        out_path: pathlib.Path,
                        base_name: str = None) -> Dict[str, Any]:
-    """Binding for the Pluto backend. Same schema as :func:`emit_binding`, but args
-    are ordered SIZE SYMBOLS first, then array params, then scalars -- matching the
-    VLA-parameter Pluto signature (:func:`numpyto_c.emit.emit_pluto`), which must
-    declare a VLA dim before the array that uses it. The emitted kernel carries no
-    trailing timer (the harness times externally). The C/C++/Fortran backends keep
-    the canonical pointers-first order (:func:`emit_binding`)."""
+    """Binding for the Pluto backend: same schema as :func:`emit_binding`, args ordered symbols/arrays/scalars."""
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}

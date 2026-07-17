@@ -1,55 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Attribution
-This module is a NumPy adaptation of a computational kernel from Quantum ESPRESSO
-(https://www.quantum-espresso.org/), extracted for numerical validation and
-benchmarking. It reproduces the extracted kernel's physics while omitting the
-surrounding application/runtime infrastructure (MPI, I/O, the SCF driver).
-
-    Original project:  Quantum ESPRESSO
-    Extracted kernel:  band-parallel exact exchange -- module ``exx_bp``,
-                       subroutine ``vexx_bp_k`` (generic k-point CPU path)
-    Original license:  GNU GPL v2 or later
-
-Flat-SoA numpy port of Quantum ESPRESSO's band-parallel exact-exchange operator
-``exx_bp::vexx_bp_k`` (generic k-point CPU path) -- the Fock exchange applied to a
-set of trial bands. (The CPU ``vexx_bp_k`` and the GPU ``vexx_bp_k_gpu`` compute
-identical physics; this port is cross-checked against C++ lowered from the inlined
-CPU kernel, see ``baseline/``.)
-
-ALL configuration paths of the Fortran kernel are ported, switched on the
-compile-time-ish config flags (``okvan``, ``okpaw``, ``noncolin``, ``tqr``,
-``gamma_only``, ``negrp``); these may be plain python ``if`` (the suite emits
-C/C++/Fortran with the flag fixed per build). Data-dependent branches use
-``np.where``. The structure mirrors the Fortran subroutine and its helpers
-(``g2_convolution``, ``addusxx_g``/``addusxx_r``, ``newdxx_g``/``newdxx_r``,
-``add_nlxx_pot``, ``paw_newdxx``) one-to-one.
-
-The Coulomb kernel ``g2_convolution`` is FULLY ported (:func:`_g2_convolution`):
-Gaussian / erf / erfc screening, bare Coulomb + Yukawa, the Gygi-Baldereschi
-gamma-extrapolation grid factor (``x_gamma_extrapolation``), the spherical vcut
-truncation (``use_coulomb_vcut_spheric``), AND the Wigner-Seitz vcut truncation
-(``use_coulomb_vcut_ws``, :func:`_vcut_get`) which consumes the precomputed
-``vcut%corrected(:,:,:)`` table -- ported as :func:`_vcut_init` (QE ``vcut_init``)
-and passed in as ``vcut_corrected`` (in QE it is always precomputed during EXX
-setup, before any vexx call). The operator is:
-
-  Vx|psi_i> = -exxalfa/nqs * sum_q sum_j occ_j *
-              phi_qj(r) . invfft( v_q(G) . fwfft( conj(phi_qj(r)) psi_i(r)/omega ) )
-
-scattered back to the plane-wave (G-sphere) basis and accumulated onto ``hpsi``.
-The ultrasoft (``okvan``) and PAW (``okpaw``) paths add the augmentation charge
-to ``rhoc`` (``addusxx``), accumulate the non-local ``deexx`` potential from the
-convolution (``newdxx`` / ``paw_newdxx``), and finally project ``deexx`` onto the
-beta functions (``add_nlxx_pot``). The real-space augmentation (``tqr``) path uses
-the ``tabxx`` box tables instead of the G-space ``qgm``. Noncollinear (``npol=2``)
-carries two spinor components. ``negrp>1`` band-group parallelism (the Fortran's
-``mp_circular_shift_left`` MPI exchange) becomes an explicit in-array column
-rotation of ``exxbuff`` -- a pure reorganisation of the same total Fock sum.
-
-FFTs use ``np.fft``; intrinsics (``np.conj``, fancy-index scatter/gather) are
-preferred; only the genuinely data-dependent band-pair ranges loop.
-"""
+"""NumPy port of QE's exx_bp::vexx_bp_k band-parallel exact-exchange kernel (GPL v2+); all Fortran config paths ported."""
 import numpy as np
 from scipy.special import erf as _erf
 
@@ -59,24 +10,12 @@ _PI = np.pi
 
 
 def _nint(x):
-    """Fortran ``NINT`` -- round half AWAY from zero (0.5->1, -0.5->-1), unlike
-    numpy ``np.rint`` which rounds half to even. Matters at WS-cell-boundary grid
-    points in the vcut minimal-image fold."""
+    """Fortran NINT: round half away from zero, unlike np.rint's round-half-to-even; matters at WS-cell boundaries."""
     return np.sign(x) * np.floor(np.abs(x) + 0.5)
 
 
 def _core(exxbuff, facb, temppsic, result, occ, omega_inv, nqs_inv):
-    """FFT-free numeric core of ``vexx_bp_k`` -- the three pointwise stages that
-    bracket the band-pair convolution, lifted verbatim from the kernel and ported
-    with pure numpy intrinsics (``np.conj``, broadcast multiply, ``sum`` over the
-    occupied-band axis). The two FFTs that sit between the stages are the
-    irreducible external; this composite is what ``baseline/vexx_bp_k_core.f90``
-    lowers to C++, so it is the bit-for-bit cross-check anchor (the vexx_k analogue
-    of cegterg's ``_hermitianize``).
-
-    ``exxbuff`` is ``(nrxxs, jcount)`` complex, ``facb`` ``(nrxxs,)`` real,
-    ``temppsic`` / ``result`` ``(nrxxs,)`` complex; ``result`` is accumulated onto
-    (INOUT) and returned."""
+    """FFT-free numeric core of vexx_bp_k (three pointwise stages); the bit-for-bit cross-check anchor vs C++."""
     rhoc = np.conj(exxbuff) * temppsic[:, None] * omega_inv  # stage A
     vc = facb[:, None] * rhoc * (occ * nqs_inv)  # stage B
     result += (vc * exxbuff).sum(axis=1)  # stage C
@@ -84,11 +23,7 @@ def _core(exxbuff, facb, temppsic, result, occ, omega_inv, nqs_inv):
 
 
 def _vcut_spheric_get(q, vcut_a):
-    """QE ``coulomb_vcut_module::vcut_spheric_get`` -- spherically-truncated
-    Coulomb ``v(q) = 4 pi e2 / |q|^2 * (1 - cos(rcut |q|))`` (``rcut`` = half the
-    shortest cell vector, shrunk 2%), with the ``|q|->0`` limit ``2 pi e2 rcut^2``.
-    ``q`` is ``(3, ngm)`` in physical (``tpiba``) units; ``vcut_a`` the 3x3 real
-    cell (columns = lattice vectors)."""
+    """QE vcut_spheric_get: spherically-truncated Coulomb v(q) = 4pi e2/|q|^2 (1 - cos(rcut|q|))."""
     rcut = 0.5 * np.sqrt(np.sum(vcut_a**2, axis=0)).min()
     rcut = rcut - rcut / 50.0
     kg2 = np.sum(q**2, axis=0)
@@ -99,14 +34,7 @@ def _vcut_spheric_get(q, vcut_a):
 
 
 def _vcut_init(a, cutoff, security=6.0):
-    """Faithful port of QE ``coulomb_vcut_module::vcut_init`` -- build the
-    Wigner-Seitz truncated Coulomb reciprocal-space table
-    ``corrected(-n1:n1,-n2:n2,-n3:n3)`` for real cell ``a`` (columns = lattice
-    vectors) and ``cutoff``. Orthorhombic cells only (QE errors otherwise). Each
-    on-cutoff reciprocal node ``q = b.(i1,i2,i3)`` gets the Ewald-split FT of the
-    truncated Coulomb (``vcut_formula`` = real-space long-range + reciprocal
-    short-range). Returns ``corrected`` (a (2n1+1,2n2+1,2n3+1) real array centered
-    on 0). This is the data ``vexx_bp_k`` consumes via :func:`_vcut_get`."""
+    """QE vcut_init: build the Wigner-Seitz truncated Coulomb table `corrected` for orthorhombic cell `a` (consumed by _vcut_get)."""
     a = np.asarray(a, dtype=np.float64)
     tpi = 2.0 * np.pi
     b = tpi * np.linalg.inv(a).T  # b = 2pi (a^-1)^T
@@ -159,11 +87,7 @@ def _vcut_init(a, cutoff, security=6.0):
 
 
 def _vcut_get(q, a, cutoff, corrected):
-    """Faithful port of QE ``coulomb_vcut_module::vcut_get`` -- per-G lookup of the
-    WS-truncated Coulomb ``corrected`` table. ``q`` is ``(3, ngm)`` in physical
-    (tpiba) units; the node index is ``i = NINT((a^T q)/2pi)`` (q must sit on the
-    reciprocal grid). Inside the cutoff sphere returns ``corrected(i)``; outside,
-    the bare Coulomb ``4 pi e2 / |q|^2``."""
+    """QE vcut_get: per-G lookup of the WS-truncated Coulomb table; falls back to bare Coulomb outside the cutoff."""
     tpi = 2.0 * np.pi
     i = _nint((a.T @ q) / tpi).astype(np.intp)  # (3, ngm)
     qq = np.sum(q**2, axis=0)
@@ -201,21 +125,7 @@ def _g2_convolution(g,
                     use_coulomb_vcut_ws=False,
                     vcut_cutoff=0.0,
                     vcut_corrected=None):
-    """Faithful port of QE ``exx_base::g2_convolution`` -- the Coulomb factor
-    ``v(q+G)`` for every G, covering EVERY branch of the Fortran:
-
-      * spherical vcut truncation (``use_coulomb_vcut_spheric``);
-      * the gamma-extrapolation grid factor (``x_gamma_extrapolation``): a G whose
-        ``q+G`` lands exactly on the ``nq1 x nq2 x nq3`` q-grid (the ``odg`` test)
-        gets factor 0, else ``grid_factor``;
-      * Gaussian (``gau_scrlen``) / erfc (``erfc_scrlen``) / erf (``erf_scrlen``)
-        screening, else bare Coulomb + Yukawa;
-      * the ``|q+G|->0`` divergence term ``-exxdiv`` (+ Yukawa / erfc corrections,
-        applied only when NOT gamma-extrapolating, per the Fortran).
-
-    The Wigner-Seitz vcut path (``use_coulomb_vcut_ws``) is GATED in
-    :func:`vexx_all_paths` -- it needs the precomputed ``vcut%corrected(:,:,:)``
-    table from QE ``vcut_init``, not reproducible standalone."""
+    """QE exx_base::g2_convolution: Coulomb factor v(q+G) for every G, covering every Fortran branch (vcut/gamma-extrap/screening)."""
     tpiba = np.sqrt(tpiba2)
     q = xk[:, None] - xkq[:, None] + g[:, :ngm]  # (3, ngm)
     if use_coulomb_vcut_ws:  # Wigner-Seitz truncation
@@ -277,14 +187,7 @@ def _g2_convolution_all(coulomb_fac,
                         use_coulomb_vcut_ws=False,
                         vcut_cutoff=0.0,
                         vcut_corrected=None):
-    """Faithful port of QE ``exx_bp::g2_convolution_all`` -- the Coulomb-factor
-    cache.  Fills column ``iq`` of ``coulomb_fac`` exactly once, guarded by
-    ``coulomb_done``, then returns it; a repeated ``iq`` returns the cached value
-    (never recomputes).  This is the QE dataflow that evaluates each ``v(q+G)``
-    once per ``(q, current_k)`` and reuses it across all Fock band pairs (and SCF
-    iterations).  QE's module-level ``coulomb_fac(ngm, nqs, nks)`` store and
-    ``coulomb_done(nqs, nks)`` flag reduce here to the current k-point's
-    ``(ngm, nqs)`` / ``(nqs,)`` slice (single rank, single k)."""
+    """QE exx_bp::g2_convolution_all: fills column iq of the Coulomb-factor cache once, guarded by coulomb_done."""
     j = iq - 1
     if not coulomb_done[j]:
         coulomb_fac[:, j] = _g2_convolution(g, xk, xkq, ngm, tpiba2, exxdiv, eps_qdiv, gau_scrlen, erf_scrlen,
@@ -295,20 +198,11 @@ def _g2_convolution_all(coulomb_fac,
     return coulomb_fac[:, j]
 
 
-# ----------------------------------------------------------------------------
-# US / PAW augmentation helpers (faithful ports of the Fortran subroutines).
-# All operate on a flat (nrxxs,) ``rhoc`` / ``vc`` and the per-atom beta-pair
-# index tables. The pseudopotential Q-functions ``qgm`` (G-space, addusxx_g /
-# newdxx_g) and ``tabxx`` box tables (real-space, addusxx_r / newdxx_r) are
-# supplied by ``initialize`` -- this kernel consumes them exactly as QE does.
-# ----------------------------------------------------------------------------
+# US / PAW augmentation helpers: faithful Fortran ports operating on flat rhoc/vc and per-atom beta-pair tables.
 
 
 def _addusxx_g(rhoc, nl, qgm, becphi, becpsi, ijtoh, nat, nh, ofsbeta, eigqts, sfac):
-    """G-space ultrasoft augmentation (``addusxx_g``, flag 'c'): add the
-    augmentation charge sum_ij Q_ij(G) <phi|beta_i> conj? to ``rhoc`` on the
-    G-sphere. Mirrors the Fortran nij-block / na / ih / jh structure but folded
-    to whole-G-sphere array ops."""
+    """G-space ultrasoft augmentation (addusxx_g): add sum_ij Q_ij(G)<phi|beta_i> to rhoc on the G-sphere."""
     ngm = qgm.shape[0]
     nh_total = nh  # per (single-type) all atoms share nh here
     for na in range(nat):
@@ -327,13 +221,7 @@ def _addusxx_g(rhoc, nl, qgm, becphi, becpsi, ijtoh, nat, nh, ofsbeta, eigqts, s
 
 
 def _newdxx_g(vc, nl, qgm, becphi, deexx, ijtoh, nat, nh, ofsbeta, eigqts, sfac, omega):
-    """G-space ultrasoft non-local potential (``newdxx_g``, flag 'c'):
-    ``deexx_ikb += omega * sum_G conj(aux2) * aux1`` with ``aux2`` the
-    structure-factor-weighted potential and ``aux1`` the conj(Q) projection --
-    a verbatim port of QE ``newdxx_g``, where the accumulation is
-    ``fact * dot_product(aux2, aux1)`` and Fortran ``DOT_PRODUCT`` conjugates its
-    FIRST argument; hence ``np.vdot`` (which conjugates the first arg), NOT
-    ``np.dot``."""
+    """G-space ultrasoft non-local potential (newdxx_g); uses np.vdot since Fortran DOT_PRODUCT conjugates its first arg."""
     ngm = qgm.shape[0]
     auxvc = vc[nl]  # (ngm,)
     fact = omega
@@ -352,8 +240,7 @@ def _newdxx_g(vc, nl, qgm, becphi, deexx, ijtoh, nat, nh, ofsbeta, eigqts, sfac,
 
 
 def _addusxx_r(rhoc, becphi, becpsi, tabxx_box, tabxx_qr, ijtoh, nat, nh, ofsbeta):
-    """Real-space ultrasoft augmentation (``addusxx_r``): scatter the box-local
-    augmentation Q_ij(r) <phi|beta_i> <beta_j|psi> onto ``rhoc`` at box points."""
+    """Real-space ultrasoft augmentation (addusxx_r): scatter box-local Q_ij(r)<phi|beta_i><beta_j|psi> onto rhoc."""
     for ia in range(nat):
         box = tabxx_box[ia]
         if box.size == 0:
@@ -369,8 +256,7 @@ def _addusxx_r(rhoc, becphi, becpsi, tabxx_box, tabxx_qr, ijtoh, nat, nh, ofsbet
 
 
 def _newdxx_r(vc, becphi, deexx, tabxx_box, tabxx_qr, ijtoh, nat, nh, ofsbeta, omega, nnr):
-    """Real-space ultrasoft non-local potential (``newdxx_r``):
-    deexx_ikb += becphi_jkb * (omega/N) * sum_box Q_ij(r) vc(r)."""
+    """Real-space ultrasoft non-local potential (newdxx_r): deexx_ikb += becphi_jkb * (omega/N) * sum_box Q_ij(r) vc(r)."""
     domega = omega / nnr
     for ia in range(nat):
         box = tabxx_box[ia]
@@ -388,8 +274,7 @@ def _newdxx_r(vc, becphi, deexx, tabxx_box, tabxx_qr, ijtoh, nat, nh, ofsbeta, o
 
 
 def _paw_newdxx(weight, becphi, becpsi, deexx, ke, nat, nh, ofsbeta):
-    """PAW Fock kernel contraction (``paw_newdxx``): the four-index local Fock
-    kernel ``ke`` contracted with the beta projections, accumulated onto deexx."""
+    """PAW Fock kernel contraction (paw_newdxx): four-index local Fock kernel ke contracted with beta projections."""
     for na in range(nat):
         ijkb0 = ofsbeta[na]
         for uh in range(nh):
@@ -406,8 +291,7 @@ def _paw_newdxx(weight, becphi, becpsi, deexx, ke, nat, nh, ofsbeta):
 
 
 def _add_nlxx_pot(hpsi_col, deexx, vkb, nat, nh, ofsbeta, eps_occ, exxalfa, gamma_only, npwp):
-    """Project the accumulated non-local potential ``deexx`` onto the beta
-    functions ``vkb`` and subtract from ``hpsi`` (``add_nlxx_pot``)."""
+    """Project the accumulated deexx potential onto beta functions vkb and subtract from hpsi (add_nlxx_pot)."""
     for na in range(nat):
         ijkb0 = ofsbeta[na]
         for ih in range(nh):
@@ -500,37 +384,7 @@ def vexx_all_paths(psi,
                    vcut_a=None,
                    vcut_cutoff=0.0,
                    vcut_corrected=None):
-    """Apply the Fock exchange operator to ``psi``, accumulate onto ``hpsi`` in
-    place -- ALL config paths. Config flags (``okvan``/``okpaw``/``noncolin``/
-    ``tqr``/``gamma_only``/``negrp``) select branches; data-dependent ranges loop.
-
-    1-based Fortran index tables (``nl``, ``igk_exx``, ``index_*``, ``egrp_pairs``,
-    ``ibands``, ``all_*``, ``iexx_*``, ``ijtoh``, ``ofsbeta``) are converted to
-    0-based on use. ``becxx``/``becpsi``/``qgm``/``tabxx``/``ke``/``vkb`` are the
-    US/PAW augmentation inputs (consumed only on the matching path).
-
-    ``coulomb_fac_q`` (optional, ``(ngm, nqs)``) injects the EXACT QE Coulomb
-    factor v(q+G) per q-point instead of recomputing it from ``g`` -- used by the
-    real-QE validation (experiments/Si_hse/verify_vexx_vs_qe.py) so the divergence
-    treatment (gygi-baldereschi) / gamma-extrapolation grid factor match QE.
-
-    ``qgm_q`` ``(ngm, nij, nqs)`` and ``sf_q`` ``(ngm, nat, nqs)`` inject the
-    PER-Q ultrasoft Q-functions (QE ``qvan2``, recomputed every q from |q+G|) and
-    the combined structure factor ``eigqts(q)*eigts1*eigts2*eigts3`` -- the
-    faithful US augmentation the synthetic single ``qgm``/``sfac``/``eigqts`` args
-    only approximate. When given, ``_addusxx_g``/``_newdxx_g`` use the current q's
-    slice (with ``eigqts`` folded into ``sf_q``).
-
-    Coulomb-kernel config (``g2_convolution``, used only when ``coulomb_fac_q`` is
-    NOT injected): ``x_gamma_extrapolation`` + ``grid_factor`` / ``at`` / ``nq1-3``
-    select the Gygi-Baldereschi grid-factor divergence treatment;
-    ``use_coulomb_vcut_spheric`` + ``vcut_a`` select the spherically-truncated
-    Coulomb; ``use_coulomb_vcut_ws`` + ``vcut_a`` / ``vcut_cutoff`` /
-    ``vcut_corrected`` select the Wigner-Seitz truncated Coulomb (``vcut_get`` table
-    lookup). ``vcut_corrected`` is the precomputed ``vcut%corrected(:,:,:)`` table
-    (QE ``vcut_init``, ported as :func:`_vcut_init`); it MUST be supplied when
-    ``use_coulomb_vcut_ws`` is set (in QE it is always precomputed during EXX setup,
-    before any vexx call)."""
+    """Apply the Fock exchange operator to psi, accumulate onto hpsi in place -- ALL QE config paths (US/PAW/noncolin/tqr/negrp)."""
     # ---- config gate: the WS-vcut path needs its precomputed table as input ----
     if use_coulomb_vcut_ws and vcut_corrected is None:
         raise NotImplementedError("vexx_k_numpy: use_coulomb_vcut_ws (Wigner-Seitz truncated Coulomb) "
@@ -571,20 +425,12 @@ def vexx_all_paths(psi,
             tg[nlg] = psi[ip * npwx:ip * npwx + n, ii]
             temppsic[:, ip, ii] = invfft(tg)
 
-    # ``deexx`` is allocated whenever the non-local potential is accumulated --
-    # either ultrasoft (``okvan``) or PAW (``okpaw``); matches QE where PAW runs
-    # the augmentation machinery alongside the USPP one.
+    # deexx is allocated whenever okvan or okpaw is set (PAW runs augmentation alongside USPP).
     deexx = np.zeros((nkb, my_n), dtype=np.complex128) if (okvan or okpaw) else None
     result = np.zeros((nrxxs, npol, my_n), dtype=np.complex128, order="F")
     big_result = np.zeros((n * npol, m), dtype=np.complex128, order="F")
 
-    # ---- Coulomb-factor cache (faithful exx_bp::g2_convolution_all dataflow) ----
-    # QE keeps the Coulomb factor in a module-level store ``coulomb_fac(ngm,nqs,nks)``
-    # with a ``coulomb_done(nqs,nks)`` flag, so ``g2_convolution`` runs exactly once
-    # per (q, k) and is reused across all Fock band pairs. Here that store is the
-    # current k-point's ``(ngm, nqs)`` slice (single rank, single k). An injected
-    # ``coulomb_fac_q`` (exact QE v(q+G)) seeds the cache already-done; otherwise
-    # ``_g2_convolution_all`` fills each column on first touch.
+    # Coulomb-factor cache reused across all Fock band pairs; coulomb_fac_q seeds it, else filled lazily on first touch.
     if coulomb_fac_q is not None:
         coulomb_fac = np.array(coulomb_fac_q[:ngm, :nqs], dtype=np.float64)
         coulomb_done = np.ones(nqs, dtype=bool)
@@ -604,9 +450,7 @@ def vexx_all_paths(psi,
         facb = np.zeros(nrxxs)
         facb[nl0] = fac  # Coulomb factor on the FFT grid
 
-        # per-q US augmentation data (faithful qvan2): the current q's Q-functions
-        # and the eigqts-folded structure factor. Falls back to the q-independent
-        # synthetic args when not supplied.
+        # per-q US augmentation data (qvan2); falls back to q-independent synthetic args when not supplied.
         if qgm_q is not None:
             qgm_use = qgm_q[:, :, iq - 1]
             sfac_use = sf_q[:, :, iq - 1]
@@ -627,10 +471,7 @@ def vexx_all_paths(psi,
                     ibnd = int(ibands[ii, eg])
                     if ibnd == 0 or ibnd > m:
                         continue
-                    # Occupied-orbital range [jmin, jmax] paired with this band,
-                    # found by a fixed ``max_pairs`` min/max scan over egrp_pairs
-                    # (rather than a ragged ``[... for ip if ...]`` list-comp the
-                    # translator can't lower) -- identical to the sibling ``vexx``.
+                    # occupied-orbital range [jmin, jmax] via fixed max_pairs scan (not a ragged list-comp; matches sibling vexx).
                     jmin = 0
                     jmax = -1
                     for ip in range(max_pairs):
@@ -714,23 +555,12 @@ def vexx(psi, hpsi, exxbuff, x_occupation, coulomb_fac, dfftt_nl, igk_exx, index
          ibands, nibands, all_start, all_end, egrp_pairs, iexx_istart, exxalfa, omega, tpiba2, exxdiv, eps_qdiv,
          gau_scrlen, erf_scrlen, erfc_scrlen, yukawa, current_k, current_ik, nqs, n, m, npwx, npol, nrxxs, ngm, nks, n1,
          n2, n3, nbnd, my_egrp_id, max_pairs, jblock, negrp, iexx_start):
-    """Apply the Fock exchange operator to ``psi``; accumulate onto ``hpsi`` in
-    place (collinear active path). All arrays are F-contiguous flat-SoA buffers
-    with 1-based Fortran index tables (``dfftt_nl``, ``igk_exx``, ``egrp_pairs``,
-    ...) -- converted to 0-based on use. ``coulomb_fac`` is unused here (recomputed
-    from ``g`` per q-point, matching the kernel); kept for ABI parity."""
+    """Apply the Fock exchange operator to psi, accumulate onto hpsi in place (collinear active path)."""
     omega_inv = 1.0 / omega
     nqs_inv = 1.0 / nqs
     eg = my_egrp_id
 
-    # FFT helpers use the translator's flat-grid idiom: a 1-D (nrxxs,) buffer is
-    # reshaped to the (n1, n2, n3) FFT grid (the trailing ``-1`` batch column is
-    # 1 here), transformed over the three grid axes, then flattened back. The
-    # flat<->grid mapping is C-order, MATCHING the C-order ``ravel_multi_index``
-    # the index tables (``dfftt_nl``/``igk_exx``) are built with -- so the whole
-    # kernel is C-order self-consistent (the asserted physics property,
-    # Hermiticity of the Fock operator, is grid-order agnostic) and the
-    # reshape->fftn->reshape chain lowers via ``_FftGridReshapeRewriter``.
+    # FFT helpers reshape flat (nrxxs,) <-> (n1,n2,n3) grid in C-order, matching how dfftt_nl/igk_exx are built.
     def invfft(col):  # G/recip -> real space (normalised)
         return np.fft.ifftn(col.reshape((n1, n2, n3, -1)), axes=(0, 1, 2)).reshape(nrxxs, -1)[:, 0]
 
@@ -756,11 +586,7 @@ def vexx(psi, hpsi, exxbuff, x_occupation, coulomb_fac, dfftt_nl, igk_exx, index
     big_result = np.zeros((n * npol, m), dtype=np.complex128, order="F")
 
     # ---- main loop over q-points ------------------------------------------
-    # Dense SoA form: one occupied orbital per inner iteration (matching the
-    # dace-fortran-generated C++ loop nest), so there are no ragged Python lists
-    # / dynamic ``np.arange`` slices / ``np.stack`` for the translator -- the
-    # occupied-orbital range [jmin, jmax] paired with ``ibnd`` is found by a
-    # fixed ``max_pairs`` scan (min/max accumulation) instead of a list-comp.
+    # dense SoA form (one orbital per inner iter, no ragged lists) so the translator can lower the loop nest.
     wegrp = (1 + eg - 1) % negrp + 1  # negrp==1 -> 1
     all_start_tmp = int(all_start[wegrp - 1])
     all_end_tmp = int(all_end[wegrp - 1])
@@ -768,12 +594,7 @@ def vexx(psi, hpsi, exxbuff, x_occupation, coulomb_fac, dfftt_nl, igk_exx, index
         ikq = int(index_xkq[current_ik - 1, iq - 1])
         ik = int(index_xk[ikq - 1])
         xkq = xkq_collect[:, ikq - 1]
-        # Bare Coulomb factor v(G) = e^2 * 4pi / |q + G|^2 scattered onto the FFT
-        # grid (``g2_convolution``, collinear NC bare-Coulomb path: the Gaussian/
-        # erf/erfc screening regimes are ``vexx_all_paths``). The G -> 0 singular
-        # term is ``-exxdiv``. Vectorised over the G-sphere (the parallel axis) --
-        # only the 3 spatial components loop, mirroring the QE q-vector sum -- so
-        # jax lowers it parallel while C/Fortran/numba sequentialise it.
+        # bare Coulomb v(G) = 4pi e2/|q+G|^2 (G->0 term is -exxdiv); vectorized over the G-sphere so jax parallelizes it.
         qq = np.zeros(ngm)
         for d in range(3):
             qd = xk[d, current_k - 1] - xkq[d] + g[d, :ngm]
@@ -792,8 +613,7 @@ def vexx(psi, hpsi, exxbuff, x_occupation, coulomb_fac, dfftt_nl, igk_exx, index
                 ibnd = int(ibands[ii, eg])
                 if ibnd == 0 or ibnd > m:
                     continue
-                # occupied-orbital range paired with this band: min/max over the
-                # fixed egrp_pairs table (replaces the dynamic ``js`` list-comp).
+                # occupied-orbital range via min/max scan over egrp_pairs (replaces a dynamic list-comp).
                 jmin = 0
                 jmax = -1
                 for ip in range(max_pairs):

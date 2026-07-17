@@ -1,12 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A tiny fixed-kernel demo sweep -- the smoke-run half of the quickstart.
-
-Runs a small hand-picked set of kernels under NumPy / Numba (+ optional dace_cpu),
-each in its own forked child (see :func:`optarena.frameworks.forked.run_forked`)
-so one crash cannot take down the demo. Every run persists its timings to
-``optarena.db`` in the cwd, ready for :func:`optarena.plotting.plot_heatmap`.
-"""
+"""A tiny fixed-kernel demo sweep: runs hand-picked kernels under NumPy/Numba (+ optional dace_cpu),
+each in its own forked child, persisting timings to ``optarena.db`` for :func:`plot_heatmap`."""
 from optarena.support.collect.sweep import run_one
 from optarena.frameworks.forked import run_forked
 

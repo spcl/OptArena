@@ -62,10 +62,7 @@ def _accumulate_bins_kernel(data_ptr, radius_ptr, sums_ptr, counts_ptr, N, n_bin
     r1 = rmax64 * bin64 / n_bins64
     r2 = rmax64 * (bin64 + 1.0) / n_bins64
 
-    # faster version but worse error:
-    # r1 = rmax * bin_idx / n_bins
-    # r2 = rmax * (bin_idx + 1.0) / n_bins
-
+    # A raw (non-fp64) rmax*bin_idx/n_bins version is faster but less accurate.
     in_bin = (r1 <= r) & (r < r2)
 
     v = tl.load(data_ptr + offs, mask=mask & in_bin, other=0.0)
@@ -73,8 +70,7 @@ def _accumulate_bins_kernel(data_ptr, radius_ptr, sums_ptr, counts_ptr, N, n_bin
 
     counter = tl.sum((in_bin & mask), axis=0)
 
-    # TODO(triton): fp32 fails ~1.9e-4 — these two atomic adds have undefined
-    # ordering across blocks, so the fp summation order varies between runs.
+    # TODO(triton): fp32 fails ~1.9e-4 — atomic-add order across blocks is nondeterministic.
     tl.atomic_add(sums_ptr + bin_idx, value)
     tl.atomic_add(counts_ptr + bin_idx, counter)
 

@@ -1,12 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Per-kernel timeout: the resolver precedence + the runner's finalize/timeout wiring.
-
-``resolve_kernel_timeout`` picks the per-kernel agent-run budget by precedence
-(global override > kernel-yaml ``timeout_s`` > per-level default > flat fallback),
-and ``solve_task`` runs the kernel in a forked child bounded by that budget -- an
-overrun ends the run with a scored ``timeout`` row (never a hang).
-"""
+"""Per-kernel timeout: resolver precedence (override > yaml > per-level > fallback) + runner wiring."""
 import re
 import time
 import types
@@ -24,16 +18,13 @@ from optarena.spec import BenchSpec
 
 
 def _spec(*, level=None, **extra):
-    """A minimal stand-in for a BenchSpec: ``resolved_level`` + whatever manifest
-    fields (e.g. ``timeout_s``) the resolver reads via ``vars(spec).get``. A real
-    frozen BenchSpec exposes ``timeout_s`` the same way once the schema carries it."""
+    """A minimal stand-in for a BenchSpec: `resolved_level` + whatever manifest fields the resolver reads."""
     return types.SimpleNamespace(resolved_level=level, **extra)
 
 
 @pytest.fixture
 def pinned_timeouts():
-    """Pin the timeout config to known values (independent of config.yaml edits),
-    cleared afterwards."""
+    """Pin the timeout config to known values (independent of config.yaml edits), cleared afterwards."""
     config.set_override("timeouts.kernel_s", 300)
     config.set_override("timeouts.kernel_s_by_level", {1: 11, 2: 22, 3: 33})
     config.set_override("timeouts.kernel_s_override", None)
@@ -77,8 +68,7 @@ def test_string_keyed_level_map_is_tolerated(pinned_timeouts):
 
 
 def test_real_benchspec_has_no_timeout_s_and_uses_its_level(pinned_timeouts):
-    """A real (frozen) BenchSpec carries no ``timeout_s`` field today: the resolver
-    reads it as absent (not an error) and falls to the per-level default. gemm is L1."""
+    """A real BenchSpec carries no `timeout_s` field: the resolver reads it as absent, not an error."""
     spec = BenchSpec.load("gemm")
     assert spec.resolved_level == 1
     assert resolve_kernel_timeout(spec) == 11.0  # by_level[1] from the fixture
@@ -97,21 +87,13 @@ class _HangAgent(StubAgent):
 
 
 def test_solve_task_times_out_to_a_scored_row():
-    """A hanging agent that never reaches a correct attempt is bounded by the
-    per-kernel budget and recorded as a scored not-solved ``timeout`` row -- the
-    runner never hangs, and there is no best-so-far to keep."""
+    """A hanging agent is bounded by the per-kernel budget and recorded as a scored `timeout` row."""
     row, sub = solve_task(_HangAgent(), Task("gemm", "restricted", "c"), timeout=1.0)
     assert row.status == "timeout" and row.correct is False and sub is None
     assert "time" in row.detail.lower()
 
 
-# -- iterate-past-correct + best-so-far snapshot ---------------------------------
-#
-# These drive the loop with a FAKE score (a correct Score whose speedup is read from
-# a tag in the submission source), so the control flow -- keep the fastest correct
-# attempt, stream each improvement, survive a timeout -- is exercised without a real
-# compile. The fake replaces the module-global ``runner.score`` the forked child
-# inherits.
+# --- iterate-past-correct + best-so-far snapshot: drives the loop with a fake speedup-tagged score ---
 
 
 def _fake_score_from_tag(submission, task, **kwargs):
@@ -133,8 +115,7 @@ def _fake_score_from_tag(submission, task, **kwargs):
 
 
 class _SpeedTaggedAgent(StubAgent):
-    """Returns a correct submission whose source encodes a target speedup, one per
-    round from ``speeds`` (the last value repeats). Paired with ``_fake_score_from_tag``."""
+    """Returns a correct submission encoding a target speedup, one per round from `speeds`."""
     name = "speedtagged"
 
     def __init__(self, speeds):
@@ -150,8 +131,7 @@ class _SpeedTaggedAgent(StubAgent):
 
 
 class _CorrectThenHangAgent(StubAgent):
-    """Round 1: a correct submission (the best-so-far). Round 2: hangs forever, so
-    the run times out AFTER a best was already streamed."""
+    """Round 1: a correct submission (the best-so-far). Round 2: hangs forever."""
     name = "correcthang"
 
     def __init__(self):
@@ -168,8 +148,7 @@ class _CorrectThenHangAgent(StubAgent):
 
 
 def test_iterate_past_correct_keeps_the_faster_attempt(monkeypatch):
-    """The loop does NOT stop on the first correct attempt: it keeps iterating and
-    returns the FASTEST correct one, independent of the order they arrived in."""
+    """The loop does not stop on the first correct attempt; it returns the fastest correct one."""
     monkeypatch.setattr(runner, "score", _fake_score_from_tag)
     # slow-correct first, then fast-correct -> the fast one wins (no early stop)
     row, sub = solve_task(_SpeedTaggedAgent([2.0, 5.0]), Task("gemm", "restricted", "c"), max_rounds=2, timeout=30.0)
@@ -181,8 +160,7 @@ def test_iterate_past_correct_keeps_the_faster_attempt(monkeypatch):
 
 
 def test_timeout_mid_improvement_returns_best_so_far(monkeypatch):
-    """A timeout that fires WHILE the agent is still trying to improve returns the
-    best-so-far snapshot (real speedup + correctness kept), not a not-solved row."""
+    """A timeout firing mid-improvement returns the best-so-far snapshot, not a not-solved row."""
     monkeypatch.setattr(runner, "score", _fake_score_from_tag)
     row, sub = solve_task(_CorrectThenHangAgent(), Task("gemm", "restricted", "c"), max_rounds=3, timeout=1.5)
     assert row.status == "timeout"  # the run ended by the budget ...

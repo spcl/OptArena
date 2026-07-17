@@ -1,21 +1,4 @@
-"""CPU TVM impl of the 3-layer ``mlp`` deep-learning microapp.
-
-Reference (``mlp_numpy.py``)::
-
-    x = relu(input @ w1 + b1)
-    x = relu(x     @ w2 + b2)
-    x = softmax(x  @ w3 + b3)
-    return x
-
-with numerically-stable softmax over the last axis::
-
-    softmax(z)[i,j] = exp(z[i,j] - max_k z[i,k]) / sum_k exp(z[i,k] - max_k z[i,k])
-
-Shapes: input (N, C_in); w1 (C_in, S0); w2 (S0, S1); w3 (S1, S2); bN (Si,).
-Built as one multi-stage PrimFunc: three (matmul + bias [+ relu]) stages, then
-four softmax stages (row-max, exp, row-sum, divide). ``relu = te.max(x, 0)``.
-``bench_info`` has no ``output_args`` → the entry returns the single output.
-"""
+"""CPU TVM impl of the 3-layer ``mlp`` deep-learning microapp."""
 import tvm
 from tvm import te
 

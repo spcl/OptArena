@@ -11,14 +11,7 @@ Code calculates pairwise forces according to Newton's Law of Gravity
 
 
 def getAcc(pos, mass, G, softening):
-    """
-    Calculate the acceleration on each particle due to Newton's Law 
-    pos  is an N x 3 matrix of positions
-    mass is an N x 1 vector of masses
-    G is Newton's Gravitational constant
-    softening is the softening length
-    a is N x 3 matrix of accelerations
-    """
+    """Compute Newtonian gravitational acceleration on each particle (pos: Nx3, mass: Nx1) via pairwise sum."""
     # positions r = [x,y,z] for all particles
     x = pos[:, 0:1]
     y = pos[:, 1:2]
@@ -44,17 +37,8 @@ def getAcc(pos, mass, G, softening):
 
 
 def getEnergy(pos, vel, mass, G):
-    """
-    Get kinetic energy (KE) and potential energy (PE) of simulation
-    pos is N x 3 matrix of positions
-    vel is N x 3 matrix of velocities
-    mass is an N x 1 vector of masses
-    G is Newton's Gravitational constant
-    KE is the kinetic energy of the system
-    PE is the potential energy of the system
-    """
+    """Compute total kinetic (KE) and potential (PE) energy of the N-body system."""
     # Kinetic Energy:
-    # KE = 0.5 * np.sum(np.sum( mass * vel**2 ))
     KE = 0.5 * np.sum(mass * vel**2)
 
     # Potential Energy:
@@ -74,7 +58,6 @@ def getEnergy(pos, vel, mass, G):
     inv_r[inv_r > 0] = 1.0 / inv_r[inv_r > 0]
 
     # sum over upper triangle, to count each interaction only once
-    # PE = G * np.sum(np.sum(np.triu(-(mass*mass.T)*inv_r,1)))
     PE = G * np.sum(np.triu(-(mass * mass.T) * inv_r, 1))
 
     return KE, PE

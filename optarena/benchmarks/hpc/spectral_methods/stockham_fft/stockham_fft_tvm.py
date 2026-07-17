@@ -1,27 +1,4 @@
-"""CPU TVM impl of ``stockham_fft`` -- radix-R Stockham FFT.
-
-The numpy reference runs ``K`` Stockham stages over the complex
-length-``N`` vector (``N == R**K``). Each stage is a stride permutation,
-a twiddle-factor multiply, and a radix-``R`` butterfly
-(``dft_mat @ ...``). Algebraically, every stage maps the input vector
-``y_prev`` to an output vector ``y`` where each output position couples
-exactly ``R`` source positions through a complex coefficient::
-
-    y[o] = sum_{m=0}^{R-1} coef[o, m] * y_prev[ gather[o, m] ]
-
-(derivation: with ``o = a*R^(K-1) + c`` and the matmul ``y[a,c] =
-sum_m dft_mat[a,m] * T[m, c]``, where ``T[p] = D_dec(p) *
-y_prev[src(p)]`` for ``p = m*R^(K-1)+c`` decoded into the
-permutation/twiddle indices). The per-stage gather indices and the
-complex coefficients depend only on ``i, R, K`` -- pure index algebra
--- so they are precomputed on the host in numpy, then each stage is one
-*single* autotunable ``te.compute`` (a tiny complex reduction over the
-``R`` butterfly legs with a data-dependent gather), compiled ONCE for
-the shape and reused across all ``K`` stages with different
-coefficient/index tensors. Complex values are split into real/imag
-planes; the planes are ping-ponged across stages. The entry returns the
-final complex vector as numpy (``copy_back`` passes it through).
-"""
+"""CPU/GPU TVM impl of stockham_fft: each stage is y[o] = sum_m coef[o,m]*y_prev[gather[o,m]], gather/coef precomputed on host."""
 import numpy as np
 import tvm
 from tvm import te
@@ -30,8 +7,7 @@ from optarena.frameworks.tvm_build import TvmKernel, cpu_target, gpu_target, act
 
 
 def build_primfunc(N, R, fdtype):
-    """One Stockham stage as ``y[o] = sum_m coef[o,m] * y_prev[gather[o,m]]``
-    (complex), split into real/imag planes. Compiled once per (N, R)."""
+    """One Stockham stage as y[o] = sum_m coef[o,m] * y_prev[gather[o,m]] (complex, split into real/imag planes)."""
     yr = te.placeholder((N, ), name="yr", dtype=fdtype)
     yi = te.placeholder((N, ), name="yi", dtype=fdtype)
     cr = te.placeholder((N, R), name="cr", dtype=fdtype)

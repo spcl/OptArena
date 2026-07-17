@@ -52,16 +52,7 @@ def _conv2d(
     BLOCK_SIZE_C2: tl.constexpr = 16,
     REUSE_INPUT: tl.constexpr = False,
 ):
-    """
-    for i in range(H_out): # 56
-        for j in range(W_out): # 56
-            for n in range(N): # 8
-                for c1 in range(C_in): # 256
-                    for c2 in range(C_out): # 256
-                        output[n, i, j, c2] +=
-                            input[n, i:i + K, j:j + K, c1] *
-                            weights[:, :, c1, c2]
-    """
+    """Naive reference loop nest: ``output[n,i,j,c2] += input[n,i:i+K,j:j+K,c1] * weights[:,:,c1,c2]``."""
     i = tl.program_id(axis=0)
     j = tl.program_id(axis=1)
     extra = tl.program_id(axis=2)
@@ -204,9 +195,7 @@ def _batchnorm2d_normalize(
 
 
 def _padded_batchnorm2d_relu(x, eps=1e-5):
-    """
-    Fused implementation of batchnorm2d with relu activation with a padding preprocessing step.
-    """
+    """Fused implementation of batchnorm2d with relu activation with a padding preprocessing step."""
 
     padded = torch.zeros((x.shape[0], x.shape[1] + 2, x.shape[2] + 2, x.shape[3]), dtype=x.dtype, device=x.device)
     # TODO: Maybe this can somehow be fused into 'batchnorm2d_relu'?
@@ -219,9 +208,7 @@ def _batchnorm2d_relu_input(
         x,  # (N, H, W, C)
         input,  # (N, H, W, C)
         eps=1e-5):
-    """
-    Fused implementation of batchnorm2d with 'relu(result + input)' activation.
-    """
+    """Fused implementation of batchnorm2d with 'relu(result + input)' activation."""
 
     N, H, W, C = x.shape
     mean = torch.zeros((1, H, W, C), dtype=x.dtype)
@@ -245,9 +232,7 @@ def _batchnorm2d_relu_input(
 def _batchnorm2d_relu(
         x,  # (N, H, W, C)
         eps=1e-5):
-    """
-    Fused implementation of batchnorm2d with relu activation.
-    """
+    """Fused implementation of batchnorm2d with relu activation."""
 
     N, H, W, C = x.shape
     mean = torch.zeros((1, H, W, C), dtype=x.dtype)

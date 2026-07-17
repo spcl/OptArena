@@ -25,13 +25,11 @@ def spmv_csr_kernel(
     # one program per row
     row = tl.program_id(0)
 
-    # row start/end in CSR
     row_start = tl.load(A_indptr + row)
     row_end = tl.load(A_indptr + row + 1)
 
     acc = tl.zeros((), dtype=A_data.dtype.element_ty)
 
-    # iterate over non-zeros in tiles of size BLOCK_SIZE
     off = row_start
     while off < row_end:
         offs = off + tl.arange(0, BLOCK_SIZE)
@@ -48,8 +46,7 @@ def spmv_csr_kernel(
     tl.store(y + row, acc)
 
 
-# Canonical sparse ABI signature: A's CSR buffers alphabetically
-# (A_data, A_indices, A_indptr), then dense x.
+# Canonical sparse ABI signature: A's CSR buffers alphabetically, then dense x.
 def spmv(A_data, A_indices, A_indptr, x):
     n_rows = A_indptr.numel() - 1
 

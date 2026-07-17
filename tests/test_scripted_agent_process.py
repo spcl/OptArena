@@ -1,20 +1,9 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scripting the PROCESS of an agent with a deterministic no-op operator.
-
-:class:`~optarena.harness.agent.ScriptedAgent` replays a fixed list of moves,
-so a whole agent SESSION plays out through the real harness with no model / network:
-
-* the in-process improve loop (:func:`runner._solve_rounds` / :func:`runner.solve_task`):
-  propose -> build-fail -> repair -> incorrect -> overfit -> correct -> improve, with
-  the (tokens, score) trajectory and best-so-far tracking asserted end to end;
-* the CONTAINER tools loop (:class:`~optarena.harness.tools.JudgeClient` against a
-  live in-process judge): read the task + baseline, then verify -> score -> submit, the
-  exact loop ``prompts/service_task.j2`` documents an external agent driving.
-
-These are the deterministic backbone tests: they exercise every branch of the loop a
-real LLM agent hits, without an LLM.
-"""
+"""Scripting the PROCESS of an agent with a deterministic no-op operator: :class:`ScriptedAgent`
+replays a fixed list of moves so a whole agent session plays out through the real harness with no
+model or network -- both the in-process improve loop and the container tools loop against a live
+judge. These are the deterministic backbone tests, exercising every branch a real LLM agent hits."""
 import re
 
 import pytest
@@ -101,9 +90,8 @@ def _fake_score(submission, task, **kwargs):
 
 
 def test_scripted_session_walks_every_status_and_keeps_the_best(monkeypatch):
-    """A single scripted session climbs the whole status ladder -- build_error ->
-    incorrect -> overfit -> correct -> faster -- and the loop keeps the FASTEST correct
-    attempt while the (tokens, score) trajectory records every round in order."""
+    """A single scripted session climbs the whole status ladder, and the loop keeps the fastest
+    correct attempt while the trajectory records every round in order."""
     monkeypatch.setattr(runner, "score", _fake_score)
     steps = ["BUILD_FAIL", "WRONG", "OVERFIT", "/* speedup=3.0 */", "/* speedup=6.0 */"]
     agent = ScriptedAgent(steps, cost=(10, 5))
@@ -120,8 +108,7 @@ def test_scripted_session_walks_every_status_and_keeps_the_best(monkeypatch):
 
 
 def test_scripted_session_all_failing_records_last_attempt(monkeypatch):
-    """A session that never reaches correct returns the last scored attempt (not a
-    phantom best), with the failure status preserved."""
+    """A session that never reaches correct returns the last scored attempt, not a phantom best."""
     monkeypatch.setattr(runner, "score", _fake_score)
     agent = ScriptedAgent(["BUILD_FAIL", "WRONG"], cost=(1, 1))
     row, _sub = runner._solve_rounds(agent, TASK, max_rounds=2)
@@ -133,8 +120,8 @@ def test_scripted_session_all_failing_records_last_attempt(monkeypatch):
 
 
 def test_scripted_repair_build_error_then_correct_real():
-    """The real loop, real compiler: round 1 is un-compilable -> build_error; round 2 is
-    the reference -> ok with a real speedup. Driven through the forked solve_task."""
+    """The real loop, real compiler: round 1 is un-compilable, round 2 is the reference. Driven
+    through the forked solve_task."""
     if not _emitter_and_gcc():
         pytest.skip("NumpyToC emitter or gcc absent")
     steps = ["void gemm_fp64(void) { this is not valid C }", lambda t: reference_source(t)]
@@ -167,10 +154,8 @@ void gemm_fp64(const double *restrict A, const double *restrict B, double *restr
 
 
 def test_scripted_tool_session_verify_then_score_and_submit(make_judge):
-    """Script the CONTAINER agent loop through the tools client against a live judge:
-    read the task + the baseline to beat, submit a wrong body (verify -> correct=False),
-    then submit the reference (verify -> correct=True), measure it (score), and finalize
-    (submit). This is exactly the loop prompts/service_task.j2 hands an external agent."""
+    """Script the CONTAINER agent loop through the tools client against a live judge -- the exact
+    loop prompts/service_task.j2 hands an external agent."""
     if not _emitter_and_gcc():
         pytest.skip("NumpyToC emitter or gcc absent")
     from optarena.harness import tools

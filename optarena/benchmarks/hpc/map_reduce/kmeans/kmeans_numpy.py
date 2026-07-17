@@ -1,11 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# k-means clustering by Lloyd's algorithm (OpenDwarfs / Rodinia ``kmeans``): the
-# MapReduce dwarf. Each iteration MAPs every point to its nearest centroid, then
-# REDUCEs the assigned points back into new centroids. The assignment is written
-# as a one-hot matrix so the reduction is a dense matmul (no variable-size
-# masking), which keeps the kernel lowerable.
+# Lloyd's k-means: MAP points to nearest centroid, REDUCE via one-hot matmul (avoids masking, stays lowerable).
 
 import numpy as np
 

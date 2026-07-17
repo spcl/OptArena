@@ -20,16 +20,11 @@ def _trace_of_matrix(A, N, trace, DTYPE: tl.constexpr, BLOCK_SIZE_N: tl.constexp
     identity_offs = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     mask_identity = identity_offs < N
 
-    # go_fast(a):
-    #     trace = 0.0
-    #     for i in range(N):
-    #         trace += np.tanh(a[i, i])
-    #     return a + trace
+    # Equivalent to: trace = sum(tanh(diag(A))); return A + trace
 
     acc = tl.zeros((BLOCK_SIZE_N, ), dtype=DTYPE)
     a_diag = tl.load(A + identity_offs * N + identity_offs, mask=mask_identity, other=0.0)
 
-    # Compute tanh
     acc += libdevice.tanh(a_diag)
     sum = tl.sum(acc)
     tl.atomic_add(trace, sum)

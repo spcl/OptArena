@@ -77,12 +77,8 @@ def kernel(M, float_n, data: torch.Tensor):
         triton.cdiv(M, meta["BLOCK_SIZE_M"]),
     )
 
-    # 1) column means
     _kernel_mean_cols[grid](data, N, M, mean)
-
-    # 2) center in-place
     _kernel_center_cols[grid](data, mean, N, M)
 
-    # 3) covariance over variables (columns) with N-1 denominator
     cov = matmul(data.T, data) / (float(float_n) - 1.0)
     return cov

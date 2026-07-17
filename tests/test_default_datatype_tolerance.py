@@ -1,21 +1,9 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The validation band must track the ACTUAL data precision -- not the caller's
-``--datatype`` default of ``None``.
-
-When ``run-benchmark`` is given no ``-d/--datatype``, a kernel materializes its
-inputs at its OWN default precision, and many legacy ``initialize`` functions
-default to ``np.float32`` (``gemm`` among them). The grader used to resolve
-tolerances off that ``None``, which :func:`tolerances_for` maps to the tight fp64
-band (~1e-9), so an fp32 result was graded against a tolerance it cannot meet -- a
-SPURIOUS validation FAIL on the native (cc / llvm / ...) backends, historically
-misread as a compiler bug.
-
-The fix makes the tolerance follow the detected data dtype
-(:func:`optarena.frameworks.test.tolerance_datatype`). These tests pin it. Note
-``tests/test_frameworks.py`` runs the same kernel at an EXPLICIT ``float64``,
-which is exactly why it never caught this -- the default path was untested.
-"""
+"""The validation band must track the ACTUAL data precision, not the caller's ``--datatype`` default of
+``None``: many legacy ``initialize`` functions default to float32, but resolving tolerances off ``None``
+mapped to the tight fp64 band, spuriously failing native backends (misread as a compiler bug). The fix
+makes the tolerance follow the detected dtype (:func:`optarena.frameworks.test.tolerance_datatype`)."""
 import shutil
 
 import numpy as np
@@ -27,12 +15,8 @@ from optarena.precision import (Precision, TOLERANCE_MATRIX, ToleranceBand, deri
 
 
 def test_tolerance_matrix_is_typed_precision_keyed_and_total():
-    """The single source is a typed band per precision -- no untyped default.
-
-    Every :class:`Precision` has a :class:`ToleranceBand` entry (so a run resolves
-    to a concrete precision and looks its band up -- there is no ``None`` hole), and
-    the derived default tracks the format's machine epsilon so a NEW precision added
-    to the enum grades sanely with no hand-tuning."""
+    """The single source is a typed band per precision -- no untyped default; every :class:`Precision`
+    has a :class:`ToleranceBand`, and the derived default tracks machine epsilon."""
     assert set(TOLERANCE_MATRIX) == set(Precision), "matrix must cover every Precision (total, no None path)"
     for prec, band in TOLERANCE_MATRIX.items():
         assert isinstance(band, ToleranceBand), f"{prec} band is not a typed ToleranceBand"
@@ -62,9 +46,8 @@ def test_tolerance_datatype_tracks_detected_dtype():
 
 
 def test_gemm_default_datatype_is_fp32_so_its_band_is_fp32():
-    """gemm's legacy ``initialize()`` defaults to float32 -- the PREMISE of the
-    bug. The band the grader resolves for that data must be the fp32 band, not the
-    fp64 floor it would take from the raw ``datatype=None``."""
+    """gemm's legacy ``initialize()`` defaults to float32 -- the premise of the bug -- so the resolved
+    band must be fp32, not the fp64 floor raw ``datatype=None`` would take."""
     data = Benchmark("gemm").get_data("S", None)  # no --datatype == the CLI default
     arrays = [v for v in data.values() if isinstance(v, np.ndarray)]
     assert arrays and all(a.dtype == np.float32 for a in arrays), "gemm default data is not fp32"
@@ -75,8 +58,8 @@ def test_gemm_default_datatype_is_fp32_so_its_band_is_fp32():
 
 
 def _validated_at_default(framework: str) -> bool:
-    """Run gemm through ``framework`` at the DEFAULT datatype (no ``-d``) and
-    report whether every implementation validated vs the NumPy reference."""
+    """Run gemm through ``framework`` at the default datatype and report whether every implementation
+    validated vs the NumPy reference."""
     from optarena.frameworks import Benchmark as B, Test, generate_framework
     test = Test(B("gemm"), generate_framework(framework), generate_framework("numpy"))
     # datatype=None is the CLI default: gemm then materializes fp32 data.
@@ -87,11 +70,8 @@ def _validated_at_default(framework: str) -> bool:
 
 @pytest.mark.parametrize("framework,tool", [("cc", "gcc"), ("llvm", "clang")])
 def test_native_gemm_validates_at_default_datatype(framework, tool):
-    """gemm at the DEFAULT datatype (fp32) validates on the native backends.
-
-    Regression guard for the false-fail: pre-fix the fp32 result was graded at the
-    fp64 band and FAILED validation (misattributed to the compiler). Skips when the
-    toolchain is absent, like ``tests/test_frameworks.py``."""
+    """gemm at the default datatype (fp32) validates on the native backends; regression guard for the
+    false-fail where fp32 was graded at the fp64 band and misattributed to the compiler."""
     if not shutil.which(tool):
         pytest.skip(f"{tool} not installed")
     assert _validated_at_default(framework), f"{framework}: gemm did not validate at its default (fp32) datatype"

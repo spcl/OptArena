@@ -1,8 +1,4 @@
-# Original source for OptArena kernel mandelbrot1.
-# Upstream: SPCL npbench (github.com/spcl/npbench) mandelbrot1/mandelbrot1_numpy.py.
-# License: npbench, BSD-3-Clause.
-# Copied by scripts/collect_original_sources.py; not the scoring oracle
-# (the numpy reference remains the correctness oracle).
+# Upstream npbench source (BSD-3-Clause); not the scoring oracle (mandelbrot1_numpy.py is).
 
 # -----------------------------------------------------------------------------
 # From Numpy to Python
@@ -14,8 +10,7 @@ import numpy as np
 
 
 def mandelbrot(xmin, xmax, ymin, ymax, xn, yn, maxiter, horizon=2.0):
-    # Adapted from https://www.ibm.com/developerworks/community/blogs/jfp/...
-    #              .../entry/How_To_Compute_Mandelbrodt_Set_Quickly?lang=en
+    # Adapted from https://www.ibm.com/developerworks/community/blogs/jfp/.../entry/How_To_Compute_Mandelbrodt_Set_Quickly?lang=en
     X = np.linspace(xmin, xmax, xn, dtype=np.float64)
     Y = np.linspace(ymin, ymax, yn, dtype=np.float64)
     C = X + Y[:, None] * 1j

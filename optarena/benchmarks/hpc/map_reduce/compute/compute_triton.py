@@ -16,12 +16,7 @@ def get_configs():
 @triton.jit
 def _kernel(array_1, array_2, a, b, c, N, arr_out, DTYPE: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
 
-    #  def compute(array_1, array_2, a, b, c):
-    #     return np.clip(array_1, 2, 10) * a + array_2 * b + c
-
-    # clip(x) = 2 if x < 2
-    # clip(x) = x if 2 <= x <= 10
-    # clip(x) = 10 if x > 10
+    # np.clip(array_1, 2, 10) has no Triton primitive; emulate via masks below.
 
     pid_n = tl.program_id(axis=0)
     offs = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -30,23 +25,20 @@ def _kernel(array_1, array_2, a, b, c, N, arr_out, DTYPE: tl.constexpr, BLOCK_SI
     arr1_vec = tl.load(array_1 + offs, mask=row_mask, other=0)
     arr2_vec = tl.load(array_2 + offs, mask=row_mask, other=0)
 
-    # Clipping using masks: np.clip(array_1, 2, 10)
-    mask_two = arr1_vec < 2  # true, true, false, ...
-    mask_ten = arr1_vec > 10  # false, false, ... true
+    mask_two = arr1_vec < 2
+    mask_ten = arr1_vec > 10
 
     two_vec = tl.full((BLOCK_SIZE_N, ), 2, dtype=DTYPE)
     ten_vec = tl.full((BLOCK_SIZE_N, ), 10, dtype=DTYPE)
     clipped_arr1 = tl.where(mask_two, two_vec, arr1_vec)
     clipped_arr1 = tl.where(mask_ten, ten_vec, clipped_arr1)
 
-    # final computation
     arr_out_vec = clipped_arr1 * a + arr2_vec * b + c
 
     tl.store(arr_out + offs, arr_out_vec, mask=row_mask)
 
 
 def _as_py(x):
-    # convert numpy scalar -> Python scalar
     return x.item() if isinstance(x, np.generic) else x
 
 
@@ -57,14 +49,12 @@ def compute(array_1, array_2, a, b, c, out):
     a2_len = array_2.numel()
     assert N == a2_len, "Input arrays must have the same length."
 
-    # force type torch.float32 on arrays
     dtype = array_1.dtype
     if dtype not in (torch.int32, torch.int64):
         dtype = torch.int64
     DTYPE = tl.int64 if dtype == torch.int64 else tl.int32
 
-    # Assume array_1, array_2, a, b, c have the same dtype
-    # convert to dtype and make contiguous
+    # Assumes array_1, array_2, a, b, c share the same dtype.
     a1 = array_1.to(device="cuda", dtype=dtype).contiguous()
     a2 = array_2.to(device="cuda", dtype=dtype).contiguous()
     arr_out = torch.empty_like(a1)

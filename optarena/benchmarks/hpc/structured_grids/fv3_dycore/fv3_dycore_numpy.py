@@ -1,65 +1,16 @@
 # Copyright 2026 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Faithful numpy port of the FV3 horizontal finite-volume transport stack
-# (the bottom tiers of the FV3 dynamical core): the PPM x/y reconstruction
-# fluxes (xppm / yppm), the 2D advection operator that composes them
-# (fv_tp_2d / FiniteVolumeTransport), the cubed-sphere corner copy, and the
-# del-n hyperdiffusion flux pieces (delnflux).
-#
-# PROVENANCE / LICENSE
-#   Ported from NOAA-GFDL/PyFV3 (package ``pyfv3``), Apache-2.0:
-#     pyfv3/stencils/ppm.py          (PPM coefficients p1,p2,c1,c2,c3,s11,s14,s15)
-#     pyfv3/stencils/xppm.py         (compute_al / get_flux / fx1_fn / apply_flux)
-#     pyfv3/stencils/yppm.py         (the y-direction mirror of xppm)
-#     pyfv3/stencils/fvtp2d.py       (q_i_stencil / q_j_stencil / final_fluxes /
-#                                     apply_x/y_flux_divergence / FiniteVolumeTransport)
-#     pyfv3/stencils/delnflux.py     (fx/fy_calculation / d2_highorder / d2_damp)
-#     pyfv3/stencils/copy_corners.py (_blind_copy_corners_x / _y)
-#   https://github.com/NOAA-GFDL/PyFV3 (commit @ main, fetched 2026-06-28)
-#   The upstream is GTScript (``@gtscript.stencil``); this is a self-contained
-#   numpy rewrite (NO gt4py dependency) suitable for the OptArena translators.
-#   (The GPL-3.0 ai2cm/fv3core fork was deliberately NOT used as a source.)
-#
-# WHAT THIS COMPUTES (scope)
-#   The FV3 dycore call tree is fv_dynamics -> dyn_core (acoustic substeps:
-#   c_sw / d_sw / divergence damping / nonhydrostatic riem solvers / pgrad) ->
-#   remapping (lagrangian_to_eulerian). This port covers the COMMON LEAF of that
-#   tree -- the horizontal transport operator fv_tp_2d that c_sw, d_sw and the
-#   tracer advection all call -- composed all the way up to a single
-#   ``finite_volume_transport(...)`` step, plus its del-n diffusion. The
-#   per-substep C/D-grid solvers (c_sw, d_sw), divergence_damping, the
-#   nonhydrostatic riem_solver3 / sim1_solver, p_grad / pgradc, updatedzc/d, the
-#   vertical remapping and tracer_2d driver, and the full dyn_core / fv_dynamics
-#   loop are NOT ported here (see NOTICE.md / the benchmark README for the
-#   coverage table). Each function below is validated bit-exact against the
-#   GT4Py ``backend="numpy"`` run of the original GTScript (test_reference.py).
-#
-# FORM / GTScript -> numpy MAPPING (same convention as the sibling fv3_xppm)
-#   The GTScript stencils are per-(i,j,k) point computations, written here as
-#   explicit scalar loops (the structured-grids idiom the OptArena C / C++ /
-#   Fortran translators emit), so:
-#     * ``with computation(PARALLEL), interval(...)``   -> the k loop.
-#     * relative offsets ``q[di,dj,dk]``                -> ``q[i+di, j+dj, k+dk]``.
-#     * ``if courant > 0 ... else ...`` point branch     -> a scalar ``if``.
-#     * ``horizontal(region[i_start-1, :], ...)``        -> ``if i == i_start-1``.
-#     * boolean predicate ``smt5`` carried as a 0.0/1.0 float so the limiter OR
-#       lowers portably across the C / C++ / Fortran backends.
-#
-# LAYOUT (SoA)
-#   Every field is its own C-contiguous float array of shape ``(nx, ny, nz)``,
-#   i = x (axis 0), j = y (axis 1), k = z (axis 2). ``nx = nhalo + ni + nhalo``
-#   and ``ny = nhalo + nj + nhalo`` carry ``nhalo`` (=3) ghost cells on each end
-#   so the 5-point stencils and the 3-wide cubed-sphere edge regions are in
-#   bounds. ``dxa``/``dya``/``area``/``rarea``/``del6_*`` are constant in k and
-#   stored (nx, ny, nz) replicated over k for uniform SoA handling (the
-#   originals are 2D FloatFieldIJ).
+# Numpy port of the FV3 horizontal transport stack (PPM x/y flux reconstruction,
+# fv_tp_2d advection, cubed-sphere corner copy, del-n hyperdiffusion), ported from
+# NOAA-GFDL/PyFV3 (Apache-2.0) GTScript stencils as explicit i/j/k loops (no gt4py
+# dep); covers the fv_tp_2d leaf of the dyn_core tree, not the full solver (see
+# NOTICE.md). Validated bit-exact against the GT4Py numpy backend (test_reference.py).
+# Fields are SoA float arrays shaped (nx, ny, nz) with nhalo=3 ghost cells per side.
 
 import numpy as np
 
-# --- PPM coefficients (pyfv3/stencils/ppm.py) ---
-# Precomputed float literals (not ``7.0 / 12.0`` expressions) so the OptArena
-# frontend's module-constant inliner folds them into the C / C++ / Fortran body.
+# PPM coefficients (pyfv3/stencils/ppm.py), as float literals so the constant inliner folds them.
 P1 = 0.5833333333333334  # 7/12   (PPM volume mean)
 P2 = -0.08333333333333333  # -1/12
 # volume-conserving cubic, 2nd deriv = 0 at end point (non-monotonic):
@@ -68,15 +19,9 @@ C2 = 0.7857142857142857  # 11/14
 C3 = 0.35714285714285715  # 5/14
 
 
-# ============================================================================
 # xppm: x-direction PPM advective-flux reconstruction (mord < 8 path)
-# ============================================================================
 def compute_al_x(q, dxa, al, nhalo, ni, nj, nk, grid_type):
-    """``compute_al`` (x): q interpolated to x-interfaces, incl. grid_type<3 edges.
-
-    Writes ``al`` over the window i_start-1 .. i_end+2 (so al[i-1..i+1] are all
-    available to the flux loop). Mirrors pyfv3/stencils/xppm.compute_al.
-    """
+    """``compute_al`` (x): q interpolated to x-interfaces, incl. grid_type<3 edges."""
     i_start = nhalo
     i_end = nhalo + ni - 1
     for i in range(i_start - 1, i_end + 3):
@@ -98,10 +43,7 @@ def compute_al_x(q, dxa, al, nhalo, ni, nj, nk, grid_type):
 
 
 def xppm_flux(q, courant, al, xflux, nhalo, ni, nj, nk, mord):
-    """``get_flux`` (x): mean q advected through each x-interface from ``al``.
-
-    Mirrors pyfv3/stencils/xppm.get_flux + fx1_fn + apply_flux + advection_mask.
-    """
+    """``get_flux`` (x): mean q advected through each x-interface from ``al``."""
     i_start = nhalo
     i_end = nhalo + ni - 1
     for i in range(i_start, i_end + 2):
@@ -143,9 +85,7 @@ def xppm(q, courant, dxa, xflux, al, nhalo, ni, nj, nk, iord, grid_type):
     xppm_flux(q, courant, al, xflux, nhalo, ni, nj, nk, abs(iord))
 
 
-# ============================================================================
 # yppm: y-direction PPM advective-flux reconstruction (mord < 8 path)
-# ============================================================================
 def compute_al_y(q, dya, al, nhalo, ni, nj, nk, grid_type):
     """``compute_al`` (y): mirror of compute_al_x with i<->j roles swapped."""
     j_start = nhalo
@@ -211,15 +151,9 @@ def yppm(q, courant, dya, yflux, al, nhalo, ni, nj, nk, jord, grid_type):
     yppm_flux(q, courant, al, yflux, nhalo, ni, nj, nk, abs(jord))
 
 
-# ============================================================================
 # fvtp2d helper stencils (pyfv3/stencils/fvtp2d.py)
-# ============================================================================
 def q_i_stencil(q, area, y_area_flux, q_advected_along_y, q_i, nhalo, ni, nj, nk):
-    """FV3 eq 4.18: q_i = f(q) from the y-advected mean (interior + 3-halo j).
-
-    Domain in pyfv3 is origin_full(+0,3,0) .. domain_full(+0,-3,+1): the full i
-    span and j in [3, ny-3). Reads q_advected_along_y[0,1,0], y_area_flux[0,1,0].
-    """
+    """FV3 eq 4.18: q_i = f(q) from the y-advected mean (interior + 3-halo j)."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     for i in range(0, nx):
@@ -232,10 +166,7 @@ def q_i_stencil(q, area, y_area_flux, q_advected_along_y, q_i, nhalo, ni, nj, nk
 
 
 def q_j_stencil(q, area, x_area_flux, fx2, q_j, nhalo, ni, nj, nk):
-    """FV3 eq 4.18 (x): q_j = f(q) from the x-advected mean (i in [3, nx-3)).
-
-    apply_x_flux_divergence(area) = area + x_area_flux - x_area_flux[1,0,0].
-    """
+    """FV3 eq 4.18 (x): q_j = f(q) from the x-advected mean (i in [3, nx-3))."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     for i in range(3, nx - 3):
@@ -248,13 +179,7 @@ def q_j_stencil(q, area, x_area_flux, fx2, q_j, nhalo, ni, nj, nk):
 
 
 def final_fluxes(q_ayxa, q_xa, q_axya, q_ya, x_unit_flux, y_unit_flux, x_flux, y_flux, nhalo, ni, nj, nk):
-    """FV3 eq 4.17 flux combination (cancels leading-order splitting error).
-
-    pyfv3 writes x_flux on region[:, :-1] and y_flux on region[:-1, :]; here we
-    write x_flux on interfaces i_start..i_end+1, j_start..j_end and y_flux on
-    i_start..i_end, j_start..j_end+1 (the compute domain origin_compute+(1,1,1)).
-    q_ayxa = q_advected_y_x_advected_mean, q_xa = q_x_advected_mean, etc.
-    """
+    """FV3 eq 4.17 flux combination (cancels leading-order splitting error)."""
     i_start = nhalo
     i_end = nhalo + ni - 1
     j_start = nhalo
@@ -268,15 +193,9 @@ def final_fluxes(q_ayxa, q_xa, q_axya, q_ya, x_unit_flux, y_unit_flux, x_flux, y
                     y_flux[i, j, k] = 0.5 * (q_axya[i, j, k] + q_ya[i, j, k]) * y_unit_flux[i, j, k]
 
 
-# ============================================================================
 # copy_corners (pyfv3/stencils/copy_corners.py) -- cubed-sphere corner halo
-# ============================================================================
 def copy_corners_x(field):
-    """In-place ``_blind_copy_corners_x`` over the (i,j) plane of every k.
-
-    Verbatim transcription of pyfv3/stencils/copy_corners._blind_copy_corners_x
-    (n_halo == 3 only). Reflects the 3x3 corner halo blocks across the diagonal.
-    """
+    """In-place ``_blind_copy_corners_x`` over the (i,j) plane of every k."""
     f = field
     f[0, 0] = f[0, 5]
     f[0, 1] = f[1, 5]
@@ -357,12 +276,9 @@ def copy_corners_y(field):
     f[-4, -2] = f[-7, -4]
 
 
-# ============================================================================
 # delnflux: del-n hyperdiffusion flux pieces (pyfv3/stencils/delnflux.py)
-# ============================================================================
 def d2_damp(q, d2, damp, nhalo, ni, nj, nk):
-    """``d2_damp_interval`` for the nord==0 (del-2) branch: d2 = damp*q on the
-    [is-1, ie+1] x [js-1, je+1] block. damp is a per-k column scalar."""
+    """``d2_damp_interval`` (nord==0): d2 = damp*q over the block; damp is a per-k column scalar."""
     i_start = nhalo
     i_end = nhalo + ni - 1
     j_start = nhalo
@@ -374,8 +290,7 @@ def d2_damp(q, d2, damp, nhalo, ni, nj, nk):
 
 
 def fx_calc(d2, del6_v, fx, nhalo, ni, nj, nk):
-    """``fx_calculation`` (nord==0 region): fx = del6_v*(d2[-1,0,0]-d2) on the
-    [is, ie+1] x [js, je] interface block."""
+    """``fx_calculation`` (nord==0): fx = del6_v*(d2[-1,0,0]-d2) over the interface block."""
     i_start = nhalo
     i_end = nhalo + ni - 1
     j_start = nhalo
@@ -387,8 +302,7 @@ def fx_calc(d2, del6_v, fx, nhalo, ni, nj, nk):
 
 
 def fy_calc(d2, del6_u, fy, nhalo, ni, nj, nk):
-    """``fy_calculation`` (nord==0 region): fy = del6_u*(d2[0,-1,0]-d2) on the
-    [is, ie] x [js, je+1] interface block."""
+    """``fy_calculation`` (nord==0): fy = del6_u*(d2[0,-1,0]-d2) over the interface block."""
     i_start = nhalo
     i_end = nhalo + ni - 1
     j_start = nhalo
@@ -413,8 +327,7 @@ def add_diffusive(fx, fx2, fy, fy2, nhalo, ni, nj, nk):
 
 
 def d2_damp_full(q, d2, damp, i0, j0, di, dj, nk):
-    """``d2_damp_interval`` (nord!=0 branch): d2 = damp*q over a rectangular
-    block [i0, i0+di) x [j0, j0+dj). damp is a per-k column scalar."""
+    """``d2_damp_interval`` (nord!=0): d2 = damp*q over a rectangular block; damp is a per-k column scalar."""
     for i in range(i0, i0 + di):
         for j in range(j0, j0 + dj):
             for k in range(0, nk):
@@ -422,11 +335,7 @@ def d2_damp_full(q, d2, damp, i0, j0, di, dj, nk):
 
 
 def fx_calc_full(d2, del6_v, fx, i0, j0, di, dj, nk, neg):
-    """``fx_calculation``/``fx_calculation_neg`` over [i0,i0+di) x [j0,j0+dj).
-
-    fx = +/- del6_v*(d2[-1,0,0]-d2). ``neg`` selects the sign (the higher-order
-    iterations use the negated form, matching pyfv3 fx_calculation_neg).
-    """
+    """``fx_calculation``/``fx_calculation_neg`` over [i0,i0+di) x [j0,j0+dj)."""
     s = -1.0 if neg else 1.0
     for i in range(i0, i0 + di):
         for j in range(j0, j0 + dj):
@@ -444,9 +353,7 @@ def fy_calc_full(d2, del6_u, fy, i0, j0, di, dj, nk, neg):
 
 
 def d2_highorder(fx, fy, rarea, d2, i0, j0, di, dj, nk):
-    """``d2_highorder_stencil``: d2 = (fx-fx[1,0,0]+fy-fy[0,1,0])*rarea over the
-    block. (The ``nord > current_nord`` guard is always true for a uniform nord.)
-    """
+    """``d2_highorder_stencil``: d2 = (fx-fx[1,0,0]+fy-fy[0,1,0])*rarea over the block."""
     for i in range(i0, i0 + di):
         for j in range(j0, j0 + dj):
             for k in range(0, nk):
@@ -454,25 +361,7 @@ def d2_highorder(fx, fy, rarea, d2, i0, j0, di, dj, nk):
 
 
 def delnflux_higher_order(q, fx, fy, del6_v, del6_u, rarea, damp, fx2, fy2, d2, nord, nhalo, ni, nj, nk):
-    """DelnFlux + DelnFluxNoSG for the del-4 (nord==2) / del-6 (nord==3) case.
-
-    Faithful transcription of pyfv3/stencils/delnflux.DelnFluxNoSG.__call__ for a
-    uniform column ``nord`` in {2, 3} (mass=None, d2=internal), then DelnFlux's
-    add_diffusive. ``nmax = nord``. Replicates the exact per-iteration
-    origin/domain sequence from ``get_stencils_with_varied_bounds``:
-
-        d2_damp(full block [is-1-nmax, ie+1+nmax]^2)
-        copy_corners_x(d2); fx_calc(full, +); copy_corners_y(d2); fy_calc(full, +)
-        for n in range(nmax):              # nt = nmax-1-n
-            d2_highorder(block isc-nt-1 .. , size nt_nx x nt_ny)
-            copy_corners_x(d2); fx_calc_neg(block isc-nt .. , nt_nx-1 x nt_ny-2)
-            copy_corners_y(d2); fy_calc_neg(block isc-nt .. , nt_nx-2 x nt_ny-1)
-        add_diffusive(fx += fx2, fy += fy2)
-
-    Notes: nk must be > 3 (DelnFluxNoSG requires it). Only nord in {2,3}.
-    nord=3 (del-6) needs nhalo>=4 (the preamble block reaches isc-1-nord ..
-    iec+1+nord); validated bit-exact for nord=2 (del-4) on the nhalo=3 tile.
-    """
+    """DelnFlux + DelnFluxNoSG for the del-4 (nord==2) / del-6 (nord==3) case."""
     nmax = nord
     isc = nhalo
     iec = nhalo + ni - 1
@@ -510,13 +399,7 @@ def delnflux_higher_order(q, fx, fy, del6_v, del6_u, rarea, damp, fx2, fy2, d2, 
 
 
 def delnflux_nord0(q, fx, fy, del6_v, del6_u, damp, fx2, fy2, d2, nhalo, ni, nj, nk):
-    """DelnFlux + DelnFluxNoSG composition for the nord==0 (del-2) case.
-
-    Computes the del-2 diffusive fluxes fx2/fy2 from q and ADDS them onto the
-    advective fluxes fx/fy (the mass=None, d2=internal path). The nord in {2,3}
-    higher-order del-4/del-6 iterations (the dace.unroll loop over
-    d2_highorder_stencil / column-conditional fx/fy) are NOT ported.
-    """
+    """DelnFlux + DelnFluxNoSG composition for the nord==0 (del-2) case."""
     d2_damp(q, d2, damp, nhalo, ni, nj, nk)
     copy_corners_x(d2)
     fx_calc(d2, del6_v, fx2, nhalo, ni, nj, nk)
@@ -525,24 +408,10 @@ def delnflux_nord0(q, fx, fy, del6_v, del6_u, damp, fx2, fy2, d2, nhalo, ni, nj,
     add_diffusive(fx, fx2, fy, fy2, nhalo, ni, nj, nk)
 
 
-# ============================================================================
-# c_sw leaf stencils (pyfv3/stencils/c_sw.py)
-#
-# These are the pointwise / interior C-grid shallow-water update stencils that
-# do NOT depend on the d2a2c_vect (D->A->C wind reconstruction) or the
-# cubed-sphere corner-fill machinery. They are the leaves c_sw composes after
-# the winds have been reconstructed to the C grid. Each is validated bit-exact
-# against GT4Py. The d2a2c_vect reconstruction and the grid_type<3 region edge
-# blocks (divergence_corner edges, transportdelp vorticity/ke edges,
-# update_x/y_velocity edges) are NOT ported -- those need the corners / a2b_ord4
-# chain (see NOTICE.md). The interior bodies validated here are the same code
-# the solver runs everywhere except the six tile-edge columns.
-# ============================================================================
+# c_sw leaf stencils (pyfv3/stencils/c_sw.py): pointwise C-grid shallow-water stencils that
+# don't need d2a2c_vect winds or corner-fill; grid_type<3 edge-region blocks are NOT ported.
 def geoadjust_ut(ut, dy, sin_sg3, sin_sg1, dt2, nhalo, ni, nj, nk):
-    """``geoadjust_ut``: c-grid contravariant u*dx -> upwind volume flux.
-
-    ut > 0 picks the upstream cell's sin_sg3[-1,0], else sin_sg1. In place.
-    """
+    """``geoadjust_ut``: c-grid contravariant u*dx -> upwind volume flux."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -566,9 +435,7 @@ def geoadjust_vt(vt, dx, sin_sg4, sin_sg2, dt2, nhalo, ni, nj, nk):
 
 
 def compute_nonhydro_fluxes_x(delp, pt, utc, w, fx, fx1, fx2, nhalo, ni, nj, nk):
-    """``compute_nonhydrostatic_fluxes_x``: first-order upwind x-fluxes of delp,
-    heat (pt) and vertical momentum (w). utc>0 reads the upstream [-1,0,0] cell.
-    """
+    """``compute_nonhydrostatic_fluxes_x``: first-order upwind x-fluxes of delp, pt and w."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -588,13 +455,7 @@ def compute_nonhydro_fluxes_x(delp, pt, utc, w, fx, fx1, fx2, nhalo, ni, nj, nk)
 
 
 def transportdelp(delp, pt, vtc, w, rarea, fx, fx1, fx2, delpc, ptc, wc, nhalo, ni, nj, nk):
-    """First computation block of
-    ``transportdelp_update_vorticity_and_kineticenergy``: forms the y upwind
-    fluxes (fy/fy1/fy2) then steps delpc/ptc/wc by the flux divergence. Computed
-    over the [is-1, ie+1] x [js-1, je+1] block (compute_halos=(1,1)). The
-    second (vorticity/KE) block needs uc/vc/ua/va and the grid_type<3 edges and
-    is ported separately as ``kinetic_energy_vorticity_interior``.
-    """
+    """First block of ``transportdelp_update_vorticity_and_kineticenergy``: y upwind fluxes, then steps delpc/ptc/wc."""
     i_start = nhalo
     i_end = nhalo + ni - 1
     j_start = nhalo
@@ -632,12 +493,7 @@ def transportdelp(delp, pt, vtc, w, rarea, fx, fx1, fx2, delpc, ptc, wc, nhalo, 
 
 
 def kinetic_energy_vorticity_interior(uc, vc, ua, va, ke, vort, dt2, nhalo, ni, nj, nk):
-    """Interior (grid_type>=3, no edge regions) of the second computation block
-    of ``transportdelp_update_vorticity_and_kineticenergy``: the upwind-biased
-    kinetic energy. ke = uc/uc[1] by sign of ua; vort = vc/vc[0,1] by sign of va;
-    ke = 0.5*dt2*(ua*ke + va*vort). The grid_type<3 tile-edge corrections are
-    NOT ported.
-    """
+    """Interior of the second ``transportdelp_...kineticenergy`` block: upwind-biased kinetic energy/vorticity."""
     for i in range(0, nhalo + ni + nhalo - 1):
         for j in range(0, nhalo + nj + nhalo - 1):
             for k in range(0, nk):
@@ -648,10 +504,7 @@ def kinetic_energy_vorticity_interior(uc, vc, ua, va, ke, vort, dt2, nhalo, ni, 
 
 
 def circulation_cgrid_interior(uc, vc, dxc, dyc, vort_c, nhalo, ni, nj, nk):
-    """Interior of ``circulation_cgrid``: vort_c = fx1 - fx - fy1 + fy where
-    fx = dxc*uc, fy = dyc*vc, fx1/fy1 the shifted versions. The four tile-corner
-    region overrides (grid_type<3) are NOT ported.
-    """
+    """Interior of ``circulation_cgrid``: vort_c = fx1 - fx - fy1 + fy from fx=dxc*uc, fy=dyc*vc."""
     for i in range(1, nhalo + ni + nhalo):
         for j in range(1, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -671,11 +524,7 @@ def absolute_vorticity(vort, fC, rarea_c, nhalo, ni, nj, nk):
 
 
 def update_x_velocity_interior(vorticity, ke, velocity, velocity_c, cosa, sina, rdxc, dt2, nhalo, ni, nj, nk):
-    """Interior of ``update_x_velocity`` (grid_type>=3, no edge regions):
-    tmp_flux = dt2*(velocity - velocity_c*cosa)/sina; flux picks vorticity by
-    sign; velocity_c += tmp_flux*flux + rdxc*(ke[-1,0,0]-ke). In place on
-    velocity_c. The grid_type<3 i_start/i_end edge override is NOT ported.
-    """
+    """Interior of ``update_x_velocity`` (grid_type>=3): updates velocity_c from vorticity flux + ke gradient."""
     for i in range(1, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo - 1):
             for k in range(0, nk):
@@ -686,9 +535,7 @@ def update_x_velocity_interior(vorticity, ke, velocity, velocity_c, cosa, sina, 
 
 
 def update_y_velocity_interior(vorticity, ke, velocity, velocity_c, cosa, sina, rdyc, dt2, nhalo, ni, nj, nk):
-    """Interior of ``update_y_velocity`` (grid_type>=3, no edge regions):
-    the y-direction mirror of update_x_velocity_interior. In place.
-    """
+    """Interior of ``update_y_velocity`` (grid_type>=3): y-direction mirror of update_x_velocity_interior."""
     for i in range(0, nhalo + ni + nhalo - 1):
         for j in range(1, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -699,11 +546,7 @@ def update_y_velocity_interior(vorticity, ke, velocity, velocity_c, cosa, sina, 
 
 
 def divergence_corner_gt4(u, v, dxc, dyc, rarea_c, divg_d, nhalo, ni, nj, nk):
-    """``divergence_corner`` for the grid_type==4 (doubly-periodic) path:
-    uf = u*dyc; vf = v*dxc; divg_d = rarea_c*(vf[0,-1,0]-vf+uf[-1,0,0]-uf).
-    The grid_type<3 cubed-sphere edge blocks are NOT ported (they need the
-    sin_sg/cos_sg metric edge corrections).
-    """
+    """``divergence_corner`` (grid_type==4): divg_d = rarea_c*(vf[0,-1,0]-vf+uf[-1,0,0]-uf)."""
     for i in range(1, nhalo + ni + nhalo):
         for j in range(1, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -714,14 +557,8 @@ def divergence_corner_gt4(u, v, dxc, dyc, rarea_c, divg_d, nhalo, ni, nj, nk):
                 divg_d[i, j, k] = rarea_c[i, j, k] * (vf_jm1 - vf + uf_im1 - uf)
 
 
-# ============================================================================
-# d2a2c_vect leaf functions (pyfv3/stencils/d2a2c_vect.py)
-#
-# D-grid -> A-grid -> C-grid wind reconstruction. Ported for the grid_type==4
-# (doubly-periodic) path, which skips the cubed-sphere avg_box / east_west /
-# north_south edge blocks; the corner-fill (fill_corners_x/y) still runs.
-# 4-pt Lagrange / volume-conserving cubic coefficients from a2b_ord4 / ppm.
-# ============================================================================
+# d2a2c_vect leaf functions (pyfv3/stencils/d2a2c_vect.py): D->A->C wind reconstruction,
+# ported for the grid_type==4 (doubly-periodic) path (skips cubed-sphere edge blocks).
 # 4-pt Lagrange interpolation (a2b_ord4.a1/a2)
 A1 = 0.5625  # 9/16
 A2 = -0.0625  # -1/16
@@ -737,8 +574,7 @@ def contravariant(v1, v2, cosa, rsin2):
 
 
 def lagrange_interp_y_p1(qx, qout, i0, j0, di, dj, nk):
-    """``lagrange_interpolation_y_p1``: qout = a2*(qx[0,-1]+qx[0,2]) +
-    a1*(qx+qx[0,1]) over [i0,i0+di) x [j0,j0+dj)."""
+    """``lagrange_interpolation_y_p1``: qout = a2*(qx[0,-1]+qx[0,2]) + a1*(qx+qx[0,1])."""
     for i in range(i0, i0 + di):
         for j in range(j0, j0 + dj):
             for k in range(0, nk):
@@ -746,8 +582,7 @@ def lagrange_interp_y_p1(qx, qout, i0, j0, di, dj, nk):
 
 
 def lagrange_interp_x_p1(qy, qout, i0, j0, di, dj, nk):
-    """``lagrange_interpolation_x_p1``: qout = a2*(qy[-1,0]+qy[2,0]) +
-    a1*(qy+qy[1,0]) over [i0,i0+di) x [j0,j0+dj)."""
+    """``lagrange_interpolation_x_p1``: qout = a2*(qy[-1,0]+qy[2,0]) + a1*(qy+qy[1,0])."""
     for i in range(i0, i0 + di):
         for j in range(j0, j0 + dj):
             for k in range(0, nk):
@@ -764,8 +599,7 @@ def contravariant_components(utmp, vtmp, cosa_s, rsin2, ua, va, i0, j0, di, dj, 
 
 
 def ut_main(utmp, uc, v, cosa_u, rsin_u, ut, i0, j0, di, dj, nk):
-    """``ut_main``: uc = lagrange_x(utmp) = a2*(utmp[-1]+utmp[2])+a1*(utmp+utmp[1]);
-    ut = contravariant(uc, v, cosa_u, rsin_u). Over [i0,i0+di) x [j0,j0+dj)."""
+    """``ut_main``: uc = lagrange_x(utmp); ut = contravariant(uc, v, cosa_u, rsin_u)."""
     for i in range(i0, i0 + di):
         for j in range(j0, j0 + dj):
             for k in range(0, nk):
@@ -803,22 +637,7 @@ def edge_interpolate4_y(va, dya, i, j, k):
 
 
 def d2a2c_vect_gt4(uc, vc, u, v, ua, va, utc, vtc, cosa_s, cosa_u, cosa_v, rsin_u, rsin_v, rsin2, nhalo, ni, nj, nk):
-    """DGrid2AGrid2CGridVectors.__call__ for grid_type==4 (doubly-periodic).
-
-    Reproduces, with the exact origin/domain windows pyfv3 computes for
-    grid_type>=3 (npt=-2, dord4=True => id_=1, pad=4):
-        set_tmps (utmp=vtmp=big_number, full incl 3-halo)
-        lagrange_interp_y_p1(u  -> utmp)   over [isd, ied] x [jsc-1, jec+1]
-        lagrange_interp_x_p1(v  -> vtmp)   over [isc-1, iec+1] x [jsd, jed]
-        contravariant_components(utmp,vtmp -> ua,va)
-            over origin_compute+(-2,-2), domain_compute+(4,4)
-        ut_main(utmp -> uc, utc)  over [isc-1, iec+2] x [jsc-1, jec+1]
-        vt_main(vtmp -> vc, vtc)  over [isc-1, iec+1] x [jsc-1, jec+2]
-    The grid_type==4 path skips avg_box / east_west / north_south edge blocks;
-    the cubed-sphere corner fills are NOT needed for a single doubly-periodic
-    tile interior. Work buffers utmp/vtmp allocated internally. All
-    grid-metric fields are k-replicated SoA (the originals are 2D FloatFieldIJ).
-    """
+    """DGrid2AGrid2CGridVectors.__call__ for grid_type==4 (doubly-periodic)."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     isc, iec = nhalo, nhalo + ni - 1
@@ -833,43 +652,17 @@ def d2a2c_vect_gt4(uc, vc, u, v, ua, va, utc, vtc, cosa_s, cosa_u, cosa_v, rsin_
     lagrange_interp_x_p1(v, vtmp, isc - 1, 0, (iec + 1) - (isc - 1) + 1, ny, nk)
 
     contravariant_components(utmp, vtmp, cosa_s, rsin2, ua, va, isc - 2, jsc - 2, ni + 4, nj + 4, nk)
-    # ut_main reads utmp[i+2]; vt_main reads vtmp[j+2]. pyfv3's grid_type>=3
-    # window (ilast=iec+2) assumes a doubly-periodic wrap; on an isolated tile
-    # that read runs off the top, so cap each window 2 cells short of the array
-    # (keeps the full interior; the wrapped halo edge is out of scope here).
+    # ut_main/vt_main window capped 2 cells short: pyfv3's doubly-periodic wrap assumption
+    # would run off the array on an isolated tile.
     ut_main(utmp, uc, v, cosa_u, rsin_u, utc, isc - 1, jsc - 1, (nx - 2) - (isc - 1), (jec + 1) - (jsc - 1) + 1, nk)
     vt_main(vtmp, vc, u, cosa_v, rsin_v, vtc, isc - 1, jsc - 1, (iec + 1) - (isc - 1) + 1, (ny - 2) - (jsc - 1), nk)
 
 
-# ============================================================================
 # Composition: CGridShallowWaterDynamics (c_sw), grid_type == 4 path
-# ============================================================================
 def c_sw_gt4(delp, pt, u, v, w, uc, vc, ua, va, ut, vt, divgd, omga, cosa_s, cosa_u, cosa_v, rsin_u, rsin_v, rsin2, dx,
              dy, dxc, dyc, rarea, rarea_c, fC, cosa_uu, sina_u, cosa_vv, sina_v, rdxc, rdyc, sin_sg1, sin_sg2, sin_sg3,
              sin_sg4, delpc, ptc, dt2, nord, nhalo, ni, nj, nk):
-    """CGridShallowWaterDynamics.__call__ for grid_type==4 (doubly-periodic).
-
-    Composes c_sw exactly as pyfv3/stencils/c_sw.CGridShallowWaterDynamics
-    for the grid_type>=3 case (where all ``__INLINED(grid_type < 3)`` edge
-    blocks are compiled OUT, so the interior bodies validated separately are the
-    complete computation), with divergence_corner taking its grid_type==4 form:
-
-        zero delpc/ptc
-        d2a2c_vect_gt4(uc,vc,u,v,ua,va,ut,vt)
-        divergence_corner_gt4(u,v -> divgd)         [if nord>0]
-        geoadjust_ut(ut); geoadjust_vt(vt)
-        compute_nonhydro_fluxes_x(delp,pt,ut,w -> fx,fx1,fx2)
-        transportdelp(delp,pt,vt,w -> delpc,ptc,omga)
-        kinetic_energy_vorticity_interior(uc,vc,ua,va -> ke,vort)
-        circulation_cgrid_interior(uc,vc -> vort)
-        absolute_vorticity(vort)
-        update_y_velocity_interior(vort,ke,u -> vc)
-        update_x_velocity_interior(vort,ke,v -> uc)
-
-    Returns (delpc, ptc). All grid-metric fields are k-replicated SoA. The
-    grid_type<3 spherical-edge variant is NOT covered (it needs the d2a2c
-    cubed-sphere edge blocks + the c_sw edge regions; see NOTICE.md).
-    """
+    """CGridShallowWaterDynamics.__call__ for grid_type==4 (doubly-periodic)."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     delpc[...] = 0.0
@@ -900,20 +693,10 @@ def c_sw_gt4(delp, pt, u, v, w, uc, vc, ua, va, ut, vt, divgd, omga, cosa_s, cos
     return delpc, ptc
 
 
-# ============================================================================
-# d_sw leaf stencils (pyfv3/stencils/d_sw.py)
-#
-# The pointwise / interior D-grid shallow-water update stencils that do NOT
-# depend on fxadv (FiniteVolumeFluxPrep) or divergence_damping. Each is
-# validated bit-exact against GT4Py. The grid_type<3 edge / corner blocks
-# (all_corners_ke, the interpolate_uc_vc_to_cell_corners spherical path) and
-# the full d_sw(...) composition (which needs fxadv + divergence_damping) are
-# NOT ported (see NOTICE.md). xtp_u / ytp_v reuse the validated xppm/yppm leaves.
-# ============================================================================
+# d_sw leaf stencils (pyfv3/stencils/d_sw.py): interior D-grid shallow-water stencils that
+# don't need fxadv or divergence_damping; the full d_sw(...) composition is NOT ported.
 def flux_capacitor(cx, cy, xflux, yflux, crx_adv, cry_adv, fx, fy, nhalo, ni, nj, nk):
-    """``flux_capacitor``: accumulate cx/cy courant + xflux/yflux mass flux.
-    cx += crx_adv; cy += cry_adv; xflux += fx; yflux += fy (full domain). In place.
-    """
+    """``flux_capacitor``: accumulates cx/cy courant and xflux/yflux mass flux in place."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -924,9 +707,7 @@ def flux_capacitor(cx, cy, xflux, yflux, crx_adv, cry_adv, fx, fy, nhalo, ni, nj
 
 
 def heat_diss(fx2, fy2, w, rarea, heat_source, diss_est, dw, damp_w, ke_bg, dt, nhalo, ni, nj, nk):
-    """``heat_diss``: heat generation from damping of vertical wind. Per-k column
-    scalars damp_w/ke_bg. Reads fx2[1,0,0], fy2[0,1,0]; capped to leave +1 margin.
-    """
+    """``heat_diss``: heat generation from damping of vertical wind (per-k column scalars damp_w/ke_bg)."""
     for i in range(0, nhalo + ni + nhalo - 1):
         for j in range(0, nhalo + nj + nhalo - 1):
             for k in range(0, nk):
@@ -942,8 +723,7 @@ def heat_diss(fx2, fy2, w, rarea, heat_source, diss_est, dw, damp_w, ke_bg, dt, 
 
 
 def apply_fluxes(q, delp, gx, gy, rarea, nhalo, ni, nj, nk):
-    """``apply_fluxes``: q = q*delp + (gx-gx[1,0,0]+gy-gy[0,1,0])*rarea. In place
-    on q (changes its units to mass-weighted). Capped to leave +1 margin."""
+    """``apply_fluxes``: q = q*delp + (gx-gx[1,0,0]+gy-gy[0,1,0])*rarea, in place (mass-weighted)."""
     for i in range(0, nhalo + ni + nhalo - 1):
         for j in range(0, nhalo + nj + nhalo - 1):
             for k in range(0, nk):
@@ -952,10 +732,7 @@ def apply_fluxes(q, delp, gx, gy, rarea, nhalo, ni, nj, nk):
 
 
 def apply_pt_delp_fluxes_interior(pt_x_flux, pt_y_flux, rarea, delp_x_flux, delp_y_flux, pt, delp, nhalo, ni, nj, nk):
-    """``apply_pt_delp_fluxes`` (inline_q==0, interior [is,ie]x[js,je]):
-    pt = pt*delp + flux_inc(pt_fluxes); delp += flux_inc(delp_fluxes); pt /= delp.
-    In place on pt, delp.
-    """
+    """``apply_pt_delp_fluxes`` (inline_q==0): updates pt, delp in place from the flux divergence."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -971,8 +748,7 @@ def apply_pt_delp_fluxes_interior(pt_x_flux, pt_y_flux, rarea, delp_x_flux, delp
 
 
 def adjust_w_and_qcon(w, delp, dw, q_con, damp_w, nhalo, ni, nj, nk):
-    """``adjust_w_and_qcon``: w /= delp; w += dw if damp_w>1e-5; q_con /= delp.
-    Per-k column scalar damp_w. In place on w, q_con."""
+    """``adjust_w_and_qcon``: w /= delp (+= dw if damp_w>1e-5); q_con /= delp. In place."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -984,9 +760,7 @@ def adjust_w_and_qcon(w, delp, dw, q_con, damp_w, nhalo, ni, nj, nk):
 
 
 def compute_vorticity(u, v, dx, dy, rarea, vorticity, nhalo, ni, nj, nk):
-    """``compute_vorticity``: cell-mean vorticity via Stokes' theorem.
-    vorticity = (u - u[0,1,0]*dx[0,1]/dx)*rarea*dx + (v[1,0,0]*dy[1,0]/dy - v)*rarea*dy.
-    Reads u[0,1,0], v[1,0,0]; capped to leave +1 margin."""
+    """``compute_vorticity``: cell-mean vorticity via Stokes' theorem over u, v."""
     for i in range(0, nhalo + ni + nhalo - 1):
         for j in range(0, nhalo + nj + nhalo - 1):
             for k in range(0, nk):
@@ -1005,11 +779,7 @@ def rel_vorticity_to_abs(relative_vorticity, f0, absolute_vorticity, nhalo, ni, 
 
 
 def u_and_v_from_ke_interior(ke, fx, fy, u, v, dx, dy, nhalo, ni, nj, nk):
-    """``u_and_v_from_ke`` (interior regions):
-    u = u*dx + ke - ke[1,0,0] + fy   over [is,ie]   x [js,je+1]
-    v = v*dy + ke - ke[0,1,0] - fx   over [is,ie+1] x [js,je]
-    In place on u, v (converts to u*dx, v*dy).
-    """
+    """``u_and_v_from_ke``: u = u*dx + ke - ke[1,0,0] + fy; v = v*dy + ke - ke[0,1,0] - fx, in place."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -1023,11 +793,7 @@ def u_and_v_from_ke_interior(ke, fx, fy, u, v, dx, dy, nhalo, ni, nj, nk):
 
 
 def vort_differencing_interior(vort, vort_x_delta, vort_y_delta, dcon, nhalo, ni, nj, nk):
-    """``vort_differencing`` (interior, dcon[0]>threshold):
-    vort_x_delta = vort - vort[1,0,0] over [is,ie]   x [js,je+1]
-    vort_y_delta = vort - vort[0,1,0] over [is,ie+1] x [js,je]
-    dcon is a per-k column scalar (the dcon[0] guard uses k=0). In place.
-    """
+    """``vort_differencing`` (dcon[0]>threshold): vort_x/y_delta = vort - shifted vort, in place."""
     if dcon[0] <= 1e-5:
         return
     i_start, i_end = nhalo, nhalo + ni - 1
@@ -1043,10 +809,7 @@ def vort_differencing_interior(vort, vort_x_delta, vort_y_delta, dcon, nhalo, ni
 
 
 def update_u_and_v_interior(ut, vt, u, v, damp_vt, nhalo, ni, nj, nk):
-    """``update_u_and_v`` (interior, damp_vt>1e-5):
-    u += vt over [is,ie] x [js,je+1]; v -= ut over [is,ie+1] x [js,je].
-    Per-k column scalar damp_vt. In place on u, v.
-    """
+    """``update_u_and_v`` (damp_vt>1e-5): u += vt; v -= ut, in place."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -1063,8 +826,7 @@ def update_u_and_v_interior(ut, vt, u, v, damp_vt, nhalo, ni, nj, nk):
 
 def accumulate_heat_source_and_dissipation_estimate(heat_source, heat_source_total, diss_est, diss_est_total, nhalo, ni,
                                                     nj, nk):
-    """``accumulate_heat_source_and_dissipation_estimate``:
-    heat_source_total += heat_source; diss_est_total += diss_est (full domain)."""
+    """``accumulate_heat_source_and_dissipation_estimate``: accumulates heat_source and diss_est totals."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -1073,14 +835,7 @@ def accumulate_heat_source_and_dissipation_estimate(heat_source, heat_source_tot
 
 
 def advect_u_along_x(u, ub_contra, rdx, dx, dxa, dt, updated_u, al, nhalo, ni, nj, nk, iord, grid_type):
-    """``advect_u_along_x`` (xtp_u, iord<8, grid_type>=3 interior).
-
-    Reuses the validated xppm leaves: u_on_corners = compute_al(u, dx) so
-    bl = al-u, br = al[1,0,0]-u; cfl = ub_contra*dt*rdx[-1,0] (>0) else
-    ub_contra*dt*rdx; fx0 = fx1_fn(cfl, br, b0, bl); mask = get_advection_mask;
-    updated_u = apply_flux(ub_contra, u, fx0, mask). grid_type<3 corner-zeroing
-    NOT ported. Writes updated_u over the interior x-interface block.
-    """
+    """``advect_u_along_x`` (xtp_u, iord<8, grid_type>=3 interior)."""
     mord = abs(iord)
     compute_al_x(u, dx, al, nhalo, ni, nj, nk, grid_type)
     i_start, i_end = nhalo, nhalo + ni - 1
@@ -1121,8 +876,7 @@ def advect_u_along_x(u, ub_contra, rdx, dx, dxa, dt, updated_u, al, nhalo, ni, n
 
 
 def advect_v_along_y(v, vb_contra, rdy, dy, dya, dt, updated_v, al, nhalo, ni, nj, nk, jord, grid_type):
-    """``advect_v_along_y`` (ytp_v, jord<8, grid_type>=3 interior): y-mirror of
-    advect_u_along_x. Writes updated_v over the interior y-interface block."""
+    """``advect_v_along_y`` (ytp_v, jord<8, grid_type>=3): y-mirror of advect_u_along_x."""
     mord = abs(jord)
     compute_al_y(v, dy, al, nhalo, ni, nj, nk, grid_type)
     j_start, j_end = nhalo, nhalo + nj - 1
@@ -1161,15 +915,10 @@ def advect_v_along_y(v, vb_contra, rdy, dy, dya, dt, updated_v, al, nhalo, ni, n
                     updated_v[i, j, k] = v[i, j, k] + fx0 * mask
 
 
-# ============================================================================
 # fxadv: FiniteVolumeFluxPrep (pyfv3/stencils/fxadv.py), grid_type >= 3 path
-# ============================================================================
 def fxadv_fluxes(sin_sg1, sin_sg2, sin_sg3, sin_sg4, rdxa, rdya, dy, dx, crx, cry, x_area_flux, y_area_flux, uc_contra,
                  vc_contra, dt, nhalo, ni, nj, nk):
-    """``fxadv_fluxes_stencil``: courant numbers + swept-area fluxes from contra
-    winds. crx/x_area_flux on [is, ie+1] x full-j; cry/y_area_flux on full-i x
-    [js, je+1]. Upwind picks the rdxa/rdya/sin_sg of the upstream cell.
-    """
+    """``fxadv_fluxes_stencil``: courant numbers + swept-area fluxes from contravariant winds."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     i_start, i_end = nhalo, nhalo + ni - 1
@@ -1198,36 +947,22 @@ def fxadv_fluxes(sin_sg1, sin_sg2, sin_sg3, sin_sg4, rdxa, rdya, dy, dx, crx, cr
 
 def fxadv_prep_gt4(uc, vc, crx, cry, x_area_flux, y_area_flux, uc_contra, vc_contra, sin_sg1, sin_sg2, sin_sg3, sin_sg4,
                    rdxa, rdya, dx, dy, dt, nhalo, ni, nj, nk):
-    """FiniteVolumeFluxPrep.__call__ for grid_type>=3 (doubly-periodic).
-
-    For grid_type>=3, main_uc_vc_contra is simply uc_contra=uc, vc_contra=vc
-    (no contravariant rotation, no edge/corner stencils), then fxadv_fluxes.
-    """
+    """FiniteVolumeFluxPrep.__call__ for grid_type>=3 (doubly-periodic)."""
     uc_contra[...] = uc
     vc_contra[...] = vc
     fxadv_fluxes(sin_sg1, sin_sg2, sin_sg3, sin_sg4, rdxa, rdya, dy, dx, crx, cry, x_area_flux, y_area_flux, uc_contra,
                  vc_contra, dt, nhalo, ni, nj, nk)
 
 
-# ============================================================================
-# divergence_damping leaf stencils (pyfv3/stencils/divergence_damping.py)
-# + doubly_periodic_a2b_ord4 (pyfv3/stencils/a2b_ord4.py)
-# Ported for the grid_type>=3 (smag_corner) path. The k-dependent sponge-layer
-# nord column, the do_zero_order branch, and the gt<3 corner-fill nord loop are
-# NOT composed (see NOTICE.md); the leaves + smag path are validated.
-# ============================================================================
+# divergence_damping leaf stencils (pyfv3/stencils/divergence_damping.py) + doubly_periodic_a2b_ord4
+# (a2b_ord4.py), ported for the grid_type>=3 (smag_corner) path; the sponge-layer nord loop is NOT composed.
 # a2b_ord4 compact-interp coefficients
 B1 = 0.5833333333333334  # 7/12
 B2 = -0.08333333333333333  # -1/12
 
 
 def doubly_periodic_a2b_ord4(qin, qout, i0, j0, di, dj, nk):
-    """``doubly_periodic_a2b_ord4``: A->B grid 4th-order interp on an orthogonal
-    grid. qx = b1*(qin[-1]+qin)+b2*(qin[-2]+qin[1]); qy similarly in y;
-    qout = 0.5*(a1*(qx[0,-1]+qx+qy[-1,0]+qy) + a2*(qx[0,-2]+qx[0,1]+qy[-2,0]+qy[1,0])).
-    Computed via a qx/qy scratch over a padded window so the second stage reads
-    are in-bounds. Over [i0,i0+di) x [j0,j0+dj).
-    """
+    """``doubly_periodic_a2b_ord4``: A->B grid 4th-order interpolation on an orthogonal grid via a qx/qy scratch."""
     nx, ny = qin.shape[0], qin.shape[1]
     qx = np.zeros_like(qin)
     qy = np.zeros_like(qin)
@@ -1247,11 +982,7 @@ def doubly_periodic_a2b_ord4(qin, qout, i0, j0, di, dj, nk):
 
 
 def smag_corner(u, v, dx, dxc, dy, dyc, rarea, rarea_c, smag_c, dt, nhalo, ni, nj, nk):
-    """``smag_corner``: Smagorinsky tension+shear strain on cell corners (doubly
-    periodic). smag_c_t = rarea_c*(vt[0,-1]-vt-ut[-1,0]+ut) with ut=u*dyc, vt=v*dxc;
-    shear = doubly_periodic_a2b_ord4(wk) with wk = rarea*(vt2-vt2[0,1]+ut2-ut2[1,0]),
-    vt2=u*dx, ut2=v*dy; smag_c = dt*sqrt(shear^2 + smag_c_t^2).
-    """
+    """``smag_corner``: Smagorinsky tension+shear strain on cell corners (doubly periodic)."""
     nx, ny = u.shape[0], u.shape[1]
     smag_c_t = np.zeros_like(u)
     wk = np.zeros_like(u)
@@ -1305,8 +1036,7 @@ def uc_from_divg(divg_d, divg_v, uc, i0, j0, di, dj, nk):
 
 
 def redo_divg_d_gt4(uc, vc, divg_d, i0, j0, di, dj, nk):
-    """``redo_divg_d`` (grid_type>=3, no corner regions, do_adjustment skipped):
-    divg_d = uc[0,-1,0]-uc + vc[-1,0,0]-vc over the block."""
+    """``redo_divg_d`` (grid_type>=3, do_adjustment skipped): divg_d = uc[0,-1,0]-uc + vc[-1,0,0]-vc."""
     for i in range(i0, i0 + di):
         for j in range(j0, j0 + dj):
             for k in range(0, nk):
@@ -1314,10 +1044,7 @@ def redo_divg_d_gt4(uc, vc, divg_d, i0, j0, di, dj, nk):
 
 
 def damping_nord_highorder(vort, ke, delpc, divg_d, d2_bg, da_min_c, dddmp, dd8, nhalo, ni, nj, nk):
-    """``damping_nord_highorder_stencil`` (corner block [is,ie+1]x[js,je+1]):
-    damp = damp_tmp(vort, ...); vort = damp*delpc + dd8*divg_d; ke += vort.
-    Per-k d2_bg column. In place on vort, ke.
-    """
+    """``damping_nord_highorder_stencil``: vort = damp_tmp(vort,...)*delpc + dd8*divg_d; ke += vort, in place."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 2):
@@ -1332,24 +1059,7 @@ def damping_nord_highorder(vort, ke, delpc, divg_d, d2_bg, da_min_c, dddmp, dd8,
 def divergence_damping_gt4(u, v, divg_d, vc, uc, delpc, ke, rel_vort_agrid, damped_rel_vort_bgrid, divg_u, divg_v, dx,
                            dxc, dy, dyc, rarea, rarea_c, d2_bg, da_min_c, da_min, dddmp, d4_bg, nord, dt, nhalo, ni, nj,
                            nk):
-    """DivergenceDamping.__call__ for grid_type>=3, do_zero_order=False (uniform
-    nonzero nord, no sponge layer), non-stretched grid.
-
-    Composes, per pyfv3/stencils/divergence_damping.DivergenceDamping.__call__:
-        copy divg_d <- delpc   (copy_computeplus)
-        for n in 1..nord:      (no corner fills for grid_type>=3)
-            vc = vc_from_divg(divg_d, divg_u)
-            uc = uc_from_divg(divg_d, divg_v)
-            divg_d = redo_divg_d(uc, vc)        (do_adjustment skipped here)
-        smag_corner(u, v -> damped_rel_vort_bgrid)   [dddmp>=1e-5, grid_type>=3]
-        dd8 = (da_min_c * d4_bg)^(nord+1)            [non-stretched]
-        damping_nord_highorder(damped_rel_vort_bgrid, ke, delpc, divg_d, ...)
-
-    The do_zero_order (sponge) branch, the k-dependent nord column, the gt<3
-    a2b_ord4 spherical path and corner fills are NOT covered. delpc is taken as
-    an input here (computed by the caller's delpc_computation / divergence).
-    Updates divg_d, vc, uc, ke, damped_rel_vort_bgrid in place.
-    """
+    """``DivergenceDamping.__call__`` for grid_type>=3, do_zero_order=False, non-stretched; composes the leaves."""
     nx, ny = u.shape[0], u.shape[1]
     isc, iec, jsc, jec = nhalo, nhalo + ni - 1, nhalo, nhalo + nj - 1
     # copy_computeplus: divg_d = delpc over the corner-plus block
@@ -1377,16 +1087,9 @@ def divergence_damping_gt4(u, v, divg_d, vc, uc, delpc, ke, rel_vort_agrid, damp
     damping_nord_highorder(damped_rel_vort_bgrid, ke, delpc, divg_d, d2_bg, da_min_c, dddmp, dd8, nhalo, ni, nj, nk)
 
 
-# ============================================================================
 # d_sw compute_kinetic_energy (grid_type>=3) + heat_source_from_vorticity_damping
-# ============================================================================
 def compute_kinetic_energy_gt4(vc, uc, v, u, rdx, dx, dxa, rdy, dy, dya, ke_out, dt, nhalo, ni, nj, nk, iord, jord):
-    """``compute_kinetic_energy`` for grid_type>=3 (no all_corners_ke regions).
-
-    ub_contra = 0.5*(uc[0,-1,0]+uc); vb_contra = 0.5*(vc[-1,0,0]+vc);
-    advected_v = advect_v_along_y(v, vb_contra); advected_u = advect_u_along_x(u, ub_contra);
-    ke = 0.5*dt*(ub_contra*advected_u + vb_contra*advected_v) (on cell corners).
-    """
+    """``compute_kinetic_energy`` for grid_type>=3 (no all_corners_ke regions)."""
     nx, ny = u.shape[0], u.shape[1]
     ub = np.zeros_like(u)
     vb = np.zeros_like(u)
@@ -1413,17 +1116,7 @@ def compute_kinetic_energy_gt4(vc, uc, v, u, rdx, dx, dxa, rdy, dy, dya, ke_out,
 
 def heat_source_from_vorticity_damping_interior(vort_x_delta, vort_y_delta, ut, vt, u, v, delp, rsin2, cosa_s, rdx, rdy,
                                                 heat_source, kefrac, dcon_thr, nhalo, ni, nj, nk):
-    """``heat_source_from_vorticity_damping`` (interior, do_stochastic off).
-
-    For each interior point with kinetic_energy_fraction_to_damp[k] > dcon_thr:
-        ubt = (vort_x_delta + vt)*rdx; fy = u*rdx; gy = fy*ubt
-        vbt = (vort_y_delta - ut)*rdy; fx = v*rdy; gx = fx*vbt
-        u2 = fy + fy[0,1,0]; du2 = ubt + ubt[0,1,0]
-        v2 = fx + fx[1,0,0]; dv2 = vbt + vbt[1,0,0]
-        dampterm = heat_damping_term(...)
-        heat_source = delp*(heat_source - kefrac*dampterm)
-    Per-k column kefrac. Reads [0,1,0]/[1,0,0] so capped to leave +1 margin.
-    """
+    """``heat_source_from_vorticity_damping`` (interior, do_stochastic off)."""
     nx, ny = u.shape[0], u.shape[1]
     # precompute ubt/vbt/fx/fy over a padded window so the +1 reads are in-bounds
     ubt = np.zeros_like(u)
@@ -1459,13 +1152,9 @@ def heat_source_from_vorticity_damping_interior(vort_x_delta, vort_y_delta, ut, 
                     heat_source[i, j, k] = delp[i, j, k] * (heat_source[i, j, k] - kefrac[k] * dampterm)
 
 
-# ============================================================================
 # delnflux mass-weighted diffusive damp (pyfv3/stencils/delnflux.py)
-# ============================================================================
 def diffusive_damp(fx, fx2, fy, fy2, mass, damp, nhalo, ni, nj, nk):
-    """``diffusive_damp``: mass-weighted addition of the diffusive flux onto the
-    advective flux. fx += 0.5*damp*(mass[-1,0,0]+mass)*fx2; fy similarly with
-    mass[0,-1,0]. Per-k column scalar damp. Over the interface block."""
+    """``diffusive_damp``: mass-weighted addition of the diffusive flux onto the advective flux fx/fy."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 2):
@@ -1476,8 +1165,7 @@ def diffusive_damp(fx, fx2, fy, fy2, mass, damp, nhalo, ni, nj, nk):
 
 
 def copy_stencil_interval(q_in, q_out, nhalo, ni, nj, nk):
-    """``copy_stencil_interval`` (nord==0 region): q_out = q_in on
-    [is-1, ie+1] x [js-1, je+1]. (The DelnFluxNoSG mass!=None preamble.)"""
+    """``copy_stencil_interval`` (nord==0): q_out = q_in (the DelnFluxNoSG mass!=None preamble)."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start - 1, i_end + 2):
@@ -1487,9 +1175,7 @@ def copy_stencil_interval(q_in, q_out, nhalo, ni, nj, nk):
 
 
 def delnflux_nord0_mass(q, fx, fy, del6_v, del6_u, damp, fx2, fy2, d2, mass, nhalo, ni, nj, nk):
-    """DelnFlux nord==0 with mass given: DelnFluxNoSG computes fx2/fy2 from a
-    copied d2 (no d2_damp), then DelnFlux applies the mass-weighted diffusive_damp.
-    """
+    """DelnFlux nord==0, mass given: DelnFluxNoSG computes fx2/fy2, then applies the mass-weighted diffusive_damp."""
     copy_stencil_interval(q, d2, nhalo, ni, nj, nk)
     copy_corners_x(d2)
     fx_calc(d2, del6_v, fx2, nhalo, ni, nj, nk)
@@ -1498,9 +1184,7 @@ def delnflux_nord0_mass(q, fx, fy, del6_v, del6_u, damp, fx2, fy2, d2, mass, nha
     diffusive_damp(fx, fx2, fy, fy2, mass, damp, nhalo, ni, nj, nk)
 
 
-# ============================================================================
 # Composition: FiniteVolumeTransport (fv_tp_2d), grid_type >= 3 interior path
-# ============================================================================
 def _fv_tp_2d(q,
               crx,
               cry,
@@ -1523,12 +1207,7 @@ def _fv_tp_2d(q,
               del6_v=None,
               del6_u=None,
               damp=None):
-    """FiniteVolumeTransport.__call__, grid_type>=3, with optional mass fluxes
-    and del-n damping (nord==0). Shared core used by the public entry point and
-    by d_sw. When x_mass_flux/y_mass_flux are None they default to the area
-    fluxes (final_fluxes unit flux). When del6_*/damp are given, nord==0 del-n
-    damping is applied to q_x_flux/q_y_flux (mass-weighted if ``mass`` given).
-    """
+    """``FiniteVolumeTransport.__call__`` (grid_type>=3) with optional mass fluxes and nord==0 del-n damping."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     ord_outer = hord
@@ -1567,33 +1246,13 @@ def _fv_tp_2d(q,
 
 def finite_volume_transport(q, crx, cry, x_area_flux, y_area_flux, q_x_flux, q_y_flux, dxa, dya, area, nhalo, ni, nj,
                             nk, hord, grid_type):
-    """FiniteVolumeTransport.__call__ without del-n damping (nord/damp_c=None).
-
-    Composes, exactly as pyfv3/stencils/fvtp2d.FiniteVolumeTransport.__call__:
-        copy_corners_y(q)
-        yppm_inner(q, cry)               -> q_y_advected_mean
-        q_i_stencil(q, area, y_area_flux, q_y_advected_mean) -> q_advected_y
-        xppm_outer(q_advected_y, crx)    -> q_advected_y_x_advected_mean
-        copy_corners_x(q)
-        xppm_inner(q, crx)               -> q_x_advected_mean
-        q_j_stencil(q, area, x_area_flux, q_x_advected_mean) -> q_advected_x
-        yppm_outer(q_advected_x, cry)    -> q_advected_x_y_advected_mean
-        final_fluxes(...)                -> q_x_flux, q_y_flux
-
-    ``hord`` selects the PPM order: ord_outer=hord, ord_inner=(8 if hord==10
-    else hord). Only mord<8 (hord in {5,6,7}) is supported. The mass-flux
-    variants (x_mass_flux/y_mass_flux) reduce to x_area_flux/y_area_flux here.
-    Work buffers are allocated internally (as the sibling xppm port allocates
-    ``al``), keeping the entry signature a flat list of in/out fields.
-    """
+    """FiniteVolumeTransport.__call__ without del-n damping (nord/damp_c=None)."""
     _fv_tp_2d(q, crx, cry, x_area_flux, y_area_flux, q_x_flux, q_y_flux, dxa, dya, area, nhalo, ni, nj, nk, hord,
               grid_type)
 
 
 def delnflux_nosg_nord0(q, fx2, fy2, del6_v, del6_u, damp, d2, nhalo, ni, nj, nk):
-    """DelnFluxNoSG.__call__ for nord==0 (mass=None): computes the del-2 diffusive
-    fluxes fx2/fy2 from q (d2_damp -> corners -> fx/fy_calc) but does NOT apply
-    them. Used by d_sw's delnflux_nosg_w / delnflux_nosg_v."""
+    """``DelnFluxNoSG.__call__`` (nord==0, mass=None): computes fx2/fy2 but does not apply them."""
     d2_damp(q, d2, damp, nhalo, ni, nj, nk)
     copy_corners_x(d2)
     fx_calc(d2, del6_v, fx2, nhalo, ni, nj, nk)
@@ -1601,29 +1260,13 @@ def delnflux_nosg_nord0(q, fx2, fy2, del6_v, del6_u, damp, d2, nhalo, ni, nj, nk
     fy_calc(d2, del6_u, fy2, nhalo, ni, nj, nk)
 
 
-# ============================================================================
 # Composition: DGridShallowWaterLagrangianDynamics (d_sw), grid_type == 4 path
-# ============================================================================
 def d_sw_gt4(delpc, delp, pt, u, v, w, uc, vc, ua, va, divgd, mfx, mfy, cx, cy, crx, cry, xfx, yfx, q_con, heat_source,
              diss_est, dxa, dya, dx, dxc, dy, dyc, rdx, rdy, rdxa, rdya, area, rarea, rarea_c, cosa_s, rsin2, f0,
              divg_u, divg_v, del6_v, del6_u, sin_sg1, sin_sg2, sin_sg3, sin_sg4, damp_w, ke_bg, damp_vt, d2_bg,
              da_min_c, da_min, dddmp, d4_bg, d_con, nord, nord_v, nord_w, damp_vt_c, damp_w_c, damp_t_c, hord_dp,
              hord_tm, hord_vt, hord_mt, dt, nhalo, ni, nj, nk):
-    """DGridShallowWaterLagrangianDynamics.__call__ for grid_type==4.
-
-    Faithful orchestration of pyfv3/stencils/d_sw.py __call__ over the validated
-    leaves, with the grid_type>=3 (doubly-periodic) variants of fxadv,
-    divergence_damping and compute_kinetic_energy. nonhydrostatic w/q_con path is
-    included (pyfv3's d_sw is always nonhydrostatic). The grid_type<3 corner
-    blocks (all_corners_ke) and the do_zero_order sponge / sponge-nord column are
-    NOT covered. delnflux orders nord_v/nord_w fixed at the del-2 (nord==0) path.
-
-    Buffers (delpc/delp/pt/u/v/w/uc/vc/ua/va/divgd/mfx/mfy/cx/cy/crx/cry/xfx/yfx/
-    q_con/heat_source/diss_est) follow the d_sw inout contract. Metric/column
-    scalars are k-replicated SoA arrays (winds/scalars 3D, metrics k-replicated);
-    column scalars damp_w/ke_bg/damp_vt/d2_bg are length-nk 1D arrays;
-    damp_*_c are length-nk del-n coefficients (calc_damp output) for fvtp2d.
-    """
+    """DGridShallowWaterLagrangianDynamics.__call__ for grid_type==4."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     z = lambda: np.zeros((nx, ny, nk), dtype=delp.dtype)
@@ -1783,32 +1426,17 @@ def d_sw_gt4(delpc, delp, pt, u, v, w, uc, vc, ua, va, divgd, mfx, mfy, cx, cy, 
     update_u_and_v_interior(tmp_ut, tmp_vt, u, v, damp_vt, nhalo, ni, nj, nk)
 
 
-# ============================================================================
-# Nonhydrostatic vertical machinery (C-grid side): the gz update, the SIM1
-# tridiagonal sound-wave solver, the C-grid Riemann solver, and the small
-# dyn_core vertical leaves (gz/pem/geopotential) + p_grad_c.
-#
-# These introduce the VERTICAL stencil class: FORWARD / BACKWARD sweeps over a
-# k-interface dimension (kz = nk+1). Ported for the grid_type>=3 interior path
-# (updatedzc skips the spherical corner fills). Validated bit-exact (sqrt/exp/log
-# may differ by <=1 ULP from the GT4Py backend; documented). The D-grid vertical
-# side (updatedzd, riem_solver3, nh_p_grad spherical a2b) and the full dyn_core
-# composition are NOT done here (see NOTICE.md).
-#
-# Physical constants: the ndsl UFS/GFDL default set (NDSL_CONSTANTS unset).
-#   GRAV = 9.80665 ; RDGAS = 8314.47/28.965 ; DZ_MIN = 6.0
-# (GEOS uses RDGAS=287.05, DZ_MIN=2.0 -- not the default; see ndsl/constants.py.)
-# ============================================================================
+# Nonhydrostatic vertical machinery (C-grid side): gz update, SIM1 tridiagonal sound-wave
+# solver, C-grid Riemann solver, and the small dyn_core vertical leaves + p_grad_c. FORWARD /
+# BACKWARD sweeps over the k-interface dim (kz=nk+1); grid_type>=3 interior path only.
+# Physical constants are the ndsl UFS/GFDL default set (GEOS uses different RDGAS/DZ_MIN).
 RDGAS = 8314.47 / 28.965
 GRAV = 9.80665
 DZ_MIN = 6.0
 
 
 def gz_from_surface_height(zs, delz, gz, nhalo, ni, nj, nk):
-    """``gz_from_surface_height_and_thicknesses``: gz on interfaces (kz=nk+1)
-    integrated upward from the surface. gz[.,nk]=zs; gz[.,k]=gz[.,k+1]-delz[.,k]
-    (BACKWARD sweep). delz is layer-centered (nk), gz interface (nk+1).
-    """
+    """``gz_from_surface_height_and_thicknesses``: gz[.,k]=gz[.,k+1]-delz[.,k], BACKWARD sweep from gz[.,nk]=zs."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             gz[i, j, nk] = zs[i, j]
@@ -1817,9 +1445,7 @@ def gz_from_surface_height(zs, delz, gz, nhalo, ni, nj, nk):
 
 
 def interface_pressure_from_toa(delp, pem, ptop, nhalo, ni, nj, nk):
-    """``interface_pressure_from_toa_pressure_and_thickness``: pem on interfaces
-    (kz=nk+1); pem[.,0]=ptop; pem[.,k]=pem[.,k-1]+delp[.,k] (FORWARD), matching
-    the GTScript ``pem = pem[0,0,-1] + delp`` (delp read at the writing level)."""
+    """``interface_pressure_from_toa_pressure_and_thickness``: pem[.,k]=pem[.,k-1]+delp[.,k], FORWARD from ptop."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             pem[i, j, 0] = ptop
@@ -1837,15 +1463,7 @@ def compute_geopotential(zh, gz, nhalo, ni, nj, nk):
 
 # --- updatedzc (UpdateGeopotentialHeightOnCGrid), grid_type>=3 ---
 def update_dz_c(dp_ref, zs, area, ut, vt, gz, gz_x, gz_y, ws, dt, nhalo, ni, nj, nk):
-    """``update_dz_c``: step gz (on interfaces, kz=nk+1) forward on the C-grid.
-
-    Interpolates ut/vt to layer interfaces with the p-weighted cubic spline
-    (top/domain/bottom variants), forms first-order upwind gz fluxes, advects gz,
-    sets ws from the lowest-level gz change, then enforces gz monotone increasing
-    downward (BACKWARD). dp_ref is a per-LAYER reference thickness (length nk+1
-    with a buffer point). gz_x/gz_y are gz copies (corner-filled for gt<3, here
-    plain copies). Computed over the [-1, +1] halo-extended block.
-    """
+    """``update_dz_c``: step gz (on interfaces, kz=nk+1) forward on the C-grid."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     i_lo, i_hi = nhalo - 1, nhalo + ni  # compute block origin_compute(-1,-1)+(2,2)
@@ -1902,8 +1520,7 @@ def update_dz_c(dp_ref, zs, area, ut, vt, gz, gz_x, gz_y, ws, dt, nhalo, ni, nj,
 
 
 def update_dz_c_gt4(zs, ut, vt, gz, ws, dp_ref, area, dt, nhalo, ni, nj, nk):
-    """UpdateGeopotentialHeightOnCGrid.__call__ for grid_type>=3: gz_x/gz_y are
-    plain copies of gz (no cubed-sphere corner fill), then update_dz_c."""
+    """``UpdateGeopotentialHeightOnCGrid.__call__`` (grid_type>=3): copies gz to gz_x/gz_y, then update_dz_c."""
     gz_x = gz.copy()
     gz_y = gz.copy()
     update_dz_c(dp_ref, zs, area, ut, vt, gz, gz_x, gz_y, ws, dt, nhalo, ni, nj, nk)
@@ -1911,13 +1528,7 @@ def update_dz_c_gt4(zs, ut, vt, gz, ws, dp_ref, area, dt, nhalo, ni, nj, nk):
 
 # --- sim1_solver: vertical tridiagonal sound-wave / pressure solve ---
 def sim1_solver(w, dm, gm, dz, ptr, pm, pe, pem, ws, cp3, dt, t1g, rdt, p_fac, nhalo, ni, nj, nk):
-    """``sim1_solver``: per-column tridiagonal solve for w and dz (Chapter 7).
-
-    Verbatim transcription of pyfv3/stencils/sim1_solver. All fields are
-    k-interface (kz=nk+1) except scalars; w/dz are layer fields used here on the
-    interface array with the last interface unused. Operates per (i,j) column
-    over the [-1,+1] halo block (n_halo=1 in riem_solver_c). Uses exp/log.
-    """
+    """``sim1_solver``: per-column tridiagonal solve for w and dz (Chapter 7)."""
     for i in range(nhalo - 1, nhalo + ni + 1):
         for j in range(nhalo - 1, nhalo + nj + 1):
             # interval(0,-1): pe = exp(gm*log(-dm/dz*RDGAS*ptr)) - pm ; w1 = w
@@ -1998,8 +1609,7 @@ def sim1_solver(w, dm, gm, dz, ptr, pm, pe, pem, ws, cp3, dt, t1g, rdt, p_fac, n
 
 # --- riem_solver_c (NonhydrostaticVerticalSolverCGrid), grid_type>=3 ---
 def riem_c_precompute(delpc, cappa, w3, w, gz, dm, q_con, pem, dz, gm, pm, ptop, nhalo, ni, nj, nk):
-    """``precompute`` of riem_solver_c: dm/w/pem/peg/dz/gm/pm setup. gz/pem/dz on
-    interfaces (kz=nk+1); dm/gm/pm/w layer fields. Over the [-1,+1] block."""
+    """``precompute`` of riem_solver_c: dm/w/pem/peg/dz/gm/pm setup over the [-1,+1] block."""
     for i in range(nhalo - 1, nhalo + ni + 1):
         for j in range(nhalo - 1, nhalo + nj + 1):
             for k in range(0, nk):
@@ -2021,8 +1631,7 @@ def riem_c_precompute(delpc, cappa, w3, w, gz, dm, q_con, pem, dz, gm, pm, ptop,
 
 
 def riem_c_finalize(pe2, pem, hs, dz, pef, gz, ptop, nhalo, ni, nj, nk):
-    """``finalize`` of riem_solver_c: pef from pe2+pem (FORWARD), gz from hs and
-    dz (BACKWARD). Over the [-1,+1] block."""
+    """``finalize`` of riem_solver_c: pef from pe2+pem (FORWARD), gz from hs and dz (BACKWARD)."""
     for i in range(nhalo - 1, nhalo + ni + 1):
         for j in range(nhalo - 1, nhalo + nj + 1):
             pef[i, j, 0] = ptop
@@ -2034,10 +1643,7 @@ def riem_c_finalize(pe2, pem, hs, dz, pef, gz, ptop, nhalo, ni, nj, nk):
 
 
 def riem_solver_c_gt4(dt2, cappa, ptop, hs, ws, ptc, q_con, delpc, gz, pef, w3, p_fac, nhalo, ni, nj, nk):
-    """NonhydrostaticVerticalSolverCGrid.__call__ (grid_type-independent): the
-    C-grid semi-implicit solver. precompute -> sim1_solver -> finalize. Internal
-    work buffers (dm/w/pem/pe/gm/dz/pm) allocated here. Updates gz, pef in place.
-    """
+    """``NonhydrostaticVerticalSolverCGrid.__call__``: C-grid solver, precompute -> sim1_solver -> finalize."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     dm = np.zeros((nx, ny, nk + 1), dtype=gz.dtype)
@@ -2056,11 +1662,7 @@ def riem_solver_c_gt4(dt2, cappa, ptop, hs, ws, ptc, q_con, delpc, gz, pef, w3, 
 
 # --- p_grad_c (nonhydrostatic, dyn_core) ---
 def p_grad_c_nonhydro(rdxc, rdyc, uc, vc, delpc, pkc, gz, dt2, nhalo, ni, nj, nk):
-    """``p_grad_c_stencil`` for the nonhydrostatic branch (wk = delpc). Updates
-    uc/vc with the backward-in-time C-grid pressure-gradient force. pkc/gz are
-    k-interface (kz=nk+1); the update is per layer k in [0,nk). Reads [-1,0,0]/
-    [0,-1,0] and [.,.,k+1], over the interior interface block.
-    """
+    """``p_grad_c_stencil`` (nonhydrostatic, wk=delpc): updates uc/vc with the backward-in-time pressure gradient."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 2):
@@ -2079,16 +1681,8 @@ def p_grad_c_nonhydro(rdxc, rdyc, uc, vc, delpc, pkc, gz, dt2, nhalo, ni, nj, nk
                                                                                 (pkc[i, j - 1, k + 1] - pkc[i, j, k]))
 
 
-# ============================================================================
-# Nonhydrostatic vertical machinery (D-grid side): riem_solver3, updatedzd, and
-# the nh_p_grad pressure gradient (grid_type==4 interior path). These reuse the
-# validated sim1_solver core, the doubly_periodic_a2b_ord4 interp, and the
-# _fv_tp_2d transport. K-interface fields are kz=nk+1. Validated bit-exact (to
-# fp round-off where exp/log/sqrt + the vertical sweep reassociate). The gt<3
-# spherical a2b corners/edges are NOT covered (see NOTICE.md).
-#
-# KAPPA / RGRAV: ndsl UFS/GFDL default set (same as RDGAS/GRAV above).
-# ============================================================================
+# Nonhydrostatic vertical machinery (D-grid side): riem_solver3, updatedzd, nh_p_grad
+# (grid_type==4 interior path), reusing sim1_solver, doubly_periodic_a2b_ord4, _fv_tp_2d.
 KAPPA = RDGAS / (3.5 * RDGAS)  # = 1/3.5 (UFS)
 RGRAV = 1.0 / GRAV
 
@@ -2096,9 +1690,7 @@ RGRAV = 1.0 / GRAV
 # --- riem_solver3 (NonhydrostaticVerticalSolver, D-grid) ---
 def riem3_precompute(delp, cappa, pe, pe_init, dm, zh, q_con, p_int, log_p_int, pk3, gm, dz, p_gas, ptop, peln1, ptk,
                      nhalo, ni, nj, nk):
-    """``precompute`` of riem_solver3 (D-grid): p_interface / log / pk3 / gamma /
-    dz / p_gas setup. All k-interface (kz=nk+1) except dm/gm/dz/p_gas layer.
-    Over the compute block [is, ie] x [js, je]."""
+    """``precompute`` of riem_solver3 (D-grid): p_interface/log/pk3/gamma/dz/p_gas setup."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -2130,8 +1722,7 @@ def riem3_precompute(delp, cappa, pe, pe_init, dm, zh, q_con, p_int, log_p_int, 
 
 def riem3_finalize(zs, dz, zh, log_p_int_internal, log_p_int_out, pk3, pk, p_int, pe, ppe, pe_init, last_call, beta,
                    use_logp, nhalo, ni, nj, nk):
-    """``finalize`` of riem_solver3: pk/pe/ppe/log_p updates + zh from zs and dz
-    (BACKWARD). beta default 0 (>= -0.1 so ppe=pe); use_logp False. Over [is,ie]."""
+    """``finalize`` of riem_solver3: pk/pe/ppe/log_p updates, zh from zs and dz (BACKWARD)."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -2156,10 +1747,7 @@ def riem3_finalize(zs, dz, zh, log_p_int_internal, log_p_int_out, pk3, pk, p_int
 
 def riem_solver3_gt4(last_call, dt, cappa, ptop, zs, ws, delz, q_con, delp, pt, zh, p, ppe, pk3, pk, log_p_interface, w,
                      p_fac, beta, use_logp, nhalo, ni, nj, nk):
-    """NonhydrostaticVerticalSolver.__call__ (D-grid): precompute -> sim1_solve
-    -> finalize. Reuses the validated sim1_solver core (n_halo=0). Internal work
-    buffers allocated here. Updates delz, zh, p, ppe, pk3, pk, log_p, w in place.
-    """
+    """``NonhydrostaticVerticalSolver.__call__`` (D-grid): precompute -> sim1_solve -> finalize, reusing sim1_solver."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     dm = np.zeros((nx, ny, nk + 1), dtype=zh.dtype)
@@ -2181,8 +1769,7 @@ def riem_solver3_gt4(last_call, dt, cappa, ptop, zs, ws, delz, q_con, delp, pt, 
 
 
 def _sim1_block(w, dm, gm, dz, ptr, pm, pe, pem, ws, cp3, dt, t1g, rdt, p_fac, halo_i, halo_j, ni, nj, nk):
-    """sim1_solver over a configurable halo block (n_halo per direction).
-    Factored so riem_solver_c (n_halo=1) and riem_solver3 (n_halo=0) can share."""
+    """``sim1_solver`` over a configurable halo block; shared by riem_solver_c/3 (n_halo=1 vs 0)."""
     for i in range(halo_i - 0, halo_i + ni):
         pass  # placeholder to keep structure clear; real loop below
     i0 = halo_i
@@ -2258,8 +1845,7 @@ def _sim1_column(w, dm, gm, dz, ptr, pm, pe, pem, ws, cp3, dt, t1g, rdt, p_fac, 
 
 # --- updatedzd (UpdateHeightOnDGrid) ---
 def cubic_spline_constants(dp0, nk):
-    """``cubic_spline_interpolation_constants``: gk/beta/gamma columns (length nk)
-    from the reference layer thickness dp0 (length nk)."""
+    """``cubic_spline_interpolation_constants``: gk/beta/gamma columns (length nk) from dp0."""
     gk = [0.0] * nk
     beta = [0.0] * nk
     gamma = [0.0] * nk
@@ -2275,9 +1861,7 @@ def cubic_spline_constants(dp0, nk):
 
 
 def cubic_spline_interp_to_interfaces(q_center, q_interface, gk, beta, gamma, nhalo, ni, nj, nk):
-    """``cubic_spline_interpolation_from_layer_center_to_interfaces``: layer
-    (nk) -> interface (nk+1) cubic spline (FORWARD then BACKWARD). gk/beta/gamma
-    are per-LAYER columns (length nk). Over the full domain (origin_full)."""
+    """``cubic_spline_interpolation_from_layer_center_to_interfaces``: layer -> interface cubic spline (FWD/BWD)."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             # FORWARD
@@ -2298,8 +1882,7 @@ def cubic_spline_interp_to_interfaces(q_center, q_interface, gk, beta, gamma, nh
 
 def apply_height_fluxes(area, height, fx, fy, x_area_flux, y_area_flux, gz_x_diff, gz_y_diff, surface_height, ws, dt,
                         nhalo, ni, nj, nk):
-    """``apply_height_fluxes``: advective + diffusive height update, then ws and
-    monotone-thickness (BACKWARD). K-interface fields (kz=nk+1). Over [is,ie]."""
+    """``apply_height_fluxes``: advective + diffusive height update, then ws and monotone-thickness (BACKWARD)."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -2320,10 +1903,7 @@ def apply_height_fluxes(area, height, fx, fy, x_area_flux, y_area_flux, gz_x_dif
 
 def update_dz_d_gt4(surface_height, height, crx, cry, x_area_flux, y_area_flux, ws, dp_ref, area, rarea, del6_v, del6_u,
                     damp_vt, dt, hord_tm, nhalo, ni, nj, nk):
-    """UpdateHeightOnDGrid.__call__ for grid_type==4: cubic-spline interp of
-    crx/cry/x_area/y_area to interfaces (kz=nk+1), fvtp2d of height, delnflux
-    diffusive height flux (nord==0), apply_height_fluxes. height is interface
-    (kz=nk+1). dp_ref is per-layer (length nk)."""
+    """``UpdateHeightOnDGrid.__call__`` (grid_type==4): cubic-spline interp, fvtp2d, delnflux, apply_height_fluxes."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     gk, beta, gamma = cubic_spline_constants(dp_ref, nk)
@@ -2337,9 +1917,8 @@ def update_dz_d_gt4(surface_height, height, crx, cry, x_area_flux, y_area_flux, 
     cubic_spline_interp_to_interfaces(y_area_flux, yaf_i, gk, beta, gamma, nhalo, ni, nj, nk)
     fx = np.zeros((nx, ny, nk + 1), dtype=height.dtype)
     fy = np.zeros((nx, ny, nk + 1), dtype=height.dtype)
-    # fvtp2d transports height over the kz interfaces (treat kz as the k-extent).
-    # For grid_type==4 the transport never reads dxa/dya (compute_al has no edge
-    # regions), so a unit dxa/dya suffices; area is k-replicated for q_i/q_j.
+    # fvtp2d transports height over the kz interfaces; grid_type==4 has no edge regions
+    # so a unit dxa/dya suffices, and area is k-replicated for q_i/q_j.
     ones_kz = np.ones((nx, ny, nk + 1), dtype=height.dtype)
     area_kz = np.repeat(area[:, :, None], nk + 1, axis=2)
     _fv_tp_2d(height, crx_i, cry_i, xaf_i, yaf_i, fx, fy, ones_kz, ones_kz, area_kz, nhalo, ni, nj, nk + 1, hord_tm, 4)
@@ -2353,8 +1932,7 @@ def update_dz_d_gt4(surface_height, height, crx, cry, x_area_flux, y_area_flux, 
 
 # --- nh_p_grad (NonHydrostaticPressureGradient), grid_type==4 ---
 def set_k0_and_calc_wk(pp, pk3, wk, top_value, nhalo, ni, nj, nk):
-    """``set_k0_and_calc_wk``: pp[k0]=0, pk3[k0]=top_value, wk=pk3[k+1]-pk3[k]
-    (delta-p^kappa on corners, kz=nk+1). Over the [is,ie+1]x[js,je+1] B-block."""
+    """``set_k0_and_calc_wk``: pp[k0]=0, pk3[k0]=top_value, wk=pk3[k+1]-pk3[k] over the B-block."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 2):
@@ -2366,8 +1944,7 @@ def set_k0_and_calc_wk(pp, pk3, wk, top_value, nhalo, ni, nj, nk):
 
 
 def calc_u_pgrad(u, wk, wk1, gz, pk3, pp, rdx, dt, nhalo, ni, nj, nk):
-    """``calc_u``: hydrostatic + nonhydrostatic pressure-gradient update of u.
-    Layer field over [is,ie] x [js,je+1]; reads [1,0,*] and [.,.,k+1]."""
+    """``calc_u``: hydrostatic + nonhydrostatic pressure-gradient update of u."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -2399,10 +1976,7 @@ def calc_v_pgrad(v, wk, wk1, gz, pk3, pp, rdy, dt, nhalo, ni, nj, nk):
 
 
 def a2b_ord4_gt4(qin, qout, nhalo, ni, nj, nk, replace, kstart):
-    """AGrid2BGridFourthOrder.__call__ for grid_type==4: doubly_periodic_a2b_ord4
-    over the B-grid block, optionally copying qout back into qin (replace). Acts
-    per k-level over [kstart, nk]. kz fields (kz=nk+1); the k1 variant uses
-    kstart=1 (level 0 handled by set_k0)."""
+    """``AGrid2BGridFourthOrder.__call__`` (grid_type==4): doubly_periodic_a2b_ord4, optionally copying qout to qin."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     # doubly_periodic_a2b_ord4 over the corner block, per k.
@@ -2415,19 +1989,13 @@ def a2b_ord4_gt4(qin, qout, nhalo, ni, nj, nk, replace, kstart):
 
 
 def a2b_ord4_layer_gt4(qin, qout, nhalo, ni, nj, nk):
-    """AGrid2BGridFourthOrder for a LAYER field (z_dim=K_DIM, replace=False),
-    grid_type==4: doubly_periodic_a2b_ord4 over the B-block, per layer k in
-    [0, nk). Used for delp in nh_p_grad."""
+    """``AGrid2BGridFourthOrder`` for a LAYER field (replace=False), grid_type==4; used for delp in nh_p_grad."""
     i_start, j_start = nhalo, nhalo
     doubly_periodic_a2b_ord4(qin, qout, i_start, j_start, ni + 1, nj + 1, nk)
 
 
 def nh_p_grad_gt4(u, v, pp, gz, pk3, delp, rdx, rdy, dt, ptop, akap, nhalo, ni, nj, nk):
-    """NonHydrostaticPressureGradient.__call__ for grid_type==4. a2b of pp/pk3/gz
-    (replace=True) and delp (-> wk1, replace=False), set_k0_and_calc_wk, calc_u,
-    calc_v. pp/pk3/gz interface (kz=nk+1); delp/u/v layer (nk). rdx/rdy are 2D.
-    Updates u, v, pp, gz, pk3 in place.
-    """
+    """``NonHydrostaticPressureGradient.__call__`` (grid_type==4): a2b of pp/pk3/gz/delp, then calc_u/v."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     ptk = ptop**akap
@@ -2446,13 +2014,9 @@ def nh_p_grad_gt4(u, v, pp, gz, pk3, delp, rdx, rdy, dt, ptop, akap, nhalo, ni, 
     calc_v_pgrad(v, wk, wk1, gz, pk3, pp, rdy, dt, nhalo, ni, nj, nk)
 
 
-# ============================================================================
 # Composition: AcousticDynamics (dyn_core), grid_type == 4 nonhydrostatic path
-# ============================================================================
 def zero_data(mfxd, mfyd, cxd, cyd, heat_source, diss_estd, first_timestep, nhalo, ni, nj, nk):
-    """``zero_data``: zero the accumulated mass fluxes / courant numbers (full
-    domain) and, on the first acoustic timestep, the interior heat_source /
-    diss_estd (region[3:-3, 3:-3])."""
+    """``zero_data``: zeros accumulated mass fluxes/courant numbers, and heat_source/diss_estd on the first substep."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     for i in range(0, nx):
@@ -2482,43 +2046,15 @@ def copy_field(src, dst, nhalo, ni, nj, nk_levels):
 
 def dyn_core_gt4(st, g, dt_acoustic, n_split, ptop, akap, p_fac, nord, nord_v, nord_w, dddmp, d4_bg, d_con, da_min_c,
                  da_min, hord_dp, hord_tm, hord_vt, hord_mt, beta, use_logp, n_map, k_split, nhalo, ni, nj, nk):
-    """AcousticDynamics.__call__ for grid_type==4, nonhydrostatic.
-
-    Composes the n_split acoustic-substep loop exactly as
-    pyfv3/stencils/dyn_core.AcousticDynamics.__call__ (the not-hydrostatic,
-    grid_type>=4 path -- all halo updates are single-tile no-ops):
-
-        zero_data(mfxd, mfyd, cxd, cyd, heat_source, diss_estd, n_map==1)
-        for it in range(n_split):
-            if it == 0: gz_from_surface_height(zs, delz, gz)
-            c_sw_gt4(...)                              # half-step C-grid
-            if it == 0: copy gz -> zh  else: copy zh -> gz
-            update_dz_c_gt4(zs, ut, vt, gz, ws3, dt2)
-            riem_solver_c_gt4(dt2, cappa, ptop, phis, ws3, ptc, q_con, delpc,
-                              gz, pkc, omga(=w3))
-            p_grad_c_nonhydro(rdxc, rdyc, uc, vc, delpc, pkc, gz, dt2)
-            d_sw_gt4(...)                              # full D-grid step
-            update_dz_d_gt4(zs, zh, crx, cry, xfx, yfx, wsd, dt)
-            riem_solver3_gt4(remap_step, dt, cappa, ptop, zs, wsd, delz, q_con,
-                             delp, pt, zh, pe, pkc, pk3, pk, peln, w)
-            compute_geopotential(zh, gz)
-            nh_p_grad_gt4(u, v, pkc, gz, pk3, delp, rdx, rdy, dt, ptop, akap)
-
-    ``st`` is a dict of state fields (mutated in place); ``g`` a dict of grid
-    metrics + column params. The post-loop del2cubed heat hyperdiffusion +
-    apply_diffusive_heating is NOT included (d_con-gated diagnostic; reported as
-    a gap). pk3_halo / edge_pe are single-tile-interior no-ops and omitted.
-    """
+    """AcousticDynamics.__call__ for grid_type==4, nonhydrostatic."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     dt = dt_acoustic
     dt2 = 0.5 * dt
     end_step = (n_map == k_split)
 
-    # The horizontal solvers (c_sw, d_sw) index grid metrics as 3D k-replicated
-    # fields ``m[i,j,k]``; the vertical solvers (riem/updatedz/p_grad/nh_p_grad)
-    # index the 2D FloatFieldIJ originals ``m[i,j]``. ``g`` holds the 2D base
-    # metrics; k-replicate the ones the horizontal solvers need.
+    # Horizontal solvers index metrics as 3D k-replicated fields; vertical solvers use
+    # the 2D originals directly. ``g`` holds the 2D base metrics; k3 replicates as needed.
     def k3(name):
         return np.repeat(g[name][:, :, None], nk, axis=2)
 
@@ -2612,25 +2148,12 @@ def dyn_core_gt4(st, g, dt_acoustic, n_split, ptop, akap, p_fac, nord, nord_v, n
                       nhalo, ni, nj, nk)
 
 
-# ============================================================================
-# Vertical remapping: Lagrangian -> Eulerian (pyfv3/stencils/{fillz,map_single,
-# remap_profile}.py). Ported pieces (validated individually vs GT4Py):
-#   * fillz.fix_tracer        -- the negative-tracer borrow/fill column pass
-#   * map_single.set_dp       -- layer thickness from Lagrangian interface pressure
-#   * map_single.lagrangian_contributions -- the PPM remap onto Eulerian levels
-# These operate on K-LAYER fields (nk) with a per-column FORWARD/BACKWARD or
-# data-dependent (while-loop) sweep -- transcribed as explicit scalar loops.
-# remap_profile (the q4 PPM reconstruction), mapn_tracer, the remapping driver
-# (lagrangian_to_eulerian, with moist_cv + saturation_adjustment), and the
-# fv_dynamics k_split wrapper are NOT ported (see NOTICE.md) -- that subsystem is
-# several thousand lines of moist thermodynamics and is the next tier.
-# ============================================================================
+# Vertical remapping: Lagrangian -> Eulerian (pyfv3/stencils/{fillz,map_single,remap_profile}.py).
+# Ported: fillz.fix_tracer, map_single.set_dp, map_single.lagrangian_contributions (K-LAYER
+# fields, FORWARD/BACKWARD or data-dependent sweeps). The full remapping driver with moist_cv
+# + saturation_adjustment is NOT ported (see NOTICE.md) -- next tier, thousands of LOC.
 def fix_tracer(q, dp, nhalo, ni, nj, nk):
-    """``fillz.fix_tracer``: fill negative tracer mixing ratios by borrowing mass
-    from adjacent layers (top -> interior -> bottom passes), then a final
-    column rescale to conserve total mass. q/dp are K-LAYER fields (nk). In place
-    on q. Verbatim transcription of the FORWARD/BACKWARD multi-pass GTScript.
-    """
+    """``fillz.fix_tracer``: fills negative tracer mixing ratios by borrowing mass from adjacent layers, in place."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -2699,9 +2222,7 @@ def fix_tracer(q, dp, nhalo, ni, nj, nk):
 
 
 def map_single_set_dp(dp1, pe1, lev, nhalo, ni, nj, nk):
-    """``map_single.set_dp``: dp1 = pe1[k+1]-pe1[k] (Lagrangian layer thickness);
-    lev[i,j] = 0. pe1 is a K-INTERFACE field (kz=nk+1), dp1 a K-LAYER field (nk).
-    """
+    """``map_single.set_dp``: dp1 = pe1[k+1]-pe1[k] (Lagrangian layer thickness); lev[i,j] = 0."""
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
             for k in range(0, nk):
@@ -2710,20 +2231,12 @@ def map_single_set_dp(dp1, pe1, lev, nhalo, ni, nj, nk):
 
 
 def lagrangian_contributions(q, pe1, pe2, q4_1, q4_2, q4_3, q4_4, dp1, lev, nhalo, ni, nj, nk):
-    """``map_single.lagrangian_contributions``: remap the PPM sub-grid profile
-    (q4_1..q4_4) from the Lagrangian interface pressures pe1 onto the Eulerian
-    interface pressures pe2, producing the remapped layer-mean q. Per-column
-    FORWARD sweep with the data-dependent ``while pe1[lev+1] < pe2[k+1]`` search
-    over the source layers (lev tracks the current source layer). pe1/pe2 are
-    K-INTERFACE (kz=nk+1); q/q4_*/dp1 are K-LAYER (nk). In place on q.
-    """
+    """``map_single.lagrangian_contributions``: remaps the PPM profile from pe1 onto Eulerian pe2 levels, in place."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
         for j in range(j_start, j_end + 1):
-            # ``lev`` is a dynamic VERTICAL index: GTScript ``f[0,0,lev]`` reads
-            # f[k+lev] (an offset RELATIVE to the current compute level k). Carry
-            # ``lv`` as that relative offset; the absolute source layer is k+lv.
+            # ``lev`` is a dynamic vertical index relative to k (GTScript f[0,0,lev] == f[k+lev]).
             lv = lev[i, j]
             for k in range(0, nk):
                 s = k + lv
@@ -2739,10 +2252,7 @@ def lagrangian_contributions(q, pe1, pe2, q4_1, q4_2, q4_3, q4_4, dp1, lev, nhal
                                                                                                             (1.0 + pl)))
                     lv = lv + 1
                     s = k + lv
-                    # The source-layer search terminates for physical inputs
-                    # (pe2 within the pe1 column range). The ``s + 1 < nk + 1``
-                    # guard prevents an out-of-bounds walk on non-physical /
-                    # NaN fixtures (matches the GTScript's implicit field bound).
+                    # ``s + 1 < nk + 1`` guards against an out-of-bounds walk on non-physical/NaN fixtures.
                     while s + 1 < nk + 1 and pe1[i, j, s + 1] < pe2[i, j, k + 1]:
                         qsum += dp1[i, j, s] * q4_1[i, j, s]
                         lv = lv + 1
@@ -2757,11 +2267,8 @@ def lagrangian_contributions(q, pe1, pe2, q4_1, q4_2, q4_3, q4_4, dp1, lev, nhal
                 lv = lv - 1
 
 
-# ============================================================================
-# moist_cv leaves (pyfv3/stencils/moist_cv.py). Pointwise moist heat-capacity /
-# potential-temperature helpers used by the remap driver even in the DRY
-# (do_sat_adj=False) path. Constants from the ndsl UFS/GFDL default set.
-# ============================================================================
+# moist_cv leaves (pyfv3/stencils/moist_cv.py): pointwise moist heat-capacity / potential-
+# temperature helpers used by the remap driver even in the DRY (do_sat_adj=False) path.
 CV_AIR = (3.5 * RDGAS) - RDGAS  # CP_AIR - RDGAS ; CP_AIR = RDGAS/KAPPA = 3.5*RDGAS
 RVGAS = 8314.47 / 18.015
 CV_VAP = 3.0 * RVGAS
@@ -2782,8 +2289,7 @@ def moist_cv_nwat6(qvapor, qliquid, qrain, qsnow, qice, qgraupel):
 
 def moist_pkz(qvapor, qliquid, qrain, qsnow, qice, qgraupel, q_con, gz, cvm, pkz, pt, cappa, delp, delz, zvir, nhalo,
               ni, nj, nk):
-    """``moist_cv.moist_pkz``: cvm/gz from tracers; cappa = RDGAS/(RDGAS+cvm/(1+zvir*qv));
-    pkz = exp(cappa*log(RDG*delp/delz*pt)). Layer fields (nk). Over [is,ie]x[js,je]."""
+    """``moist_cv.moist_pkz``: cappa = RDGAS/(RDGAS+cvm/(1+zvir*qv)); pkz = exp(cappa*log(RDG*delp/delz*pt))."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -2800,8 +2306,7 @@ def moist_pkz(qvapor, qliquid, qrain, qsnow, qice, qgraupel, q_con, gz, cvm, pkz
 
 
 def moist_pt_last_step(qvapor, qliquid, qrain, qsnow, qice, qgraupel, gz, pt, pkz, dtmp, zvir, nhalo, ni, nj, nk):
-    """``moist_cv.moist_pt_last_step``: gz = sum of condensates; pt updated to
-    temperature via last_pt. Layer fields (nk). Over [is,ie]x[js,je]."""
+    """``moist_cv.moist_pt_last_step``: gz = sum of condensates; pt updated to temperature via last_pt."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 1):
@@ -2812,14 +2317,9 @@ def moist_pt_last_step(qvapor, qliquid, qrain, qsnow, qice, qgraupel, gz, pt, pk
                 pt[i, j, k] = ((pt[i, j, k] + dtmp * pkz[i, j, k]) / ((1.0 + zvir * qvapor[i, j, k]) * (1.0 - g)))
 
 
-# ============================================================================
-# remap_profile (cs_profile, pyfv3/stencils/remap_profile.py): the q4 PPM
-# sub-grid reconstruction. Ported for the iv==1 (scalar), kord<9 path -- the
-# common dry-scalar case used by map_single for pt/w/delz. The iv in {-2,-1,0,2}
+# remap_profile (cs_profile, pyfv3/stencils/remap_profile.py): q4 PPM sub-grid reconstruction,
+# ported for the iv==1 (scalar), kord<9 path used by map_single for pt/w/delz; other iv
 # variants and the kord>=9/10/16 inner-edge limiters are NOT ported (gaps).
-# Verbatim transcription of the FORWARD/BACKWARD tri-diagonal sweeps + the
-# per-cell monotonicity constraints, as explicit per-column scalar loops.
-# ============================================================================
 def _remap_constraint(a1, a2, a3, a4, extm):
     """``remap_constraint`` (scalar): PPM edge-value monotonicity fix."""
     da1 = a3 - a2
@@ -2857,12 +2357,7 @@ def _posdef_constraint_iv1(a1, a2, a3, a4):
 
 
 def remap_profile_iv1_kordsmall(a4_1, a4_2, a4_3, a4_4, delp, qmin, nhalo, ni, nj, nk):
-    """RemapProfile.__call__ for iv==1, kord<9. Builds the PPM coefficients
-    a4_2/a4_3/a4_4 (edge values + curvature) from the layer means a4_1 via the
-    tri-diagonal interface solve, the monotonicity constraints, and the kord<9
-    inner limiter. qmin unused for iv==1. Per-column FORWARD/BACKWARD; layer
-    fields (nk). In place on a4_2/a4_3/a4_4 (a4_1 = layer means, read-only).
-    """
+    """``RemapProfile.__call__`` (iv==1, kord<9): builds PPM edge coeffs a4_2/a4_3/a4_4 from means a4_1, in place."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     iv = 1
@@ -2871,13 +2366,9 @@ def remap_profile_iv1_kordsmall(a4_1, a4_2, a4_3, a4_4, delp, qmin, nhalo, ni, n
             a1 = [a4_1[i, j, k] for k in range(nk)]
             dp = [delp[i, j, k] for k in range(nk)]
             gam = [0.0] * nk
-            # q[0..nk-1] are the GTScript field levels; the q[nk] slot stays 0 --
-            # GTScript never writes the bottom-most interface, so a4_3[nk-1] = q[nk]
-            # = 0 and the last layer's edges are set by posdef_iv1 below.
+            # q[nk] stays 0: GTScript never writes the bottom-most interface (a4_3[nk-1] = q[nk] = 0).
             q = [0.0] * (nk + 1)
-            # set_initial_vals (iv != -2, kord<9), transcribed level-for-level from
-            # the three GTScript intervals: the bottom interval(-1, None) writes the
-            # LAST layer q[nk-1] (field-relative offsets -1/-2), NOT a separate q[nk].
+            # set_initial_vals (iv != -2, kord<9): bottom interval writes LAST layer q[nk-1], not q[nk].
             grid_ratio = dp[1] / dp[0]
             bet = grid_ratio * (grid_ratio + 0.5)
             q[0] = ((grid_ratio + grid_ratio) * (grid_ratio + 1.0) * a1[0] + a1[1]) / bet
@@ -2925,9 +2416,7 @@ def remap_profile_iv1_kordsmall(a4_1, a4_2, a4_3, a4_4, delp, qmin, nhalo, ni, n
                     if q[k] >= tmp[k]:
                         q[k] = tmp[k]
                     # iv==1: no q<0 clamp (that is iv==0 only)
-            # do bottom (interval -1) -- here that is interface k=nk... but the
-            # constraint stencil's "bottom" acts on the LAST layer index nk-1's
-            # interface; the GTScript interval(-1,None) is the last LAYER (nk-1).
+            # bottom (interval -1): GTScript's last LAYER (nk-1), not interface k=nk.
             if q[nk - 1] >= tmp[nk - 1]:
                 q[nk - 1] = tmp[nk - 1]
             if q[nk - 1] <= tmp2[nk - 1]:
@@ -2976,15 +2465,10 @@ def remap_profile_iv1_kordsmall(a4_1, a4_2, a4_3, a4_4, delp, qmin, nhalo, ni, n
                 a4_4[i, j, k] = a4[k]
 
 
-# ============================================================================
-# tracer_2d_1l (TracerAdvection, pyfv3/stencils/tracer_2d_1l.py): horizontal
-# tracer advection over the accumulated acoustic-substep fluxes. Leaves ported
-# and validated vs GT4Py; the driver composes them with the validated _fv_tp_2d.
-# ============================================================================
+# tracer_2d_1l (TracerAdvection, pyfv3/stencils/tracer_2d_1l.py): horizontal tracer advection
+# over the accumulated acoustic-substep fluxes, composed with the validated _fv_tp_2d.
 def tracer_flux_compute(cx, cy, dxa, dya, dx, dy, sin_sg1, sin_sg2, sin_sg3, sin_sg4, xfx, yfx, nhalo, ni, nj, nk):
-    """``flux_compute``: x/y area fluxes from accumulated courant numbers. xfx on
-    [is, ie+1] x [js-3, je+3]; yfx on [is-3, ie+3] x [js, je+1]. Upwind picks the
-    upstream dxa/sin_sg. All metric fields k-replicated 3D here."""
+    """``flux_compute``: x/y area fluxes from accumulated courant numbers; upwind picks the upstream dxa/sin_sg."""
     i_start, i_end = nhalo, nhalo + ni - 1
     j_start, j_end = nhalo, nhalo + nj - 1
     for i in range(i_start, i_end + 2):
@@ -3006,8 +2490,7 @@ def tracer_flux_compute(cx, cy, dxa, dya, dx, dy, sin_sg1, sin_sg2, sin_sg3, sin
 
 
 def divide_fluxes_by_n_substeps(cxd, xfx, mfxd, cyd, yfx, mfyd, n_split, nhalo, ni, nj, nk):
-    """``divide_fluxes_by_n_substeps``: scale cxd/xfx/mfxd/cyd/yfx/mfyd by 1/n_split
-    (full domain). In place."""
+    """``divide_fluxes_by_n_substeps``: scales cxd/xfx/mfxd/cyd/yfx/mfyd by 1/n_split, in place."""
     frac = 1.0 / n_split
     for i in range(0, nhalo + ni + nhalo):
         for j in range(0, nhalo + nj + nhalo):
@@ -3021,8 +2504,7 @@ def divide_fluxes_by_n_substeps(cxd, xfx, mfxd, cyd, yfx, mfyd, n_split, nhalo, 
 
 
 def apply_mass_flux(dp1, x_mass_flux, y_mass_flux, rarea, dp2, nhalo, ni, nj, nk):
-    """``apply_mass_flux``: dp2 = dp1 + (mfx-mfx[1,0,0]+mfy-mfy[0,1,0])*rarea.
-    Reads [1,0,0]/[0,1,0]; capped +1 margin."""
+    """``apply_mass_flux``: dp2 = dp1 + (mfx-mfx[1,0,0]+mfy-mfy[0,1,0])*rarea."""
     for i in range(0, nhalo + ni + nhalo - 1):
         for j in range(0, nhalo + nj + nhalo - 1):
             for k in range(0, nk):
@@ -3031,8 +2513,7 @@ def apply_mass_flux(dp1, x_mass_flux, y_mass_flux, rarea, dp2, nhalo, ni, nj, nk
 
 
 def apply_tracer_flux(q, dp1, fx, fy, rarea, dp2, nhalo, ni, nj, nk):
-    """``apply_tracer_flux``: q = (q*dp1 + (fx-fx[1,0,0]+fy-fy[0,1,0])*rarea)/dp2.
-    In place on q. Reads [1,0,0]/[0,1,0]; capped +1 margin."""
+    """``apply_tracer_flux``: q = (q*dp1 + (fx-fx[1,0,0]+fy-fy[0,1,0])*rarea)/dp2, in place."""
     for i in range(0, nhalo + ni + nhalo - 1):
         for j in range(0, nhalo + nj + nhalo - 1):
             for k in range(0, nk):
@@ -3041,21 +2522,10 @@ def apply_tracer_flux(q, dp1, fx, fy, rarea, dp2, nhalo, ni, nj, nk):
                          (fx[i, j, k] - fx[i + 1, j, k] + fy[i, j, k] - fy[i, j + 1, k]) * rarea[i, j]) / dp2[i, j, k])
 
 
-# ============================================================================
 # Composition: TracerAdvection (tracer_2d_1l), grid_type==4
-# ============================================================================
 def tracer_advection_gt4(tracers, dp1, mfx, mfy, cx, cy, dxa, dya, dx, dy, area, rarea, sin_sg1, sin_sg2, sin_sg3,
                          sin_sg4, hord, nhalo, ni, nj, nk):
-    """TracerAdvection.__call__ for grid_type==4. Composes the validated leaves:
-        flux_compute(cx, cy -> xfx, yfx)
-        [n_split>1] divide_fluxes_by_n_substeps
-        for it in range(n_split):
-            apply_mass_flux(dp1, mfx, mfy -> dp2)
-            for tracer: _fv_tp_2d(tracer, cx, cy, xfx, yfx, mfx, mfy) ; apply_tracer_flux
-    n_split is the local tracer sub-step count (= floor(1+cmax); cmax hardcoded 2
-    upstream -> n_split=2). ``tracers`` is a list of 3D fields (mutated in place).
-    Metric fields k-replicated 3D except area/rarea (2D).
-    """
+    """``TracerAdvection.__call__`` (grid_type==4): composes flux_compute, apply_mass_flux, _fv_tp_2d, tracer_flux."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
 
@@ -3105,19 +2575,9 @@ def tracer_advection_gt4(tracers, dp1, mfx, mfy, cx, cy, dxa, dya, dx, dy, area,
         # halo exchange between sub-steps is a single-tile no-op
 
 
-# ============================================================================
 # Composition: MapSingle (map_single), grid_type-independent (dry scalar path)
-# ============================================================================
 def map_single_iv1_kordsmall(q1, pe1, pe2, delp_layer, nhalo, ni, nj, nk):
-    """MapSingle.__call__ (iv==1, kord<9): remap_profile (q4 reconstruction) ->
-    set_dp -> lagrangian_contributions. q1 layer (nk); pe1/pe2 interface (kz).
-    delp_layer is the Lagrangian layer thickness (nk). In place on q1.
-
-    NOTE: this reuses remap_profile_iv1_kordsmall, whose bottom-edge layers are
-    NOT yet bit-exact vs GT4Py (see the xfail test). So map_single -- and any
-    remap composed from it -- is NOT bit-exact-validated. The set_dp and
-    lagrangian_contributions pieces ARE individually validated.
-    """
+    """``MapSingle.__call__`` (iv==1,kord<9): remap_profile->set_dp->lagrangian_contributions; NOT bit-exact (xfail)."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     a4_1 = q1.copy()
@@ -3131,31 +2591,9 @@ def map_single_iv1_kordsmall(q1, pe1, pe2, delp_layer, nhalo, ni, nj, nk):
     lagrangian_contributions(q1, pe1, pe2, a4_1, a4_2, a4_3, a4_4, dp1, lev, nhalo, ni, nj, nk)
 
 
-# ============================================================================
 # Composition: fv_dynamics (gt==4, do_sat_adj=False dry path) -- k_split loop
-# ============================================================================
 def fv_dynamics_gt4(st, g, bdt, k_split, dyn_params, hord_tr, kord_tr, nq, nhalo, ni, nj, nk):
-    """FV3 fv_dynamics.step_dynamics for grid_type==4, do_sat_adj=False (dry).
-
-    Composes the k_split loop exactly as pyfv3/stencils/fv_dynamics._compute:
-        for k_split in range(K_SPLIT):
-            dp1 = copy(delp)
-            dyn_core_gt4(...)                         # acoustic substeps
-            tracer_advection_gt4(tracers, dp1, mfxd, mfyd, cxd, cyd)
-            lagrangian_to_eulerian (dry remap)       # see note below
-
-    ``st`` is the dyn_core state dict EXTENDED with the remap/tracer fields
-    (tracers list, pe, peln, pk, pkz, ps, ak, bk); ``g`` the grid-metric dict;
-    ``dyn_params`` the dyn_core_gt4 keyword args.
-
-    VALIDATION LEVEL: the k_split loop wiring + dyn_core + tracer_advection are
-    composed from individually-GT4Py-validated pieces and orchestration-validated
-    (vs an independent hand-wired reference). The DRY REMAP step uses
-    map_single_iv1_kordsmall, whose remap_profile q4 reconstruction is NOT yet
-    bit-exact at the bottom-edge layers (xfail) -- so the remap sub-step is
-    assembled but NOT bit-exact-validated. saturation_adjustment (do_sat_adj=True)
-    and the moist remap energetics are NOT included.
-    """
+    """FV3 fv_dynamics.step_dynamics for grid_type==4, do_sat_adj=False (dry)."""
     for ks in range(k_split):
         n_map = ks + 1
         last_step = ks == k_split - 1
@@ -3180,12 +2618,7 @@ def fv_dynamics_gt4(st, g, bdt, k_split, dyn_params, hord_tr, kord_tr, nq, nhalo
 
 
 def _lagrangian_to_eulerian_dry(st, g, nhalo, ni, nj, nk, kord_tr, last_step):
-    """Dry (do_sat_adj=False) Lagrangian->Eulerian remap step. Builds the
-    Lagrangian (pe1) and Eulerian (pe2) interface pressures from delp/ak/bk, then
-    remaps pt, w, delz and the tracers via map_single. moist_cv_pt_pressure /
-    moist_cv_pkz set q_con/cappa/pkz from the tracers (dry: no sat-adj). See the
-    fv_dynamics_gt4 docstring for the validation caveat (remap_profile edges).
-    """
+    """Dry (do_sat_adj=False) Lagrangian->Eulerian remap: builds pe1/pe2, remaps pt/w/delz/tracers via map_single."""
     nx = nhalo + ni + nhalo
     ny = nhalo + nj + nhalo
     i0, i1 = nhalo, nhalo + ni - 1

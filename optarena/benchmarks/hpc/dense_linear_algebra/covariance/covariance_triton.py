@@ -2,14 +2,6 @@ import torch
 import triton
 import triton.language as tl
 from optarena.frameworks.triton_utilities import get_2d_tile_offsets, matmul
-"""
-Similarly to the correlation kernel, there is a significantly more efficient
-algorithm with a single matrix multiplication instead of a loop:
-
-mean = np.mean(data, axis=0)
-data -= mean
-cov = (data.T @ data) / (float_n - 1.0)
-"""
 import itertools
 
 
@@ -19,9 +11,9 @@ def get_mean_configs():
             "BLOCK_SIZE_M": m,
             "BLOCK_SIZE_N": n
         }, num_warps=w) for m, n, w in itertools.product(
-            [16, 32, 64, 128],  # BLOCK_SIZE_M options
-            [32, 64, 128, 256],  # BLOCK_SIZE_N options
-            [1, 2, 4, 8]  # num_warps options
+            [16, 32, 64, 128],
+            [32, 64, 128, 256],
+            [1, 2, 4, 8]
         )
     ]
 

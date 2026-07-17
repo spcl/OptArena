@@ -1,14 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The generated C MPI driver + ``kernel_mpi`` stub (``optarena/support/bindings/mpi_driver.py``).
-
-Pins the abi_contract.md §12 shape WITHOUT a cluster: the agent stub's signature (local tiles
--> local scalars -> ``MPI_Fint comm`` -> the reserved workspace pair, no ``time_ns``); the
-harness driver's load-bearing calls (``MPI_Init`` in ``main``, the Cartesian comm, the untimed
-``Scatterv``/``Gatherv``, and the ``Wtime`` + ``Reduce(MAX)`` timed loop); and -- the strongest
-structural check available offline -- that the emitted driver actually COMPILES (``-c``) under
-an MPI C compiler when one is installed.
-"""
+"""The generated C MPI driver + kernel_mpi stub: pins the abi_contract.md §12 shape without a cluster."""
 import shutil
 import subprocess
 
@@ -82,23 +74,19 @@ def test_driver_owns_init_scatter_gather_timing():
 
 
 def test_driver_restores_inputs_between_repeats():
-    # Each timed repeat must see the pristine problem (like the single-node fresh-copy path),
-    # else an in-place stencil would accumulate across K.
+    # Each timed repeat must see the pristine problem, else an in-place stencil would accumulate.
     drv = gen_mpi_driver(_yax(), [4])
     assert "pristine" in drv and "memcpy(work[i], pristine[i], tile_bytes[i])" in drv
 
 
 def test_driver_seeds_work_before_timed_loop():
-    # work[] must be populated from the scattered tile BEFORE the timed loop, so a K==0 run
-    # gathers the real (unmodified) tile rather than uninitialised heap.
+    # work[] must be populated before the timed loop, so a K==0 run gathers real data, not heap.
     drv = gen_mpi_driver(_yax(), [4])
     assert drv.index("memcpy(work[i], pristine[i], tile_bytes[i])") < drv.index("for (int64_t k = 0; k < K;")
 
 
 def test_driver_reads_scalars_by_register_class():
-    # A scalar travels in a fixed 8-byte wire slot per register class (int64 for an integer arg,
-    # float64 otherwise -- mpi_wire._scalar8). The driver must read the slot as that class and
-    # cast; reading a float32 as *(float*) of the 8-byte float64 slot would be garbage.
+    # A scalar travels in a fixed 8-byte wire slot per register class; reading it as the wrong class is garbage.
     b = _binding(
         Arg(name="y", kind="ptr", dtype="float32", is_const=False, role="output"),
         Arg(name="af", kind="scalar", dtype="float32", is_const=True),
@@ -149,9 +137,7 @@ def test_device_driver_delivers_gpu_pointers_and_untimed_transfers():
     # GPU-portable shim (CUDA under nvcc, HIP under hipcc) + device tile mirror + device scratch.
     assert "cuda_runtime.h" in dev and "__HIP_PLATFORM_AMD__" in dev
     assert "void *dwork[N_PTR];" in dev and "gpuMalloc" in dev
-    # a baked g_on_device[] mask selects host vs device per pointer, and the kernel runs on the
-    # selected buffer + a device-resident workspace, via an extern "C" decl (the driver is compiled
-    # as C++/CUDA, so the symbol must have C linkage to match the agent's).
+    # a baked g_on_device[] mask selects host vs device per pointer; extern "C" for linkage vs the agent's.
     assert "static const int g_on_device[] = { 1, 1 };" in dev
     assert 'extern "C" ' in dev
     assert "(const double *)(g_on_device[0] ? dwork[0] : work[0])" in dev and "(uint8_t *)dws" in dev
@@ -178,9 +164,7 @@ def test_host_driver_has_no_device_tokens():
 
 @pytest.mark.skipif(_NVCC is None or _MPICC is None, reason="nvcc + an MPI wrapper are required")
 def test_generated_device_driver_compiles_with_nvcc(tmp_path):
-    # The strongest offline check for the device path: nvcc compiles the portable-shim driver as
-    # CUDA C++ against a real <mpi.h> (the MPI include comes from the wrapper, nvcc is not one).
-    # A MIXED mask (only y on device) exercises both the host memcpy and the device H2D/D2H arms.
+    # The strongest offline check for the device path: nvcc compiles the portable-shim driver as CUDA C++.
     from optarena.languages import mpi_wrapper_flags
     mpi_inc, _ = mpi_wrapper_flags("mpicc.mpich" if shutil.which("mpicc.mpich") else "mpicc")
     src = tmp_path / "driver.cu"

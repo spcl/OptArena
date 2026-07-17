@@ -4,11 +4,7 @@
 # More information at https://github.com/rougier/numpy-book
 # -----------------------------------------------------------------------------
 #
-# Static-shape rewrite for NumpyToC ingestion. Mirrors the dace
-# reference (mandelbrot2_dace.py): replaces the dynamic shrink form
-# ``Z = Z[I]`` with fixed-size buffers plus a ``length`` cursor and a
-# manual compaction loop. ``Xi.shape = xn*yn`` mutation is replaced
-# with ``np.reshape``.
+# Static-shape rewrite for NumpyToC: fixed-size buffers + length cursor + compaction loop replace the dynamic Z=Z[I] shrink.
 
 import numpy as np
 

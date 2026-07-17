@@ -13,4 +13,4 @@ reference; a hand-written override is just `<kernel>_<framework>.py` (e.g.
 The manifest is discovered automatically — there is no separate registration
 file. The allowed keys are enforced by `KNOWN_MANIFEST_KEYS` in
 [`optarena/spec.py`](optarena/spec.py); see the worked walkthrough in
-[README.md](README.md#contributing-add-a-benchmark).
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#add-a-benchmark).

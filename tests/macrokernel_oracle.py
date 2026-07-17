@@ -1,20 +1,8 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared helper for the macrokernel oracle tests.
-
-A *macrokernel* benchmark ships a numpy port plus the dace-fortran-EMITTED C++
-for the same kernel (a ``baseline/<kernel>_generated.cpp`` fixture, produced once
-from the Fortran via the FaCe branch under py13). The oracle test compiles that
-C++ and compares it -- end to end, on identical inputs -- against the numpy port,
-so numerical correctness is pinned to the real lowered kernel, not just to a
-hand-written reference.
-
-Compiling the emitted C++ needs only dace's RUNTIME HEADERS (``dace::complex128``,
-``dace::math``, ``dace::wcr_fixed``). The include directory is discovered from the
-installed ``dace`` python package -- never hard-coded -- so the same test works in
-CI (pip ``dace``) and locally (the FaCe checkout). The numpy port itself has no
-dace dependency; only the build-time oracle does.
-"""
+"""Shared helper for the macrokernel oracle tests: compiles the dace-fortran-emitted C++ fixture and
+compares it end to end, on identical inputs, against the numpy port. dace's include dir is discovered
+from the installed python package, never hard-coded, so it works in CI and locally alike."""
 import ctypes
 import functools
 import os
@@ -26,9 +14,7 @@ from typing import Dict, List, Optional
 
 @functools.lru_cache(maxsize=1)
 def dace_include_dir() -> Optional[str]:
-    """``<dace package>/runtime/include`` (where ``dace/dace.h`` lives), or
-    ``None`` when dace is not importable. Resolved from the python package so no
-    path is hard-coded -- ``import dace`` then its on-disk location."""
+    """``<dace package>/runtime/include``, or ``None`` when dace is not importable."""
     try:
         import dace
     except ImportError:
@@ -43,14 +29,8 @@ def have_oracle_toolchain() -> bool:
 
 
 def compile_emitted_so(cpp_path: str, out_so: str, *, extra_flags: List[str] = ()) -> str:
-    """Compile a dace-emitted ``.cpp`` into a ctypes-loadable ``.so``.
-
-    Built **serially** (no ``-fopenmp``): the emitted kernel uses
-    ``dace::wcr_fixed::reduce_atomic`` for reductions, which is only race-free
-    without the OpenMP ``parallel for`` -- a serial build keeps the oracle
-    deterministic and bit-reproducible (the point is correctness, not speed).
-    The dace include dir is added via ``-I`` so ``#include <dace/dace.h>``
-    resolves from the installed package."""
+    """Compile a dace-emitted ``.cpp`` into a ctypes-loadable ``.so``, built serially (no -fopenmp):
+    ``dace::wcr_fixed::reduce_atomic`` is only race-free without an OpenMP parallel for."""
     inc = dace_include_dir()
     if inc is None:
         raise RuntimeError("dace headers not found; install dace (pip install dace)")
@@ -63,11 +43,8 @@ def compile_emitted_so(cpp_path: str, out_so: str, *, extra_flags: List[str] = (
 
 
 # --- driving the emitted kernel via ctypes ----------------------------------
-# A DaCe-emitted kernel exposes three C entry points: ``__dace_init_<name>``
-# (takes the SDFG symbols -> returns an opaque state handle), ``__program_<name>``
-# (the state handle + every flat array pointer + shape/offset symbol), and
-# ``__dace_exit_<name>``. The flat-SoA arg list is huge but mechanical, so we
-# parse it straight out of the emitted .cpp instead of hand-transcribing it.
+# A DaCe-emitted kernel exposes three C entry points: __dace_init_<name>, __program_<name>, and
+# __dace_exit_<name>. The flat-SoA arg list is huge but mechanical, so it's parsed from the .cpp.
 
 _VALUE_CTYPE = {
     "int": ctypes.c_int,
@@ -96,14 +73,9 @@ def _parse_args(cpp_text: str, fn: str):
 
 
 def call_emitted(cpp_path: str, so_path: str, kernel: str, *, buffers: Dict, scalars: Dict) -> None:
-    """Run a DaCe-emitted kernel on caller-provided flat-SoA inputs (in place).
-
-    ``buffers`` maps every pointer arg name -> an F-contiguous numpy array (the
-    flat-SoA field). ``scalars`` maps every by-value config symbol (``nproma``,
-    ``istep``, ...) -> its value. Array shape symbols (``<arr>_d<k>``) are taken
-    from ``buffers[arr].shape[k]`` and ``offset_*`` symbols are 0, so the caller
-    only supplies the genuine inputs, not the ~200 derived dimension args.
-    """
+    """Run a DaCe-emitted kernel on caller-provided flat-SoA inputs, in place. Array shape symbols are
+    taken from ``buffers[arr].shape[k]``, so the caller only supplies genuine inputs, not the derived
+    dimension args."""
     text = open(cpp_path).read()
     lib = ctypes.CDLL(so_path)
 
@@ -111,16 +83,14 @@ def call_emitted(cpp_path: str, so_path: str, kernel: str, *, buffers: Dict, sca
         if is_ptr:
             return ctypes.c_void_p(buffers[name].ctypes.data)
         if name.startswith("offset_"):
-            # DaCe indexes data arrays as ``(fortran_idx - offset)``; Fortran
-            # arrays are 1-based, so the per-dim offset is the lower bound 1.
+            # Fortran arrays are 1-based, so the per-dim offset is the lower bound 1.
             return ctypes.c_int64(1)
         if name in scalars:
             return _VALUE_CTYPE[tok](scalars[name])
         md = re.match(r"(.+)_d(\d+)$", name)
         if md:
             arr, dim = md.group(1), int(md.group(2))
-            # The dim symbol may use the flattened struct-member spelling
-            # (``dfftt__nl_d0``) while the pointer arg is ``dfftt_nl``.
+            # The dim symbol may use the flattened struct-member spelling vs. the pointer arg's.
             buf = buffers.get(arr)
             if buf is None:
                 buf = buffers.get(arr.replace("__", "_"))

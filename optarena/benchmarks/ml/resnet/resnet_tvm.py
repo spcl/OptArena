@@ -1,31 +1,4 @@
-"""CPU TVM impl of the ResNet-50 bottleneck residual block (inference).
-
-Reference (``resnet_numpy.py``)::
-
-    padded = zeros((N, H+2, W+2, C2)); padded[:,1:-1,1:-1,:] = conv2d(input, conv1)
-    x = relu(batchnorm2d(padded))      # conv1: 1x1, NHWC, valid
-    x = relu(batchnorm2d(conv2d(x, conv2)))    # conv2: 3x3 on the padded field
-    x = batchnorm2d(conv2d(x, conv3))          # conv3: 1x1
-    return relu(x + input)                      # residual
-
-where (exactly as written in the reference -- note it divides by sqrt(std+eps),
-the std itself, *not* the variance)::
-
-    mean = x.mean(axis=0, keepdims=True)
-    std  = x.std(axis=0, keepdims=True)        # population std, ddof=0
-    batchnorm2d(x) = (x - mean) / sqrt(std + eps),   eps = 1e-5
-
-Implemented as a chain of autotunable per-stage ``build_*`` PrimFuncs driven
-from the Python entry through intermediate ``tvm.runtime.Tensor``s. The
-pad+batchnorm+relu after conv1 is one fused PrimFunc (batchnorm runs over the
-*padded* field, whose zero borders participate in the mean/std). The final
-stage fuses batchnorm + residual add + relu. ``build_primfunc`` aliases the
-no-bias conv builder for the shared-builder / GPU build-check contract.
-
-Note the batchnorm reduces over the batch axis (N), which is small (8). It is
-expressed with ``te.reduce_axis`` over N; both arms of the standardisation use
-the same per-position mean/std stages.
-"""
+"""CPU TVM impl of the ResNet-50 bottleneck residual block (inference)."""
 import tvm
 from tvm import te
 
@@ -53,11 +26,7 @@ build_primfunc = build_conv_nobias
 
 
 def _mean_std(field, N, H, W, C):
-    """Return (mean, std) compute stages reducing 4D ``field`` over axis 0.
-
-    ``field`` is an (N, H, W, C) compute; mean/std have shape (1, H, W, C) to
-    match numpy's keepdims. ``std`` is population std (ddof=0). Explicit 4-arg
-    lambdas (no varargs) so ``te.compute`` can infer the output rank."""
+    """Return (mean, std) compute stages reducing 4D ``field`` over axis 0."""
     # A reduction must be the whole body of its compute, so /float(N) is a
     # separate stage after each sum.
     rk = te.reduce_axis((0, N), name="bn_n")
@@ -75,11 +44,7 @@ def _mean_std(field, N, H, W, C):
 
 
 def build_pad_bn_relu(N, H, W, C2, dtype):
-    """padded[:,1:-1,1:-1,:] = c1; then relu(batchnorm2d(padded)).
-
-    Batchnorm runs over the padded field including the zero borders, so the
-    border mean/std reflect those zeros exactly as in the reference.
-    Output shape: (N, H+2, W+2, C2)."""
+    """padded[:,1:-1,1:-1,:] = c1; then relu(batchnorm2d(padded))."""
     c1 = te.placeholder((N, H, W, C2), name="c1", dtype=dtype)
     Hp, Wp = H + 2, W + 2
     padded = te.compute(

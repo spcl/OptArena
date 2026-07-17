@@ -1,14 +1,4 @@
-"""CPU TVM sparse SpMM: ``C = alpha * (A @ B) + beta * C``.
-
-``A`` is sparse (CSR), ``B`` the dense operand, ``C`` dense — the canonical
-SpMM. The product is a compiled 2-D gather-reduction::
-
-    AB[i, j] = sum_{l in row i} data[indptr[i]+l] * B[indices[indptr[i]+l], j]
-
-then a scaling stage folds in ``alpha`` / ``beta``. ``A``/``B`` arrive as raw
-scipy matrices (not array_args); the kernel pulls A's CSR buffers and
-densifies B (the dense SpMM operand).
-"""
+"""CPU TVM sparse SpMM: C = alpha*(A @ B) + beta*C as a compiled 2-D gather-reduction over A's CSR rows."""
 import numpy as np
 import tvm
 from tvm import te

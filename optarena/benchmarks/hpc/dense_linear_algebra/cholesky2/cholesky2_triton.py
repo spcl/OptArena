@@ -20,12 +20,10 @@ def generate_config_1d():
     ]
 
 
-# 1) Diagonal update at step k:
-#    L[k,k] = sqrt( A[k,k] - sum_{s<k} L[k,s]^2 )
+# Diagonal update: L[k,k] = sqrt(A[k,k] - sum_{s<k} L[k,s]^2)
 @triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True)
 @triton.jit
 def chol_diag_kernel(A_ptr, stride_am, stride_an, N, k, BLOCK_SIZE: tl.constexpr):
-    # reduction across s in chunks of BLOCK_S
     acc = tl.zeros((), dtype=A_ptr.dtype.element_ty)
     s0 = 0
     while s0 < k:
@@ -40,8 +38,7 @@ def chol_diag_kernel(A_ptr, stride_am, stride_an, N, k, BLOCK_SIZE: tl.constexpr
     tl.store(A_ptr + k * stride_am + k * stride_an, val)
 
 
-# 2) Column update below diagonal at step k:
-#    For i>k: L[i,k] = ( A[i,k] - sum_{s<k} L[i,s]*L[k,s] ) / L[k,k]
+# Column update: for i>k, L[i,k] = (A[i,k] - sum_{s<k} L[i,s]*L[k,s]) / L[k,k]
 @triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True)
 @triton.jit
 def chol_col_kernel(A_ptr, stride_am, stride_an, N, k, BLOCK_SIZE: tl.constexpr):
@@ -50,7 +47,6 @@ def chol_col_kernel(A_ptr, stride_am, stride_an, N, k, BLOCK_SIZE: tl.constexpr)
     if i >= N:
         return
 
-    # dot( L[i,:k], L[k,:k] )
     acc = tl.zeros((), dtype=A_ptr.dtype.element_ty)
     s0 = 0
     while s0 < k:
@@ -67,7 +63,7 @@ def chol_col_kernel(A_ptr, stride_am, stride_an, N, k, BLOCK_SIZE: tl.constexpr)
     tl.store(A_ptr + i * stride_am + k * stride_an, lik)
 
 
-# 3) Merge: result[i,j] = L[i,j] if j<=i else A_orig[i,j]  (strictly upper from original)
+# Merge: result[i,j] = L[i,j] if j<=i else A_orig[i,j] (strictly upper from original)
 @triton.autotune(configs=generate_config_2d(), key=["N"], cache_results=True)
 @triton.jit
 def write_strict_upper_from_orig(out_ptr, stride_om, stride_on, A0_ptr, stride_a0m, stride_a0n, N,
@@ -82,10 +78,8 @@ def write_strict_upper_from_orig(out_ptr, stride_om, stride_on, A0_ptr, stride_a
     mj = jj < N
     m_ij = mi[:, None] & mj[None, :]
 
-    # strictly upper mask: j > i
     m_upper = m_ij & (jj[None, :] > ii[:, None])
 
-    # offsets
     off_out = ii[:, None] * stride_om + jj[None, :] * stride_on
     off_a0 = ii[:, None] * stride_a0m + jj[None, :] * stride_a0n
 
@@ -94,28 +88,20 @@ def write_strict_upper_from_orig(out_ptr, stride_om, stride_on, A0_ptr, stride_a
     tl.store(out_ptr + off_out, vals, mask=m_upper)
 
 
-# ------------------------------------------------------
-# Host-side function: drop-in for your numpy "kernel(A)"
-# ------------------------------------------------------
 def kernel(A: torch.Tensor):
-    """
-    In-place: A[:] = chol(A) + strictly_upper(original A)
-    """
+    """In-place: A[:] = chol(A) + strictly_upper(original A)."""
     N = A.shape[0]
     A0 = A.clone()  # keep original upper triangle
 
     stride_am, stride_an = A.stride()
 
-    # Cholesky: overwrite A's lower triangle with L
     for k in range(N):
-        # diag
         chol_diag_kernel[(1, )](A, stride_am, stride_an, N, k)
-        # column below diag: launch one program per row i=k+1..N-1
+        # one program per row i=k+1..N-1
         n_rows = max(0, N - (k + 1))
         if n_rows > 0:
             chol_col_kernel[(n_rows, )](A, stride_am, stride_an, N, k)
 
-    # Merge: output = L (lower incl diag) + strictly upper from original A
     grid = lambda meta: (
         triton.cdiv(N, meta["BLOCK_SIZE_M"]),
         triton.cdiv(N, meta["BLOCK_SIZE_N"]),

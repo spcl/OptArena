@@ -30,10 +30,7 @@ def hand_gmres(A, x, b, max_iter=100, tol=1e-6):
     e1 = np.zeros(m + 1)
     e1[0] = 1.0
 
-    # NumpyToC ingestion: pre-materialise ``beta * e1[:m]`` into a
-    # fresh vector. ``expand_lstsq`` accepts Name / simple Subscript
-    # operands only -- the inlined BinOp would force a per-call temp
-    # allocation that the expander cannot register in zeros_locals.
+    # NumpyToC: pre-materialise beta * e1[:m]; expand_lstsq accepts only Name/simple-Subscript operands.
     b_lstsq = np.zeros((m, ))
     for i in range(m):
         b_lstsq[i] = beta * e1[i]

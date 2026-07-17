@@ -12,8 +12,7 @@ import numpy as np
 
 
 def initialize(V, datatype=np.float64):
-    # Both KL divergences from the uniform distribution target 10.0, exactly as in
-    # the original task; the vocabulary size V matches (150000).
+    # both KL targets are 10.0 and V=150000, matching the original task
     forward_target = np.array([10.0], np.float64)
     backward_target = np.array([10.0], np.float64)
     p = np.zeros((V, ), np.float64)

@@ -1,8 +1,4 @@
-"""CPU TVM impl of TSVC ``vsumr`` (full reduction ``sum_out[0] = sum(a)``).
-
-Reduction template: a ``te.reduce_axis`` + ``te.sum`` producing the
-shape-``(1,)`` output that matches the numpy reference's ``sum_out``.
-"""
+"""CPU TVM impl of TSVC ``vsumr`` (full reduction ``sum_out[0] = sum(a)``)."""
 import tvm
 from tvm import te
 

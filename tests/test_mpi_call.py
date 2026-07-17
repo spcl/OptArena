@@ -1,14 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The distributed build + runner (``sandbox.build_mpi``, ``languages.build_mpi_executable_commands``,
-``agent_bench/mpi_call.run``).
-
-``mpi_call.run`` is the 5th runner: it must return the SAME ``(outputs, native_ns)`` shape as the
-single-node ``_call_isolated`` so the grading + metric core is reused verbatim. These tests pin
-the build command shape (pure, no compiler) and -- gated on a working MPI toolchain -- the full
-build -> scatter -> launch -> gather round-trip, asserting the reconstructed global output equals
-the reference and that a launcher failure is a SCORED ``RuntimeError``.
-"""
+"""The distributed build + runner: sandbox.build_mpi, build_mpi_executable_commands, mpi_call.run."""
 import shutil
 from pathlib import Path
 
@@ -57,9 +49,7 @@ def _descriptor(locations=None) -> Descriptor:
                       locations=locations or {})
 
 
-# --------------------------------------------------------------------------------------- #
-# build_mpi_executable_commands -- pure command shape (no compiler needed)
-# --------------------------------------------------------------------------------------- #
+# --- build_mpi_executable_commands: pure command shape (no compiler needed) ---
 def test_build_commands_compile_each_source_and_link_executable():
     cmds = build_mpi_executable_commands([("c", Path("k.c"))], Path("d.c"), Path("bench"))
     assert len(cmds) == 3  # compile kernel, compile driver, link
@@ -97,8 +87,7 @@ def test_build_commands_empty_sources_raises():
 
 
 def test_build_commands_device_routes_driver_and_link_to_gpu_compiler():
-    # Device residency: a CUDA kernel + the (device) driver both compile with nvcc, and the link
-    # is nvcc too (it auto-links libcudart) -- not the C wrapper.
+    # Device residency: CUDA kernel + driver both compile with nvcc; the link is nvcc too, not the C wrapper.
     cmds = build_mpi_executable_commands([("cuda", Path("k.cu"))], Path("d.cu"), Path("bench"), driver_lang="cuda")
     assert cmds[0][0] == "nvcc" and str(Path("k.cu")) in cmds[0]  # kernel via nvcc
     assert cmds[1][0] == "nvcc" and str(Path("d.cu")) in cmds[1]  # driver via nvcc (not mpicc)
@@ -106,8 +95,7 @@ def test_build_commands_device_routes_driver_and_link_to_gpu_compiler():
 
 
 def test_mpi_wrapper_flags_extracts_include_and_link():
-    # MPICH's `-show` line carries -I<mpi include> (compile) and -L/-l<mpi lib> (link); the helper
-    # keeps exactly those so nvcc/hipcc (not MPI wrappers) can build MPI code. Gated on the wrapper.
+    # MPICH's `-show` carries -I<include> (compile) and -L/-l<lib> (link); kept so nvcc/hipcc can build MPI code.
     from optarena.languages import mpi_wrapper_flags
     if shutil.which("mpicc.mpich") is None:
         pytest.skip("mpicc.mpich unavailable")
@@ -122,12 +110,9 @@ def test_mpi_wrapper_flags_missing_wrapper_is_empty():
     assert mpi_wrapper_flags("definitely-not-a-real-compiler-xyz") == ([], [])
 
 
-# --------------------------------------------------------------------------------------- #
-# with_oversubscribe -- family-aware, idempotent launcher rewrite (pure, no launch)
-# --------------------------------------------------------------------------------------- #
+# --- with_oversubscribe: family-aware, idempotent launcher rewrite (pure, no launch) ---
 def test_oversubscribe_no_op_for_mpich_hydra():
-    # Hydra oversubscribes by default AND rejects --oversubscribe (an OpenMPI-only flag), so the
-    # config-default launcher must come back untouched.
+    # Hydra oversubscribes by default and rejects --oversubscribe (OpenMPI-only), so it stays untouched.
     assert mpi_call.with_oversubscribe(["mpiexec.mpich", "-n"]) == ["mpiexec.mpich", "-n"]
     assert mpi_call.with_oversubscribe(["mpiexec", "-n"]) == ["mpiexec", "-n"]
 
@@ -149,9 +134,7 @@ def test_oversubscribe_leaves_srun_to_the_scheduler():
     assert mpi_call.with_oversubscribe([]) == []
 
 
-# --------------------------------------------------------------------------------------- #
-# Sandbox.build_mpi -- delivery handling
-# --------------------------------------------------------------------------------------- #
+# --- Sandbox.build_mpi: delivery handling ---
 def test_build_mpi_any_delivery_unsupported():
     b = _yax_binding()
     sub = Submission(language="c", library="/tmp/does-not-matter.so")
@@ -170,9 +153,7 @@ def test_build_mpi_python_delivery_stashes_module():
 
 
 def test_build_mpi_device_rejects_non_gpu_kernel():
-    # A GPU-located array (descriptor location=device) delivers GPU-pointer tiles, so a plain C
-    # kernel_mpi (which would deref a device pointer on the host) is a clean build failure, not a
-    # wrong build. Needs no compiler.
+    # A GPU-located array delivers device pointers, so a plain C kernel_mpi is a clean build failure.
     b = _yax_binding()
     sub = Submission(language="c", source=_C_KERNEL)
     with Sandbox(b) as sb:
@@ -180,9 +161,7 @@ def test_build_mpi_device_rejects_non_gpu_kernel():
     assert not res.ok and "cuda/hip" in res.log
 
 
-# --------------------------------------------------------------------------------------- #
-# End to end: build -> scatter -> launch -> gather (gated on a working MPI toolchain)
-# --------------------------------------------------------------------------------------- #
+# --- End to end: build -> scatter -> launch -> gather (gated on a working MPI toolchain) ---
 def test_build_mpi_and_run_round_trip(tmp_path):
     tc = c_toolchain()
     if tc is None:
@@ -246,10 +225,7 @@ def _cuda_available() -> bool:
 
 
 def test_program_argv_python_forwards_device_mask_only_for_device():
-    """The launcher's program tail: ``--device-mask <csv>`` (the GPU-located pointer indices) rides
-    the mpi4py driver invocation ONLY when some array is device (per-array residency); an empty mask
-    adds nothing, and the C ``bench`` tail (exe infile outfile) never carries it (the C driver bakes
-    the mask at build time)."""
+    """`--device-mask <csv>` rides the mpi4py invocation only when some array is device; C never carries it."""
     art, inf, out = Path("/x/bench"), Path("/t/in.bin"), Path("/t/out.bin")
     host = mpi_call._program_argv(art, inf, out, is_python=True, python_exe="py", grid_dims=(4, ), device_mask=())
     dev = mpi_call._program_argv(art, inf, out, is_python=True, python_exe="py", grid_dims=(2, 2), device_mask=(0, 2))
@@ -260,8 +236,7 @@ def test_program_argv_python_forwards_device_mask_only_for_device():
 
 
 def test_stage_host_returns_numpy_and_sizes_workspace():
-    """``_stage`` all-host path (empty on_device): the compute tiles are the scattered host arrays
-    and the workspace is None for a 0-byte request or an uninitialised ``uint8`` buffer."""
+    """`_stage` all-host path: compute tiles are the scattered host arrays; workspace is None if 0-byte."""
     from optarena.harness import mpi_py_driver
     tiles = [np.arange(4, dtype=np.float64)]
     compute, ws = mpi_py_driver._stage(tiles, 0, frozenset())
@@ -271,8 +246,7 @@ def test_stage_host_returns_numpy_and_sizes_workspace():
 
 
 def test_stage_device_mask_copies_only_selected_tiles():
-    """``_stage`` per-array path: only the tiles in ``on_device`` become cupy (H2D); a host-located
-    tile stays numpy. Gated on a usable GPU; reuses the single-node device marshalling contract."""
+    """`_stage` per-array path: only tiles in `on_device` become cupy (H2D); host-located tiles stay numpy."""
     if not _cuda_available():
         pytest.skip("no CUDA device / cupy")
     import cupy as cp

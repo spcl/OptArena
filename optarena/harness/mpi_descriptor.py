@@ -1,30 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""MPI data-distribution descriptors: how a global array is partitioned across an MPI
-processor grid. The single source of truth both drivers consume.
-
-Both the C-driver codegen (``bindings/mpi_driver.py``) and the mpi4py launcher
-(``mpi_py_driver.py``) resolve scatter/gather through this module, so they cannot disagree.
-Everything here is pure numpy (no ``mpi4py``), so the distribution tests run in CI with no
-cluster.
-
-A distribution assigns every element of a global array to exactly one rank (or to all ranks,
-when replicated). Each array axis is either bound to one grid dimension -- SPLIT across that
-dimension's ``P`` coordinates by one of the three :data:`AXIS_SCHEMES` -- or left unbound
-(``grid_dim is None``), which REPLICATES it (full extent on every rank):
-
-* ``block``        -- one contiguous, load-balanced block per grid coordinate.
-* ``block_cyclic`` -- ScaLAPACK-style ``owner(i) = (i // block_size) % P`` (``INDXG2P``); the
-                      per-axis ``block_size`` is ScaLAPACK's ``MB`` (row) / ``NB`` (column),
-                      so a 2-D array carries the block-tuple ``(MB, NB)``.
-* ``cyclic``       -- ``block_cyclic`` with ``block_size == 1``.
-
-Replication is STRUCTURAL, not a fourth split scheme: an unbound axis, or a whole-array
-``ArrayDist(replicated=True)``. Binding every axis of an N-D array to its own grid dimension
-gives the full processor-grid decomposition.
-
-Ranks and grid coordinates map row-major (``rank = coords . strides``).
-"""
+"""MPI data-distribution descriptors: how a global array is partitioned across a processor grid."""
 from __future__ import annotations
 
 import math
@@ -37,23 +13,13 @@ if TYPE_CHECKING:  # hints only; the math core stays free of binding/envelope im
     from optarena.harness.envelope import Submission
     from optarena.support.bindings.contract import Binding
 
-#: The per-axis SPLIT schemes. Replication is structural (an unbound ``grid_dim=None`` axis
-#: or ``ArrayDist(replicated=True)``), deliberately not a scheme here.
+#: The per-axis SPLIT schemes; replication is structural (unbound grid_dim, not a scheme here).
 AXIS_SCHEMES = ("block", "block_cyclic", "cyclic")
 
 
 @dataclass(frozen=True)
 class AxisDist:
-    """How ONE array axis is laid out across the grid.
-
-    ``grid_dim is None`` replicates the axis (full extent on every rank); otherwise it is
-    split across ``grid.dims[grid_dim]`` coordinates by ``scheme`` (``block_size`` applies
-    only to ``block_cyclic``).
-
-    Ownership is DISJOINT only; ghost cells / halos are not modelled here. The harness
-    scatters each rank's owned interior and the kernel does its own halo/collective exchange
-    over the Cartesian comm.
-    """
+    """How ONE array axis is laid out: replicated (grid_dim=None) or split by scheme; no ghost cells."""
     grid_dim: Optional[int] = None
     scheme: str = "block"
     block_size: int = 1
@@ -61,21 +27,14 @@ class AxisDist:
 
 @dataclass(frozen=True)
 class ArrayDist:
-    """One logical array's distribution: one :class:`AxisDist` per array dimension.
-    ``replicated=True`` means the whole array on every rank (``axes`` ignored).
-    """
+    """One logical array's distribution: one AxisDist per dimension, or replicated=True for the whole array."""
     axes: Tuple[AxisDist, ...] = ()
     replicated: bool = False
 
 
 @dataclass(frozen=True)
 class Grid:
-    """The processor grid; ``math.prod(dims)`` must equal the rank count.
-
-    N-D generalization of ScaLAPACK's 2-D BLACS grid (``dims == (NPROW, NPCOL)``, a rank's
-    ``coords == (MYROW, MYCOL)``). Rank <-> coords is row-major (BLACS is column-major; ours
-    is self-consistent across scatter/gather).
-    """
+    """The processor grid (math.prod(dims) == rank count); N-D generalization of ScaLAPACK's BLACS grid."""
     dims: Tuple[int, ...]
 
     @property
@@ -97,8 +56,7 @@ class Grid:
 
 
 def _block_bounds(n: int, parts: int, coord: int) -> Tuple[int, int]:
-    """Load-balanced contiguous block ``[lo, hi)`` of ``range(n)`` for ``coord`` of
-    ``parts`` (the first ``n % parts`` coordinates get one extra element)."""
+    """Load-balanced contiguous block [lo, hi) of range(n) for coord of parts."""
     base, rem = divmod(n, parts)
     lo = coord * base + min(coord, rem)
     hi = lo + base + (1 if coord < rem else 0)
@@ -106,20 +64,12 @@ def _block_bounds(n: int, parts: int, coord: int) -> Tuple[int, int]:
 
 
 def _effective_block_size(axis: AxisDist) -> int:
-    """Block width :func:`owned_indices` applies on a split axis: declared width (>=1) for
-    ``block_cyclic``, else 1. ``block``/``cyclic``/``block_cyclic``-width-1 share one per-coord
-    owned COUNT, so 1 is canonical for all three. Shared by the ownership math and the extent
-    signature in :meth:`Descriptor.local_size_scalars` -- so the guard can't key on a width the
-    ownership drops (a false-positive conflict)."""
+    """Block width owned_indices applies on a split axis: declared width for block_cyclic, else 1."""
     return max(1, axis.block_size) if axis.scheme == "block_cyclic" else 1
 
 
 def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> np.ndarray:
-    """The global indices of a length-``n`` axis owned by grid ``coords`` under ``axis``.
-
-    The set ``{i : INDXG2P(i) == coord}`` (length = ScaLAPACK ``NUMROC``); the owned
-    interior, no ghost cells. A replicated axis returns ``arange(n)`` on every rank.
-    """
+    """The global indices of a length-n axis owned by grid coords under axis (ScaLAPACK NUMROC)."""
     if axis.grid_dim is None:
         return np.arange(n, dtype=np.int64)
     parts = grid.dims[axis.grid_dim]
@@ -150,12 +100,7 @@ def local_shape(shape: Sequence[int], dist: ArrayDist, grid: Grid, rank: int) ->
 
 
 def scatter(a: np.ndarray, dist: ArrayDist, grid: Grid) -> List[np.ndarray]:
-    """Partition ``a`` into one contiguous local tile per rank (indexed by linear rank).
-
-    The reference the drivers' ``Scatterv`` must reproduce. A ``replicated`` array yields a
-    full copy per rank. Returns owned interiors (no halo), so :func:`gather` inverts it
-    exactly.
-    """
+    """Partition a into one contiguous local tile per rank; the reference the drivers' Scatterv reproduces."""
     if dist.replicated:
         return [a.copy() for _ in range(grid.nranks)]
     tiles: List[np.ndarray] = []
@@ -167,8 +112,7 @@ def scatter(a: np.ndarray, dist: ArrayDist, grid: Grid) -> List[np.ndarray]:
 
 def gather(tiles: Sequence[np.ndarray], dist: ArrayDist, grid: Grid, global_shape: Sequence[int],
            dtype: np.dtype) -> np.ndarray:
-    """Reconstruct the global array from per-rank owned-interior tiles, the exact inverse of
-    :func:`scatter`. For ``replicated``, rank 0's copy is authoritative."""
+    """Reconstruct the global array from per-rank owned-interior tiles, the exact inverse of scatter."""
     out = np.empty(tuple(global_shape), dtype=dtype)
     if dist.replicated:
         out[...] = tiles[0]
@@ -180,9 +124,7 @@ def gather(tiles: Sequence[np.ndarray], dist: ArrayDist, grid: Grid, global_shap
 
 
 def is_partition(shape: Sequence[int], dist: ArrayDist, grid: Grid) -> bool:
-    """``True`` iff the owned interiors tile the global array exactly once (disjoint +
-    complete). ``replicated`` is a partition by convention (rank 0 owns). The completeness
-    invariant the roundtrip rests on."""
+    """True iff the owned interiors tile the global array exactly once (disjoint + complete)."""
     if dist.replicated:
         return True
     seen = np.zeros(tuple(shape), dtype=np.int64)
@@ -193,9 +135,7 @@ def is_partition(shape: Sequence[int], dist: ArrayDist, grid: Grid) -> bool:
 
 
 def factor_grid(nranks: int, ndim: int) -> Grid:
-    """A near-square ``ndim``-dimensional grid whose dims multiply to ``nranks`` (the default
-    grid when the agent names none). Trailing dims absorb remaining factors so the product is
-    exact."""
+    """A near-square ndim-dimensional grid whose dims multiply to nranks (the default when unnamed)."""
     dims = [1] * max(1, ndim)
     remaining = nranks
     for i in range(len(dims)):
@@ -210,13 +150,7 @@ def factor_grid(nranks: int, ndim: int) -> Grid:
 
 
 def hypercube_grid(nranks: int, ndim: int) -> Grid:
-    """An EQUAL-EDGE ``ndim``-dimensional processor hypercube (``[P] * ndim`` with ``P**ndim ==
-    nranks``) -- the grid shape a block_cyclic/cyclic distribution uses.
-
-    Block-cyclic wrap is only symmetric across dimensions when every grid edge is the same size, so
-    the agent picks the cube's DIMENSIONALITY (a 1-D line, a 2-D square, a 3-D cube, ...) and the
-    edge follows from the rank count. Raises ``ValueError`` when ``nranks`` is not a perfect
-    ``ndim``-th power (no equal-edge cube exists), so the caller picks a different dimensionality."""
+    """An equal-edge ndim-dimensional processor hypercube ([P]*ndim, P**ndim == nranks); ValueError if none exists."""
     if ndim < 1:
         raise ValueError(f"hypercube ndim must be >= 1; got {ndim}")
     edge = round(nranks**(1.0 / ndim))
@@ -228,11 +162,8 @@ def hypercube_grid(nranks: int, ndim: int) -> Grid:
 
 
 def default_distribution(shape: Sequence[int], grid: Grid, block_size: int = 1) -> ArrayDist:
-    """The default N-D block-cyclic layout: each array axis dealt in ``block_size``-wide blocks
-    round-robin across the matching grid dimension. Axes beyond the grid rank are replicated; a
-    size-1 grid dim leaves its axis whole."""
-    # A split (size>1) grid dim with no array axis would replicate its extra coordinates,
-    # double-owning the array; require the grid's split dims to fit within ndim.
+    """The default N-D block-cyclic layout: each array axis dealt round-robin across the matching grid dim."""
+    # a split grid dim with no array axis would double-own the array; require dims to fit within ndim
     for gd in range(len(shape), len(grid.dims)):
         if grid.dims[gd] > 1:
             raise ValueError(f"grid {grid.dims} splits dimension {gd} beyond the array's "
@@ -253,27 +184,11 @@ def distribution_from_shapes(array_shapes: Dict[str, Sequence[str]],
                              *,
                              scheme: str = "block",
                              block_size: int = 1) -> dict:
-    """A submission-style ``distribution`` dict from an explicit ``{array: (shape tokens)}`` map:
-    over a 1-D size-``ranks`` grid, split the FIRST axis of each array whose token names one of
-    ``axis_symbols`` and replicate every other axis; omit an array with no decomposed axis (the
-    descriptor then replicates it).
-
-    The shape-map core of :func:`distribution_over_symbol`, split out so a kernel whose binding
-    shape is ``None`` (a legacy ``func_name: initialize`` kernel like the jacobi/heat stencils) can
-    declare its array ranks in the ``mpi:`` manifest ``arrays`` block and still get the default 1-D
-    block layout. Only the first matching axis is split (a 1-D grid drives one axis; binding two
-    array axes to it cannot tile the array).
-
-    ``block_size`` (ScaLAPACK ``MB``) is emitted ONLY for ``block_cyclic``, where the wrap width is
-    load-bearing; ``block``/``cyclic`` omit it. Without threading it a 1-D ``block_cyclic`` split
-    degraded to unit-block ``cyclic`` (the axis defaulted ``block_size`` to 1). Raises ``ValueError``
-    when no array carries a decomposed axis.
-    """
+    """A submission-style distribution dict: over a 1-D grid, split the first axis named by axis_symbols."""
     wanted = set(axis_symbols)
 
     def _split_axis() -> dict:
-        # a fresh dict per axis (never share one dict object across arrays); block_size is
-        # meaningful only for block_cyclic, so it is the only scheme that carries it.
+        # fresh dict per axis; block_size is meaningful (and included) only for block_cyclic
         ax = {"grid_dim": 0, "scheme": scheme}
         if scheme == "block_cyclic":
             ax["block_size"] = int(block_size)
@@ -291,9 +206,7 @@ def distribution_from_shapes(array_shapes: Dict[str, Sequence[str]],
 
 
 def _axis_to_dict(ax: AxisDist) -> dict:
-    """Serialize one :class:`AxisDist` back to a submission-style ``axes[]`` entry (the inverse of
-    :func:`_array_dist_from_layout`'s per-axis read), so a builder can hand the envelope/descriptor
-    the same dict shape an agent would submit."""
+    """Serialize one AxisDist back to a submission-style axes[] entry (inverse of _array_dist_from_layout)."""
     if ax.grid_dim is None:
         return {"grid_dim": None}
     return {"grid_dim": ax.grid_dim, "scheme": ax.scheme, "block_size": ax.block_size}
@@ -304,26 +217,13 @@ def blockcyclic_distribution_from_shapes(array_shapes: Dict[str, Sequence[str]],
                                          *,
                                          grid_ndim: int,
                                          block_size: int = 1) -> dict:
-    """A submission-style ``distribution`` dict that deals each array's leading ``grid_ndim`` axes
-    block-cyclic (ScaLAPACK ``MB``/``NB`` = ``block_size``) round-robin over an EQUAL-EDGE processor
-    hypercube; axes beyond the grid rank are replicated.
-
-    The N-D-block-cyclic analog of :func:`distribution_from_shapes`' 1-D block builder. The
-    descriptor math (:func:`owned_indices` / :meth:`Grid` / scatter / gather) already handles N-D
-    block-cyclic; this just serves it as the kernel DEFAULT so the no-op optimizer and the Harbor
-    starter agree. Uses :func:`hypercube_grid` (so the grid is a perfect ``grid_ndim``-th power of
-    ``ranks``) and :func:`default_distribution` (array-axis-d -> grid-dim-d). An array with fewer
-    than ``grid_ndim`` axes cannot carry the whole grid, so it is omitted here and the descriptor
-    replicates it. Raises ``ValueError`` when ``ranks`` is not a perfect ``grid_ndim``-th power (no
-    equal-edge cube) or no array can carry the grid.
-    """
+    """A submission-style distribution dict: leading grid_ndim axes block-cyclic over an equal-edge hypercube."""
     grid = hypercube_grid(int(ranks), int(grid_ndim))
     arrays: Dict[str, dict] = {}
     for name, shape in array_shapes.items():
         if len(shape) < grid_ndim:
             continue  # too few axes to bind every split grid dim; the descriptor replicates it
-        # default_distribution reads only the axis COUNT (not the extents), so a placeholder shape
-        # of the right rank yields the right per-axis AxisDist tuple for these symbolic tokens.
+        # default_distribution reads only the axis count, so a placeholder shape of the right rank works
         dist = default_distribution([2] * len(shape), grid, block_size=block_size)
         arrays[name] = {"axes": [_axis_to_dict(ax) for ax in dist.axes]}
     if not arrays:
@@ -338,19 +238,7 @@ def distribution_over_symbol(binding: "Binding",
                              *,
                              scheme: str = "block",
                              block_size: int = 1) -> dict:
-    """A submission-style ``distribution`` dict that splits, over a 1-D size-``ranks`` grid, each
-    array axis whose declarative binding shape token names one of ``axis_symbols``; every other
-    axis (and every array with no matching axis) is replicated.
-
-    The per-array / last-axis analog of :func:`default_distribution` for a kernel that decomposes
-    ONE logical dimension -- e.g. scaled_add over ``LEN_1D`` or cloudsc over ``klon`` (its last
-    axis) -- where the split axis differs per array, so the array-axis-d -> grid-dim-d default does
-    not apply. Reads each array's shape off the binding and defers to
-    :func:`distribution_from_shapes`; a kernel with no declarative shapes (``shape is None``)
-    contributes nothing here, so declare its array ranks in the ``mpi:`` block and call
-    :func:`distribution_from_shapes` instead. Raises ``ValueError`` when no array carries a
-    decomposed axis.
-    """
+    """A submission-style distribution dict splitting, over a 1-D grid, each array axis named by axis_symbols."""
     shapes = {p.name: p.shape for p in binding.pointers if p.shape is not None}
     return distribution_from_shapes(shapes, axis_symbols, ranks, scheme=scheme, block_size=block_size)
 
@@ -360,19 +248,7 @@ def distribution_for_kernel(mpi_block: Optional[dict],
                             ranks: int,
                             *,
                             scheme: str = "block") -> dict:
-    """The kernel's DEFAULT 1-D block distribution, from its ``mpi:`` decomposition block.
-
-    Reads the split axes from ``decomposition.axis`` and builds the layout from the manifest
-    ``arrays`` shape map when present (a legacy ``func_name: initialize`` stencil whose binding
-    shapes are ``None``), else from the binding's declarative shapes. This is the ONE builder both
-    the no-op MPI optimizer (what it submits) and the Harbor generator (the ``distribution.json``
-    starter it ships) call, so the served default and the generated starter can never drift.
-
-    A ``decomposition.scheme`` of ``block_cyclic``/``cyclic`` with ``grid_ndim > 1`` selects the
-    N-D block-cyclic builder over an equal-edge hypercube (``block_size`` = ScaLAPACK MB/NB); the
-    default is the 1-D ``block`` split. Raises ``ValueError`` when the block names no decomposed
-    axis / no array carries one (or, for block-cyclic, no equal-edge cube exists for ``ranks``).
-    """
+    """The kernel's default distribution from its mpi: decomposition block; the ONE builder every caller shares."""
     mpi = mpi_block or {}
     decomp = mpi.get("decomposition", {})
     axis_syms = list(decomp.get("axis", []))
@@ -386,26 +262,17 @@ def distribution_for_kernel(mpi_block: Optional[dict],
         # map or the binding's declarative shapes.
         shapes = manifest_shapes or {p.name: p.shape for p in binding.pointers if p.shape is not None}
         return blockcyclic_distribution_from_shapes(shapes, ranks, grid_ndim=grid_ndim, block_size=block_size)
-    # 1-D grid: thread block_size so a block_cyclic decomposition keeps its declared wrap width
-    # (else owned_indices reads the default 1 and it degrades to unit-block cyclic).
+    # 1-D grid: thread block_size, else a block_cyclic decomposition degrades to unit-block cyclic
     if manifest_shapes:
         return distribution_from_shapes(manifest_shapes, axis_syms, ranks, scheme=decomp_scheme, block_size=block_size)
     return distribution_over_symbol(binding, axis_syms, ranks, scheme=decomp_scheme, block_size=block_size)
 
 
-# --------------------------------------------------------------------------------------- #
-# Descriptor: the semantic layer over a raw ``Submission.distribution`` dict.
-#
-# The envelope checks only the SHAPE of the request; the Descriptor binds it to a concrete
-# kernel and replicates everything the agent did not distribute (and every scalar / length-1
-# array). Replicas live on every rank; the harness reads rank 0 on gather, and keeping them
-# coherent across ranks is the kernel's job.
-# --------------------------------------------------------------------------------------- #
+# Descriptor: the semantic layer over a raw Submission.distribution dict; replicates whatever wasn't named.
 
 
 def _array_dist_from_layout(layout: dict) -> ArrayDist:
-    """Resolve one array's ``{replicated | axes:[...]}`` layout dict into an :class:`ArrayDist`
-    (structural fields already validated by the envelope)."""
+    """Resolve one array's {replicated | axes:[...]} layout dict into an ArrayDist."""
     if layout.get("replicated"):
         return ArrayDist(replicated=True)
     axes: List[AxisDist] = []
@@ -418,11 +285,7 @@ def _array_dist_from_layout(layout: dict) -> ArrayDist:
 
 
 def _symbol_axes_from_binding(binding: "Binding") -> Dict[str, List[Tuple[str, int]]]:
-    """Derive ``{size_symbol: [(array, axis), ...]}`` from the binding's declarative array
-    shapes: a shape token equal to a size-symbol name ties that symbol to that array axis, so
-    a distributed axis makes the symbol's LOCAL value the local extent. Legacy kernels with no
-    ``init.shapes`` (``shape is None``) contribute nothing; their per-rank sizes come from an
-    explicit ``symbol_axes`` override. Candidates collected in binding (name-sorted) order."""
+    """Derive {size_symbol: [(array, axis), ...]} from the binding's declarative array shapes."""
     symbols = {a.name for a in binding.scalars if a.role == "symbol"}
     out: Dict[str, List[Tuple[str, int]]] = {}
     for p in binding.pointers:
@@ -436,24 +299,11 @@ def _symbol_axes_from_binding(binding: "Binding") -> Dict[str, List[Tuple[str, i
 
 @dataclass
 class Descriptor:
-    """The resolved MPI distribution for one ``(submission, binding)`` pair: the analog of a
-    ScaLAPACK ``DESCA`` descriptor, generalized to N-D and per-array.
-
-    Built once via :meth:`from_submission`; both drivers drive scatter/gather + per-rank size
-    scalars through it, so they cannot disagree on where an element lives.
-
-    :ivar grid: the processor grid (``grid.nranks == the run's fixed rank count``).
-    :ivar arrays: every binding array pointer -> its :class:`ArrayDist` (declared as the agent
-        asked; every other array replicated).
-    :ivar symbol_axes: ``{size_symbol: [(array, axis), ...]}``, the candidate axes a symbol
-        sizes; used by :meth:`local_size_scalars` to give each rank its LOCAL extent.
-    """
+    """The resolved MPI distribution for one (submission, binding) pair: an N-D, per-array ScaLAPACK DESCA analog."""
     grid: Grid
     arrays: Dict[str, ArrayDist]
     symbol_axes: Dict[str, List[Tuple[str, int]]] = field(default_factory=dict)
-    #: Per-array residency: ``"host"`` (default) or ``"device"``. The harness always scatters on the
-    #: host, then moves each ``"device"`` array's owned tile to the GPU (untimed H2D) before the
-    #: kernel and back after (D2H); ``"host"`` arrays stay host pointers. Independent per array.
+    #: Per-array residency ("host" default or "device"); harness scatters on host then moves device tiles (untimed).
     locations: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -464,18 +314,7 @@ class Descriptor:
                         *,
                         symbol_axes: Optional[Dict[str, Tuple[str, int]]] = None,
                         default_location: str = "host") -> "Descriptor":
-        """Resolve + semantically validate ``submission.distribution`` against ``binding`` and
-        the fixed ``ranks``.
-
-        Raises ``ValueError`` (a scored error) when: the grid's rank product != ``ranks``; a
-        named array is unknown or a scalar (scalars are replicated by value, never distributed);
-        or a declared axis count != the array's known dimensionality. Every array the agent did
-        not name (thus every scalar / length-1 array) resolves to ``replicated``.
-
-        ``symbol_axes`` (from the manifest ``mpi:`` block) pins ``{symbol: (array, axis)}`` for
-        legacy kernels whose shapes are not declarative; it overrides the shapes-derived
-        mapping for the named symbols.
-        """
+        """Resolve + semantically validate submission.distribution against binding and the fixed ranks."""
         dist = submission.distribution
         if dist is None:
             raise ValueError("submission carries no 'distribution'; not an MPI submission")
@@ -502,14 +341,13 @@ class Descriptor:
                 raise ValueError(f"distribution.arrays[{name!r}] declares {len(ad.axes)} axis/axes but "
                                  f"the array has {ndims[name]} dimension(s)")
             resolved[name] = ad
-        # Everything the agent did not distribute (and every scalar / length-1 array) replicates.
+        # everything the agent did not distribute (and every scalar / length-1 array) replicates
         for name in ptrs:
             resolved.setdefault(name, ArrayDist(replicated=True))
 
         if default_location not in ("host", "device"):
             raise ValueError(f"default_location must be 'host' or 'device'; got {default_location!r}")
-        # Per-array residency: each declared array's `location` (envelope-validated host|device),
-        # else the run-wide default (mpi.residency). Undeclared arrays take the default too.
+        # per-array residency: each declared array's `location`, else the run-wide default
         locations = {name: str(layout.get("location", default_location)) for name, layout in dist["arrays"].items()}
         for name in ptrs:
             locations.setdefault(name, default_location)
@@ -532,38 +370,22 @@ class Descriptor:
         return local_shape(global_shape, self.dist_for(name, global_shape), self.grid, rank)
 
     def scatter(self, name: str, a: np.ndarray) -> List[np.ndarray]:
-        """Partition array ``name`` into one owned-interior tile per rank (the reference the
-        driver's ``Scatterv`` reproduces)."""
+        """Partition array name into one owned-interior tile per rank (the driver's Scatterv reference)."""
         return scatter(a, self.dist_for(name, a.shape), self.grid)
 
     def gather(self, name: str, tiles: Sequence[np.ndarray], global_shape: Sequence[int],
                dtype: np.dtype) -> np.ndarray:
-        """Reconstruct global array ``name`` from per-rank owned-interior tiles, the exact
-        inverse of :meth:`scatter` (replicated => rank 0 authoritative)."""
+        """Reconstruct global array name from per-rank owned-interior tiles, the exact inverse of scatter."""
         return gather(tiles, self.dist_for(name, global_shape), self.grid, global_shape, dtype)
 
     def local_size_scalars(self, global_scalars: Dict[str, int], rank: int) -> Dict[str, int]:
-        """Each size symbol mapped to its value AT ``rank``: the LOCAL owned-interior extent
-        (ScaLAPACK ``NUMROC``) on a distributed axis, the GLOBAL value otherwise. Feeds
-        :func:`~optarena.harness.native_call._workspace_bytes` and the driver's local size
-        arguments, so a per-rank ``8*N`` scratch request scales with the local tile.
-
-        A symbol may size several axes (e.g. ``LEN_1D`` sizing both ``x`` and ``y``); that is fine
-        while every axis it sizes yields the SAME per-rank value -- all decomposed the same way, or
-        all replicated. But a symbol that sizes a DECOMPOSED axis AND a replicated (or differently
-        decomposed) one has no single well-defined per-rank value -- the ``N``-on-an-``NxN``-field
-        row/column coupling, where ``N`` must be the LOCAL row count and the GLOBAL column count at
-        once. That is a scored error (raised here): decompose it with DISTINCT symbols (a local row
-        extent, a global column extent), never a silently wrong "take the first decomposed axis"."""
+        """Each size symbol -> value at rank: local extent if distributed, global otherwise; raises if ambiguous."""
         coords = self.grid.coords_of(rank)
         out = dict(global_scalars)
         for sym, candidates in self.symbol_axes.items():
             if sym not in global_scalars:
                 continue
-            # Key each sized axis by what sets owned_indices' per-coord COUNT: a decomposed axis ->
-            # (grid_dim, effective_block_size); a replicated/whole/out-of-range axis -> GLOBAL extent.
-            # (Keying on raw scheme/block_size flagged count-equal layouts as conflicting.) More than
-            # one DISTINCT class => ambiguous (see docstring).
+            # key each sized axis by what sets its per-coord count; >1 distinct class => ambiguous (see raise below)
             signatures = set()
             local_val: Optional[int] = None
             for arr, axis in candidates:
@@ -585,12 +407,9 @@ class Descriptor:
         return out
 
     def device_pointer_indices(self, binding: "Binding") -> Tuple[int, ...]:
-        """The indices (in ``binding.pointers`` order) of the arrays the agent placed on the GPU
-        (``location == "device"``). The driver mirrors exactly these tiles in device memory (untimed
-        H2D/D2H); every other tile stays a host pointer. Empty => an all-host distribution."""
+        """Indices (in binding.pointers order) of the arrays the agent placed on the GPU; empty = all-host."""
         return tuple(i for i, p in enumerate(binding.pointers) if self.locations.get(p.name, "host") == "device")
 
     def any_device(self, binding: "Binding") -> bool:
-        """``True`` iff any array is GPU-resident -- the run needs a GPU build (nvcc/hipcc) + a
-        cuda/hip (or python+cupy) kernel, and the driver delivers device pointers."""
+        """True iff any array is GPU-resident (the run needs a GPU build + a device kernel)."""
         return bool(self.device_pointer_indices(binding))

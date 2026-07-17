@@ -1,10 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Unit tests for the container-launch factory (optarena/containers.py) -- argv assembly,
-backend resolution (apptainer | podman), and the Harbor provider name. Pure argv assertions:
-no real container, GPU, or LLM, so this runs on any CI runner.
-
-The bash<->Python golden parity test lives in test_container_launch_parity.py."""
+"""Unit tests for the container-launch factory: argv assembly, backend resolution, Harbor provider name."""
 import os
 import subprocess
 
@@ -15,8 +11,7 @@ from optarena import containers
 
 @pytest.fixture(autouse=True)
 def clean_backend_env(monkeypatch):
-    """Drop every ambient container/runtime var so a developer's shell cannot skew the
-    argv assertions; each test sets only what it needs."""
+    """Drop every ambient container/runtime var so a developer's shell cannot skew the argv assertions."""
     for key in list(os.environ):
         if key.startswith("OPTARENA_") or key in ("OLLAMA_HOST", "ANTHROPIC_API_KEY"):
             monkeypatch.delenv(key, raising=False)
@@ -40,8 +35,7 @@ def test_resolve_backend_precedence(monkeypatch):
 
 
 def test_resolve_backend_ignores_the_legacy_bash_var(monkeypatch):
-    # The decouple fix: $OPTARENA_CONTAINER_RUNTIME is the shell launcher's own knob and
-    # must NOT steer the Python path. Only $OPTARENA_RUNTIME_BACKEND is shared.
+    # $OPTARENA_CONTAINER_RUNTIME is the shell launcher's own knob; only $OPTARENA_RUNTIME_BACKEND is shared.
     monkeypatch.setenv("OPTARENA_CONTAINER_RUNTIME", "podman")
     assert containers.resolve_backend() == "apptainer"
 
@@ -115,25 +109,11 @@ def test_harbor_env_for_maps_and_raises():
         containers.harbor_env_for("podman")  # podman is launched directly, not via Harbor
 
 
-# --------------------------------------------------------------------------- #
-# install_apptainer retry. Both fetches are live-network (the installer, and the EPEL
-# listing it scrapes through the fedoraproject REDIRECTOR), so a single bad mirror used to
-# fail the whole install -- it reds the CI container job. subprocess/sleep are stubbed, so
-# these stay pure-unit: no network, no real apptainer.
-# --------------------------------------------------------------------------- #
+# --- install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit ---
 
 
 def _stub_installer(monkeypatch, bash_returncodes, curl_error=None):
-    """Stub curl+bash. ``bash_returncodes`` is consumed one per install attempt; ``curl_error``
-    (a returncode) instead makes the FIRST curl raise, as a failed download does. Records the
-    executable of every call plus every backoff delay slept.
-
-    ``containers.subprocess`` IS the one global subprocess module object, so patching ``run`` on it
-    hijacks EVERY caller in the process, not just install_apptainer's. Anything else that shells out
-    while the patch is live (a pytest plugin, coverage) would land in here and eat a
-    ``bash_returncodes`` entry -- an intermittent failure with no connection to the code under test.
-    So only the two argv this stub models are intercepted; everything else is delegated to the real
-    subprocess.run."""
+    """Stub curl+bash; only intercepts those two argv (patching subprocess.run is process-global)."""
     calls, sleeps, pending = [], [], list(bash_returncodes)
     real_run = subprocess.run
 
@@ -147,11 +127,7 @@ def _stub_installer(monkeypatch, bash_returncodes, curl_error=None):
             stdout = "" if failed else "#!/bin/bash\ntrue\n"
         else:
             returncode, stdout = pending.pop(0), ""
-        # Honour subprocess.run's REAL contract -- check=True is what turns a nonzero rc into
-        # CalledProcessError. Raising straight from the stub flag instead would leave the
-        # ``check=True`` at the curl call site untested, and dropping it there is a silent
-        # false-success: a failed curl returns nonzero with EMPTY stdout, the empty script pipes
-        # to bash, bash exits 0, and the install reports success having installed nothing.
+        # Honour subprocess.run's real contract: check=True turns a nonzero rc into CalledProcessError.
         if kwargs.get("check") and returncode != 0:
             raise subprocess.CalledProcessError(returncode, argv)
         return subprocess.CompletedProcess(argv, returncode, stdout=stdout)
@@ -162,11 +138,7 @@ def _stub_installer(monkeypatch, bash_returncodes, curl_error=None):
 
 
 def test_install_apptainer_retries_a_transient_mirror_failure(monkeypatch):
-    """A mirror blip is retried in a FRESH process -- the point of retrying at OUR level.
-
-    Upstream's own loop cannot recover from this: it caches the fetched listing in a shell
-    variable and skips the re-fetch while that is non-empty, so only a new process re-queries
-    the redirector and can land on a different mirror."""
+    """A mirror blip is retried in a FRESH process; upstream's own loop cannot recover from this."""
     calls, sleeps = _stub_installer(monkeypatch, bash_returncodes=[2, 2, 0])
     assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=4) == 0
     assert calls.count("bash") == 3, "each attempt must re-run the installer in a fresh process"
@@ -197,11 +169,7 @@ def test_install_apptainer_succeeds_first_try_without_sleeping(monkeypatch):
 
 
 def test_install_apptainer_clears_a_partial_tree_between_attempts(monkeypatch, tmp_path):
-    """A failed attempt's leftovers must be gone before the retry runs.
-
-    Reproduces the real CI failure: upstream hard-refuses when its own ``<prefix>/<arch>`` exists
-    (``fatal "$DEST/$ARCH is not empty"``, no force flag), so a mirror that dies mid-unpack makes
-    every retry fail on that check instead of re-fetching -- the retry is worthless without this."""
+    """A failed attempt's leftovers must be gone before the retry runs, or upstream hard-refuses on retry."""
     prefix = tmp_path / "apptainer"
     prefix.mkdir()
     seen_dirty = []
@@ -223,10 +191,7 @@ def test_install_apptainer_clears_a_partial_tree_between_attempts(monkeypatch, t
 
 
 def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path):
-    """Only paths the attempt created may be removed.
-
-    ``prefix`` defaults to ``~/.local`` and is caller-supplied, so scoping the clean to the
-    installer's own additions is a safety property, not tidiness."""
+    """Only paths the attempt created may be removed; `prefix` is caller-supplied (often ~/.local)."""
     prefix = tmp_path / "local"
     (prefix / "share").mkdir(parents=True)
     (prefix / "share" / "user_data.txt").write_text("do not delete me")

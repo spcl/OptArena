@@ -1,8 +1,4 @@
-"""CPU TVM impl of TSVC ``vif`` (masked store ``if b[i] > 0: a[i] = b[i]``).
-
-Branch → ``te.if_then_else`` predicate; the false arm keeps the old
-``a[i]`` so the unmodified lanes still validate.
-"""
+"""CPU TVM impl of TSVC ``vif`` (masked store ``if b[i] > 0: a[i] = b[i]``)."""
 import tvm
 from tvm import te
 

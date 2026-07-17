@@ -1,23 +1,4 @@
-"""CPU TVM impl of polybench ``covariance``.
-
-The numpy reference::
-
-    mean = np.mean(data, axis=0)          # per-column mean over the N rows
-    data -= mean
-    cov = np.zeros((M, M))
-    for i in range(M):
-        cov[i:M, i] = cov[i, i:M] = data[:, i] @ data[:, i:M] / (float_n - 1.0)
-    return cov
-
-i.e. ``cov[i, j] = (1/(float_n-1)) * sum_n (data[n,i]-mean[i])*(data[n,j]-mean[j])``,
-a symmetric ``(M, M)`` matrix. ``data`` is shape ``(N, M)``.
-
-We build this as multi-stage TIR: a per-column ``mean`` reduction over the
-N rows, then the symmetric covariance product (a second ``te.reduce_axis``
-over the N rows) that centres ``data`` on the fly. The numpy reference's
-diagonal/off-diagonal split is just the closed-form symmetric matrix, so a
-single ``te.compute`` over ``(M, M)`` covers it.
-"""
+"""CPU TVM polybench covariance: per-column mean reduction, then symmetric cov product centered on the fly."""
 import tvm
 from tvm import te
 
@@ -28,9 +9,7 @@ def build_primfunc(N, M, dtype):
     float_n = te.var("float_n", dtype=dtype)
     data = te.placeholder((N, M), name="data", dtype=dtype)
 
-    # Per-column mean over the N rows. A reduction must be the whole body of
-    # its compute (TVM forbids nesting a reduce inside arithmetic), so the
-    # /float_n scaling is a separate stage.
+    # Per-column mean over N rows; reduction is the whole compute body, so /float_n is a separate stage.
     rk = te.reduce_axis((0, N), name="rk")
     mean_s = te.compute((M, ), lambda j: te.sum(data[rk, j], axis=rk), name="mean_s")
     mean = te.compute((M, ), lambda j: mean_s[j] / float_n, name="mean")

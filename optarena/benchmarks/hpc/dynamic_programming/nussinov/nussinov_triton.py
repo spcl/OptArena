@@ -10,22 +10,17 @@ def nussinov_diagonal_kernel(table_ptr, stride_tm, stride_tn, seq_ptr, N, d: tl.
     i = pid
     j = i + d
 
-    # guard
     if (i < 0) | (j >= N):
         return
 
-    # best = 0
     best = tl.zeros((), dtype=tl.int32)
 
-    # left: table[i, j-1]
     if j - 1 >= 0:
         best = tl.maximum(best, tl.load(table_ptr + i * stride_tm + (j - 1) * stride_tn))
 
-    # down: table[i+1, j]
     if i + 1 < N:
         best = tl.maximum(best, tl.load(table_ptr + (i + 1) * stride_tm + j * stride_tn))
 
-    # diag: table[i+1, j-1] (+ match if i < j-1)
     if (i + 1 < N) & (j - 1 >= 0):
         tdiag = tl.load(table_ptr + (i + 1) * stride_tm + (j - 1) * stride_tn)
         if i < j - 1:
@@ -35,7 +30,6 @@ def nussinov_diagonal_kernel(table_ptr, stride_tm, stride_tn, seq_ptr, N, d: tl.
             tdiag = tdiag + matched
         best = tl.maximum(best, tdiag)
 
-    # split: max over k in (i+1 .. j-1) of table[i,k] + table[k+1, j]
     k = i + 1
     while k < j:
         left = tl.load(table_ptr + i * stride_tm + k * stride_tn)
@@ -43,7 +37,6 @@ def nussinov_diagonal_kernel(table_ptr, stride_tm, stride_tn, seq_ptr, N, d: tl.
         best = tl.maximum(best, left + right)
         k += 1
 
-    # store result
     tl.store(table_ptr + i * stride_tm + j * stride_tn, best)
 
 

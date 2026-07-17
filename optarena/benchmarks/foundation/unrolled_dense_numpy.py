@@ -1,10 +1,4 @@
-"""Foundation canonicalize kernel ``unrolled_dense`` (numpy reference).
-
-Ported by :mod:`scripts.port_canonicalize` from the
-``yakup-dev`` canonicalize test corpus. The numpy oracle is
-either the test's hand-written reference or the @dace.program
-body with dace annotations stripped.
-"""
+"""Foundation canonicalize kernel ``unrolled_dense`` (numpy reference)."""
 
 
 def unrolled_dense(a, b, alpha, N):

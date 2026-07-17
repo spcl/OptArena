@@ -12,9 +12,7 @@ class CupyFramework(Framework):
     """ A class for reading and processing framework information. """
 
     def __init__(self, fname: str):
-        """ Reads framework information.
-        :param fname: The framework name.
-        """
+        """Reads framework information."""
 
         super().__init__(fname)
 
@@ -30,8 +28,7 @@ class CupyFramework(Framework):
         return {'cpstream': cupy.cuda.stream}
 
     def copy_func(self) -> Callable:
-        """ Returns the copy-method that should be used 
-        for copying the benchmark arguments. """
+        """Returns the copy-method used for copying the benchmark arguments."""
         import cupy
         return cupy.asarray
 
@@ -40,13 +37,11 @@ class CupyFramework(Framework):
         cupy.cuda.stream.get_current_stream().synchronize()
 
     def after_setup(self) -> None:
-        """Sync after the fresh device copies so the H2D transfer is complete
-        before the timed bracket (replaces the sync appended to setup_str)."""
+        """Sync after the fresh device copies so the H2D transfer completes before timing."""
         self._sync()
 
     def post_call(self, result: Any) -> Any:
-        """Sync the stream so timing captures the async kernel (replaces the
-        sync appended to exec_str)."""
+        """Sync the stream so timing captures the async kernel."""
         self._sync()
         return result
 
@@ -64,8 +59,7 @@ class CupyFramework(Framework):
         timer.state[0].record()
 
     def stop_timer(self, timer: Timer) -> TimingResult:
-        """Record + sync the stop event; native = device-measured seconds,
-        python = host wall-clock (both bracketing the same call)."""
+        """Record + sync the stop event; native = device time, python = host wall-clock."""
         import cupy
         start_ev, stop_ev = timer.state
         stop_ev.record()

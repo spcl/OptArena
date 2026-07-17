@@ -1,17 +1,4 @@
-"""CPU TVM impl of TSVC ``s1244`` — two outputs with an anti-dependence::
-
-    for i in range(LEN_1D - 1):
-        a[i] = b[i] + c[i]*c[i] + b[i]*b[i] + c[i]
-        d[i] = a[i] + a[i + 1]          # a[i+1] is the OLD value
-
-``d[i]`` reads ``a[i+1]`` *before* iteration ``i+1`` overwrites it, so it
-sees the original ``a``, while ``a[i]`` in the same statement is the freshly
-written value. The TIR therefore reads ``a_in`` (old) for the ``i+1`` term
-and the new-``a`` stage for the ``i`` term. Both outputs leave their last
-element untouched (loop stops at LEN_1D-1), so the selects fall back to the
-input there. ``a_in[i+1]`` is index-clamped so the discarded boundary lane
-does not read out of bounds.
-"""
+"""CPU TVM impl of TSVC ``s1244`` — two outputs with an anti-dependence::"""
 import tvm
 from tvm import te
 

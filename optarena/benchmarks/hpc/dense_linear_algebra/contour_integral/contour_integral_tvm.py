@@ -1,30 +1,4 @@
-"""CPU TVM impl of ``contour_integral`` (complex contour-integral projector).
-
-The numpy reference, for each integration point ``z`` (there are
-``num_int_pts`` of them)::
-
-    Tz = sum_n z**(slab/2 - n) * Ham[n]        # (NR, NR) complex
-    X  = solve(Tz, Y)   (all presets have NR != NM, so never inv)
-    if abs(z) < 1: X = -X
-    P0 += X;  P1 += z * X
-    return P0, P1
-
-The expensive part -- the dense **complex linear solve** ``Tz X = Y``
-with ``NM`` right-hand sides -- is done by **Gaussian elimination with
-partial pivoting**: the per-pivot trailing-submatrix elimination and the
-back-substitution (the O(NR^2 * (NR+NM)) work) are autotunable TVM
-``te.compute`` PrimFuncs over real/imag planes, compiled once per shape
-and driven across the ``NR`` pivots in Python (cf. the ``lu`` / ``trisolv``
-TVM kernels). Pivot selection + row swaps are cheap host bookkeeping on
-the augmented matrix ``[Tz | Y]``. ``Tz`` itself is a compiled complex
-accumulation. The cheap rank-0 accumulation of ``P0`` / ``P1`` over the
-32 points is host numpy. Results match numpy within the harness's 1e-5
-relative-L2 tolerance (Gaussian elimination, well-conditioned random
-inputs); the entry returns ``(P0, P1)`` as numpy complex arrays.
-
-TVM cannot carry complex dtypes, so every complex value is split into a
-real and an imaginary plane throughout.
-"""
+"""CPU TVM contour_integral: per-point complex solve via TVM Gaussian elimination + back-substitution."""
 import numpy as np
 import tvm
 from tvm import te
@@ -35,10 +9,7 @@ from optarena.frameworks.tvm_build import TvmKernel, cpu_target, gpu_target, act
 
 
 def build_tz(NR, n_slab, fdtype):
-    """Tz[r,c] = sum_{n<n_slab} zz[n] * Ham[n,r,c]  (complex), planes out.
-
-    ``zz`` (the ``z**(slab/2-n)`` factors) arrive as 2*n_slab runtime
-    scalars (real then imag per slab)."""
+    """Tz[r,c] = sum_n zz[n]*Ham[n,r,c] (complex); zz arrives as 2*n_slab runtime scalars."""
     Ham_r = te.placeholder((n_slab, NR, NR), name="Ham_r", dtype=fdtype)
     Ham_i = te.placeholder((n_slab, NR, NR), name="Ham_i", dtype=fdtype)
     zzr = [te.var(f"zzr{n}", dtype=fdtype) for n in range(n_slab)]
@@ -63,11 +34,7 @@ def build_tz(NR, n_slab, fdtype):
 
 
 def build_elim(NR, W, fdtype):
-    """One Gaussian-elimination pivot step ``k`` on the augmented planes.
-
-    For rows ``r > k``: ``M[r,c] -= (M[r,k]/M[k,k]) * M[k,c]`` (complex).
-    Rows ``r <= k`` pass through. Pivot ``M[k,k]`` is the host-swapped max.
-    """
+    """One Gaussian-elimination pivot step k: M[r,c] -= (M[r,k]/M[k,k])*M[k,c] for r>k, else pass through."""
     k = te.var("k", dtype="int32")
     Mr = te.placeholder((NR, W), name="Mr", dtype=fdtype)
     Mi = te.placeholder((NR, W), name="Mi", dtype=fdtype)
@@ -97,14 +64,7 @@ def build_elim(NR, W, fdtype):
 
 
 def build_backsub(NR, NM, fdtype):
-    """Back-substitution row ``k``: fill ``X[k,:]`` from the reduced upper
-    system. ``X[k,c] = (M[k, NR+c] - sum_{j>k} M[k,j]*X[j,c]) / M[k,k]``.
-    Other rows of X pass through.
-
-    A te.sum cannot be nested inside other ops in one compute body, so the
-    reduction is its own stage (``dot_r`` / ``dot_i``), then the complex
-    divide (``xk_r`` / ``xk_i``), then the ``r == k`` select -- the
-    trisolv staged pattern, extended to complex."""
+    """Back-substitution row k: X[k,c] = (M[k,NR+c] - sum_{j>k} M[k,j]*X[j,c]) / M[k,k]; rest pass through."""
     W = NR + NM
     k = te.var("k", dtype="int32")
     Mr = te.placeholder((NR, W), name="Mr", dtype=fdtype)

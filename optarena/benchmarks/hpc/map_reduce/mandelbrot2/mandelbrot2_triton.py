@@ -82,10 +82,6 @@ def _kernel_mandelbrot(
 
 
 def mandelbrot(xmin, xmax, ymin, ymax, xn, yn, maxiter, horizon=2.0):
-    # Allocate output tensors
-    # X = torch.Tensor(np.linspace(xmin, xmax, xn, dtype=np.float64))
-    # Y = torch.Tensor(np.linspace(ymin, ymax, yn, dtype=np.float64))
-    # no need for the following as it can be computed inside the kernel: C = torch.Tensor(X + Y[:, None] * 1j)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     N = torch.zeros((yn, xn), dtype=torch.int64, device=device)
     Z_real = torch.zeros((yn, xn), dtype=torch.float64, device=device)

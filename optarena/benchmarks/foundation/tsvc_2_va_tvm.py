@@ -1,11 +1,4 @@
-"""CPU TVM impl of TSVC ``va`` (``a[i] = b[i]``).
-
-Template for the elementwise Foundation kernels: one ``te.compute`` over
-the full index space, autotuned via meta_schedule. The numpy reference
-mutates ``a`` in place; a TIR PrimFunc is functional, so we compute a
-fresh output tensor and return it (the harness validates the returned
-value against numpy's mutated ``a`` — see scripts/verify_tvm.py).
-"""
+"""CPU TVM impl of TSVC ``va`` (``a[i] = b[i]``)."""
 import tvm
 from tvm import te
 

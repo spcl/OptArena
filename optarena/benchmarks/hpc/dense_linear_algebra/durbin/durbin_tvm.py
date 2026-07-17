@@ -1,30 +1,4 @@
-"""CPU TVM implementation of durbin (Levinson-Durbin / Toeplitz solve).
-
-The numpy reference is the scalar Levinson recursion::
-
-    y = empty(N); alpha = -r[0]; beta = 1.0; y[0] = -r[0]
-    for k in range(1, N):
-        beta *= 1.0 - alpha*alpha
-        alpha = -(r[k] + dot(flip(r[:k]), y[:k])) / beta
-        y[:k] += alpha * flip(y[:k])
-        y[k] = alpha
-    return y
-
-``alpha`` and ``beta`` are scalars carried across iterations; ``y`` is the
-length-N reflection-coefficient vector. The two O(k) array operations are
-the reflection dot product ``s = sum_{m<k} r[k-1-m] * y[m]`` and the
-vector update ``y[m] = y_old[m] + alpha * y_old[k-1-m]`` (note: the flip
-reads the OLD y, so the update reads a separate input buffer). The scalar
-recurrence (``beta``, ``alpha``) is cheap and done in Python.
-
-Two fixed full-size PrimFuncs, each compiled once and driven over k:
-
-* ``dot`` step (runtime ``k``)            -> scalar reflection inner product;
-* ``update`` step (runtime ``k``, ``alpha``) -> the new y buffer.
-
-``r`` is also read in Python (a numpy copy of the constant input) for the
-scalar ``r[k]`` term.
-"""
+"""CPU TVM durbin (Levinson-Durbin): fixed dot/update PrimFuncs driven over k; alpha/beta recur in Python."""
 import numpy as np
 
 import tvm
@@ -50,11 +24,7 @@ def build_primfunc(n, dtype):
 
 
 def build_update_primfunc(n, dtype):
-    """y update: y[m] = y_old[m] + alpha*y_old[k-1-m] for m<k; y[k]=alpha.
-
-    Runtime scalars ``k`` (int) and ``alpha`` (float). All entries m>k are
-    copied through unchanged.
-    """
+    """y update: y[m] = y_old[m] + alpha*y_old[k-1-m] for m<k; y[k]=alpha; m>k copied through unchanged."""
     k = te.var("k", dtype="int32")
     alpha = te.var("alpha", dtype=dtype)
     y = te.placeholder((n, ), name="y", dtype=dtype)

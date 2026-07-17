@@ -1,17 +1,4 @@
-"""Single-command entry point for emitting one kernel's C / C++ / Pluto files.
-
-Canonical front door is ``numpyto --target {c,polly,pluto}`` (numpyto_common.cli);
-this per-package CLI is the backend that driver dispatches to.
-
-Usage::
-
-    numpyto_c emit \\
-        --kernel optarena/benchmarks/foundation/s111/s111_numpy.py \\
-        --bench-info bench_info/s111.json \\
-        --out optarena/benchmarks/foundation/s111/cpp_backend
-
-Idempotent; overwrites previously-emitted files.
-"""
+"""CLI entry point for emitting one kernel's C / C++ / Pluto files; backend for ``numpyto --target {c,polly,pluto}``."""
 
 import argparse
 import pathlib
@@ -31,24 +18,16 @@ def cmd_emit(args: argparse.Namespace) -> int:
     kir = lower(kir)
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
-    # Derive the kernel name from the input stem (independent of bench_info's
-    # ``short_name`` abbreviation or a legacy ``func_name = "kernel"``).
+    # Kernel name from the input stem, independent of bench_info's short_name.
     short = args.kernel.stem.removesuffix("_numpy")
-    # Precision is applied ON THE IR (float/complex dtypes only); every emitter
-    # then reads each array's dtype -- so the emitted source is precision-
-    # MONOMORPHIC and the file/symbol carries its fp tag.
+    # Precision applied on the IR so the emitted source is precision-monomorphic.
     if args.precision:
         kir = apply_precision(kir, args.precision)
-    # Canonical native name: <short>[_<sparse>]_<fptype> for BOTH the file and
-    # the exported symbol (no ``_auto``, no per-compiler suffix -- each compiler
-    # variant builds its own lib<short>_<framework>.so from this one source).
+    # Canonical native name: <short>[_<sparse>]_<fptype>, for both file and symbol.
     base = native_base(short, precision=args.precision, sparse=args.config)
     src = f"{short}_numpy.py"
     if args.parallel:
-        # OpenMP variant: a drop-in ``<base>_omp.{c,cpp}`` with the SAME symbol as the
-        # sequential emit (compile with ``-fopenmp``). No Pluto here (Pluto is the
-        # sequential polyhedral track). ``emit_c_omp`` raises UnsupportedParallelError
-        # for a kernel with no sound parallel form -- propagated as a nonzero exit.
+        # OpenMP variant, same symbol as sequential; no Pluto (sequential-only track).
         write_generated(out / f"{base}_omp.c", emit_c_omp(kir, fn_name=base), line_comment="// ", source=src)
         write_generated(out / f"{base}_omp.cpp", emit_cpp_omp(kir, fn_name=base), line_comment="// ", source=src)
         emit_binding(kir, out / f"{base}_omp_binding.json", base_name=base)
@@ -59,8 +38,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
     write_generated(out / f"{base}_pluto_input.c", emit_pluto(kir, fn_name=base),
                     line_comment="// ", source=src)
     emit_binding(kir, out / f"{base}_binding.json", base_name=base)
-    # Pluto's VLA-param signature reorders args (size symbols first), so it needs its
-    # own binding for the harness to marshal correctly (see emit_pluto_binding).
+    # Pluto's VLA-param signature reorders args (symbols first), so it needs its own binding.
     emit_pluto_binding(kir, out / f"{base}_pluto_binding.json", base_name=base)
     print(f"numpyto_c: emitted {base}.{{c,cpp}} + {base}_pluto_input.c + {base}_binding.json")
     return 0

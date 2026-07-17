@@ -1,12 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Local-density-approximation exchange-correlation potential and energy on a DFT charge
-# grid: Slater exchange plus Perdew-Zunger parametrized Ceperley-Alder correlation. A
-# pointwise map over the grid (density -> V_xc) fused with the reduction that integrates
-# the XC energy E_xc = integral eps_xc(rho) rho d^3r. The correlation is piecewise in the
-# Wigner-Seitz radius rs (the high-density rs<1 log form vs the rs>=1 Pade form) -- the
-# data-dependent branch that makes this more than a single map.
+# LDA XC potential/energy: Slater exchange + Perdew-Zunger correlation (piecewise in rs); fused map+reduce.
 #
 # Method / attribution (Hartree atomic units):
 #   - Kohn & Sham, Phys. Rev. 140:A1133 (1965), doi:10.1103/PhysRev.140.A1133
@@ -24,7 +19,7 @@ _A, _B, _C, _D = 0.0311, -0.0480, 0.0020, -0.0116  # Perdew-Zunger correlation, 
 
 def kernel(dvol, rho, vxc, exc):
 
-    n = np.maximum(rho, 1.0e-12)  # clamp the density away from zero
+    n = np.maximum(rho, 1.0e-12)
     rs = (3.0 / (4.0 * np.pi * n))**(1.0 / 3.0)
     n13 = n**(1.0 / 3.0)
     # Slater exchange: energy density eps_x and potential V_x.

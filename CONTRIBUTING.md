@@ -3,14 +3,14 @@
 The contributor guide lives in the **[README](README.md)** — it is the single
 document. Jump to:
 
-- [**Add a benchmark**](README.md#contributing-add-a-benchmark) — the two files you
+- [**Add a benchmark**](docs/CONTRIBUTING.md#add-a-benchmark) — the two files you
   write; the C/C++/Fortran/… baselines are generated for you.
-- [**Add a container**](README.md#contributing-add-a-container) — one Dockerfile +
+- [**Add a container**](docs/CONTRIBUTING.md#add-a-container) — one Dockerfile +
   Apptainer `.def` per hardware (cpu/nvidia/amd).
-- [**Add a language**](README.md#contributing-add-a-language) — two edits (incl. a
+- [**Add a language**](docs/CONTRIBUTING.md#add-a-language) — two edits (incl. a
   Rust example).
 - [**The optimizer loop & scoring**](README.md#the-optimizer-loop--scoring) and
-  [**how the prompt is generated**](README.md#how-the-prompt-is-generated).
+  [**how the prompt is generated**](docs/PROMPTS.md).
 
 Normative reference specs:
 

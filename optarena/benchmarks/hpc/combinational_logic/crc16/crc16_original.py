@@ -9,9 +9,7 @@ import numpy as np
 
 # Adapted from https://gist.github.com/oysstu/68072c44c02879a2abf94ef350d1c7c6
 def crc16(data, poly=0x8408):
-    '''
-    CRC-16-CCITT Algorithm
-    '''
+    '''CRC-16-CCITT algorithm.'''
     crc = 0xFFFF
     for b in data:
         cur_byte = 0xFF & b

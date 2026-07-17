@@ -1,9 +1,4 @@
-"""Triton sparse SpMM: C = alpha*(A @ B) + beta*C, A sparse (CSR) @ dense B.
-
-Per-(row, col-tile) gather-reduction over A's row nnz, alpha/beta scaling
-folded into the kernel. Triton runtime scalars are fp32, so this kernel is
-exercised at float32 precision (Triton's natural precision for these ops).
-"""
+"""Triton sparse SpMM: C = alpha*(A @ B) + beta*C; per-(row, col-tile) gather-reduction, fp32 only."""
 import numpy as np
 import torch
 import triton

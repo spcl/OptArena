@@ -1,31 +1,4 @@
-"""Shared loader for the native (C / C++ / Fortran) benchmark backends.
-
-Two paths share this module:
-
-* **Legacy nanobind wrappers** (a handful of hand-written HPC/ML kernels) call
-  :func:`load_backend_module` to import a compiled ``<bench>_<backend>`` nanobind
-  module from ``cpp_backend/build*``.
-* **Auto-generated native kernels** call :func:`wrap_kernel`, which builds +
-  dlopens ``lib<short>_<framework>.so`` from the kernel's per-precision sources
-  (:func:`load_backend_so`) and returns a callable that maps numpy args to ctypes
-  and calls the C-ABI symbol. Timing is the judge's job -- it wraps this call (or
-  the Python call) with its own wall-clock bracket -- so the kernel carries no
-  timing side-channel.
-
-  Those sources are generated on demand from ``<short>_numpy.py`` (the repo
-  commits none of them) by :mod:`optarena.autogen`, driven by the framework
-  loader -- NOT here: generation is addressed by registry key, and this layer
-  only ever holds a native base (see :func:`_ensure_built`).
-
-Native files and symbols share ONE canonical name -- ``<short>[_<sparse>]_<fptype>``
-(see :func:`numpyto_common.naming.native_base`). There is no ``_auto`` suffix and
-no per-compiler suffix: compiler variation (cc / llvm / Polly / Pluto) is a set of
-build flags, and each framework builds its own ``lib<short>_<framework>.so``, so
-the bare symbol is unambiguous within each library.
-
-For sparse benchmarks, :func:`split_csr` extracts (data, indices, indptr) from a
-``scipy.sparse`` matrix preserving the harness datatype.
-"""
+"""Shared loader for the native (C / C++ / Fortran) benchmark backends."""
 
 import ctypes
 import importlib
@@ -35,12 +8,7 @@ import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-#: framework name -> the source language it compiles. One ``.so`` per framework;
-#: the compiler is chosen per language by :mod:`optarena.languages` (gcc for c,
-#: clang for cpp, gfortran for fortran). Polyhedral variants (Polly/Pluto) are
-#: flag presets on the SAME generated C++ source -- they reuse the cpp language
-#: but force the clang compiler + their flag delta (see FRAMEWORK_COMPILER /
-#: FRAMEWORK_FLAGS).
+#: framework -> source language it compiles; Polly/Pluto are flag presets on the same cpp source.
 FRAMEWORK_LANG: Dict[str, str] = {
     "cc": "c",
     "cc_autopar": "c",
@@ -52,19 +20,7 @@ FRAMEWORK_LANG: Dict[str, str] = {
     "pluto": "cpp",
 }
 
-#: framework -> a forced ``compilers.yaml`` block (overrides the per-language
-#: default, which for ``cpp`` is g++).
-#:
-#: EVERY cpp framework must name its compiler here. ``llvm`` is "C++ (clang)" in
-#: FRAMEWORK_META and was omitted, so it silently took the g++ default and every ``llvm``
-#: measurement in the suite was really gcc: the LLVM-vs-GCC axis the flavor exists to
-#: provide collapsed into C-vs-C++ of the SAME compiler, under a label saying otherwise.
-#:
-#: Only ``polly`` is clang-REQUIRED (Polly is an LLVM pass, so the flag has no g++
-#: equivalent). ``pluto`` is a CHOICE, not a requirement: polycc transforms the source
-#: offline and emits ordinary C++ with OpenMP pragmas, which any compiler can build --
-#: it is pinned to clang++ only so the Pluto and Polly columns differ by the polyhedral
-#: toolchain rather than by the compiler underneath.
+#: framework -> forced compiler override; every cpp framework must be listed or it silently falls back to g++.
 FRAMEWORK_COMPILER: Dict[str, str] = {
     "flang": "flang",
     "llvm": "clangpp",
@@ -72,11 +28,7 @@ FRAMEWORK_COMPILER: Dict[str, str] = {
     "pluto": "clangpp",
 }
 
-#: framework -> the name of the flag-preset constant in :mod:`optarena.flags`
-#: appended to the baseline (resolved via ``vars(flags)`` -- the no-literal rule).
-#: Polly = LLVM Polly auto-parallelize; Pluto = the OpenMP delta its tiled output
-#: needs (the source is the same reference C++; true Pluto pre-processing would
-#: be a polycc pass, intentionally out of scope for the flag preset).
+#: framework -> flag-preset constant name in optarena.flags, appended to the baseline flags.
 FRAMEWORK_FLAGS: Dict[str, str] = {
     "cc_autopar": "GCC_AUTOPAR",
     "fortran_autopar": "GCC_AUTOPAR",
@@ -96,11 +48,7 @@ def _backend_build_dirs(backend_dir: pathlib.Path):
 
 
 def load_backend_module(wrapper_file: str, bench: str, backend: str):
-    """Import a compiled ``<bench>_<backend>`` nanobind module (hand HPC kernels).
-
-    :raises ImportError: if the module isn't on disk; the message lists the
-        candidate build directories so users know where to run cmake.
-    """
+    """Import a compiled ``<bench>_<backend>`` nanobind module (hand HPC kernels)."""
     module_name = f"{bench}_{backend}"
     backend_dir = pathlib.Path(wrapper_file).with_name("cpp_backend")
     candidates = list(_backend_build_dirs(backend_dir))
@@ -119,8 +67,7 @@ def load_backend_module(wrapper_file: str, bench: str, backend: str):
 
 _SO_CACHE: Dict[pathlib.Path, ctypes.CDLL] = {}
 
-#: numpy dtype NAME -> fp tag in the canonical symbol (mirror of
-#: numpyto_common.naming, kept tiny here so the runtime has no translator dep).
+#: numpy dtype name -> fp tag in the canonical symbol.
 _FPTYPE = {"float64": "fp64", "float32": "fp32", "float16": "fp16"}
 
 
@@ -135,13 +82,7 @@ def _native_sources(cpp_backend: pathlib.Path, short: str, lang: str) -> List[pa
 
 
 def _framework_extra_flags(framework: str) -> str:
-    """The framework's flag-preset delta (autopar / Polly / Pluto), or ``""``.
-
-    ``{n}`` is substituted with the core count, as :func:`flags.compose_autopar` does on the
-    mode-driven route: GCC_AUTOPAR is ``-ftree-parallelize-loops={n} ...``, and gcc rejects
-    the literal placeholder. POLLY_PAR / PLUTO_PAR carry no field, so format() is a no-op
-    there rather than a special case.
-    """
+    """The framework's flag-preset delta (autopar / Polly / Pluto), or ``""``."""
     if framework not in FRAMEWORK_FLAGS:
         return ""
     from optarena import flags
@@ -149,15 +90,7 @@ def _framework_extra_flags(framework: str) -> str:
 
 
 def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> pathlib.Path:
-    """Lazily compile + link ``lib<short>_<framework>.so`` from the framework's
-    per-precision sources (matrix flags from ``compilers.yaml`` -> ``flags.py``).
-
-    Sources are NOT generated here: ``short`` is a native base (``adist``,
-    ``spmv_csr``), which is neither a registry key nor recoverable into one, so
-    this layer cannot address a manifest. Generation belongs to the framework
-    loader, which holds the key (``NativeFramework.implementations`` ->
-    ``autogen.ensure_native``) and raises there with the emitter's own message.
-    """
+    """Lazily compile + link ``lib<short>_<framework>.so`` from the framework's per-precision sources."""
     lang = FRAMEWORK_LANG[framework]
     so_name = f"lib{short}_{framework}.so"
     bd = cpp_backend / "build"
@@ -167,9 +100,7 @@ def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> path
     from optarena.languages import build_kernel_lib_commands
     sources: List[Tuple[str,
                         pathlib.Path]] = [(lang, p) for p in _native_sources(cpp_backend, short, lang) if p.exists()]
-    # Checked BEFORE the build dir is created: mkdir under a cpp_backend/ that the
-    # emitter never wrote reports a missing directory, burying the real cause (no
-    # sources) under a path that was only ever a symptom.
+    # Checked before mkdir, else a missing build dir masks the real "no sources" cause.
     if not sources:
         raise FileNotFoundError(f"{short}: no {lang} sources under {cpp_backend} to build "
                                 f"{so_name} (generation from {short}_numpy.py did not run or failed)")
@@ -185,24 +116,7 @@ def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> path
 
 
 def opt_report_text(cpp_backend: pathlib.Path, short: str, framework: str) -> Optional[str]:
-    """The compiler's vectorization report for ``short`` built as ``framework``, or
-    ``None`` when there is none to give.
-
-    Compiles the SAME sources with the SAME resolved flags the timed build uses
-    (:func:`optarena.languages.build_kernel_lib_commands`, so baseline + Polly/Pluto
-    preset come from the one flag matrix) plus that compiler's report flags, and
-    returns what it wrote to stderr.
-
-    This is a SEPARATE, compile-only run into ``build_dir``: the link step is
-    dropped and the objects land beside the report, so ``lib<short>_<framework>.so``
-    -- the library that was timed -- is neither rebuilt nor replaced. The report
-    therefore describes the timed build's flags without the timed build ever being
-    re-made under different ones.
-
-    ``None`` when the compiler has no ``report_ref`` in ``compilers.yaml``, when the
-    sources were never emitted, or when the report compile fails -- a report is a
-    diagnostic and must never break the run that produced the measurement.
-    """
+    """The compiler's vectorization report for ``short`` built as ``framework``, or ``None`` when there is none."""
     from optarena.languages import build_kernel_lib_commands, report_flags
     lang = FRAMEWORK_LANG[framework]
     compiler = FRAMEWORK_COMPILER.get(framework)
@@ -216,9 +130,7 @@ def opt_report_text(cpp_backend: pathlib.Path, short: str, framework: str) -> Op
     build_dir = cpp_backend / "build" / f"opt-report-{framework}"
     build_dir.mkdir(parents=True, exist_ok=True)
     extra = f"{_framework_extra_flags(framework)} {rflags}".strip()
-    # [:-1] drops the LINK command: build_kernel_lib_commands' last argv is the one
-    # that produces the .so, and linking here would write a second copy of the timed
-    # library. The .so path handed in is consumed only by that dropped step.
+    # [:-1] drops the LINK step -- linking here would write a second copy of the timed .so.
     cmds = build_kernel_lib_commands(sources,
                                      build_dir / f"lib{short}_{framework}.so",
                                      build_dir=build_dir,
@@ -234,12 +146,7 @@ def opt_report_text(cpp_backend: pathlib.Path, short: str, framework: str) -> Op
 
 
 def built_so(cpp_backend: pathlib.Path, short: str, framework: str) -> Optional[pathlib.Path]:
-    """The ``lib<short>_<framework>.so`` this framework builds, if it is ON DISK.
-
-    Never builds: this exists to INSPECT the artifact a timed run already made
-    (:meth:`Framework.lowered_code`), so a missing library means "nothing ran yet",
-    which is ``None`` -- not a reason to compile something no one timed.
-    """
+    """The ``lib<short>_<framework>.so`` this framework builds, if it is ON DISK."""
     so = cpp_backend / "build" / f"lib{short}_{framework}.so"
     return so if so.is_file() else None
 
@@ -265,18 +172,7 @@ def _ctype_for(dtype):
 
 
 def wrap_kernel(wrapper_file: str, short: str, framework: str) -> Callable:
-    """Build a Python callable for a native ``framework`` build of ``short``.
-
-    The build + ``dlopen`` are deferred to the first call (so importing the
-    wrapper to discover frameworks stays cheap). The symbol picked per call is
-    ``<short>_<fptype>`` for the dominant fp dtype of the arguments.
-
-    :param wrapper_file: ``__file__`` of the ``<short>_cpp.py`` wrapper.
-    :param short: kernel short name (the symbol stem).
-    :param framework: one of :data:`FRAMEWORK_LANG` -- selects the source
-        language + the compiler/flag preset; one ``lib<short>_<framework>.so``
-        per framework.
-    """
+    """Build a Python callable for a native ``framework`` build of ``short``."""
     import numpy as np
     if framework not in FRAMEWORK_LANG:
         raise ValueError(f"unknown native framework {framework!r}; "
@@ -286,10 +182,7 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str) -> Callable:
     from optarena.dtypes import ctype_for as _registry_ctype
     _int_ctype = _registry_ctype("int")  # canonical symbol type (int64)
 
-    # ``fcty`` is the C float width of the CHOSEN monomorphic symbol (c_float for
-    # the fp32 build, c_double for fp64). A floating scalar carries no dtype of its
-    # own, so it must be marshalled at the symbol's width -- passing a c_double to a
-    # ``float alpha`` param (fp32 kernel) mis-marshals it to garbage.
+    # fcty is the chosen symbol's C float width; a bare float must be marshalled at that width.
     def _ctype_arg(a, fcty):
         if isinstance(a, np.ndarray):
             return ctypes.POINTER(_ctype_for(a.dtype))
@@ -342,11 +235,7 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str) -> Callable:
 
 
 def split_csr(A, *, dtype=None, index_dtype=None):
-    """Extract (data, indices, indptr) C-contiguous buffers from a sparse A.
-
-    :param dtype: float element dtype for ``A.data`` (default: keep ``A.data.dtype``).
-    :param index_dtype: integer dtype for indices/indptr (default ``np.int64``).
-    """
+    """Extract (data, indices, indptr) C-contiguous buffers from a sparse A."""
     import numpy as np
     A = A.tocsr()
     if dtype is None:

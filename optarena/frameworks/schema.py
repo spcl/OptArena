@@ -1,24 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Typed SQLModel schema for the framework-benchmark ``results`` table.
-
-The model IS the schema: one ``class Result(SQLModel, table=True)`` with typed,
-``Optional``-nullable fields replaces the parallel hand-written ``CREATE TABLE`` /
-``INSERT`` string pair that used to live in :mod:`optarena.frameworks.utilities`
-and could drift out of sync. ``SQLModel.metadata.create_all`` derives the DDL and a
-``Session`` writes rows, both from this single definition.
-
-The perf record is deliberately lean -- who/what produced a runtime and the runtime
-itself, nothing more: benchmark, framework, agent, an optional content-addressed
-prompt hash, preset, the two runtimes (host ``time`` and framework-internal
-``native_time``, both milliseconds), the validation verdict, datatype, variant, and
-the ``execution`` provenance (``native`` vs ``container`` -- so a containerized number
-is never compared against a native one unknowingly).
-``timestamp`` groups the rows of one run; ``id`` is the rowid. The old
-provenance-only columns (kind / dwarf / version / details / mode / cpu) were pruned:
-no reader consumed them (kind/dwarf/version are dropped verbatim by the heatmap plot,
-mode was always the constant ``"main"``, cpu had no reader).
-"""
+"""Typed SQLModel schema for the framework-benchmark ``results`` table: the single Result model derives
+both the DDL (``create_all``) and row inserts, replacing the old hand-written CREATE TABLE/INSERT pair."""
 from typing import Optional
 
 from sqlmodel import Field, SQLModel, create_engine
@@ -46,14 +29,8 @@ class Result(SQLModel, table=True):
 
 
 def results_engine(db_path: str):
-    """A SQLModel engine for the results DB at ``db_path``, with the schema ensured.
-
-    ``create_all`` is idempotent (``CREATE TABLE IF NOT EXISTS``) so this is safe to
-    call on every run. ``check_same_thread=False`` matches the historic reuse of a
-    single :func:`sqlite3.connect` handle across the run. Note: ``create_all`` only
-    CREATEs a missing table -- it does not ALTER an existing legacy ``results`` table,
-    so a DB written under the old (wider) schema is not auto-migrated to the pruned one.
-    """
+    """A SQLModel engine for the results DB at ``db_path``, with the schema ensured (idempotent
+    CREATE TABLE IF NOT EXISTS; does not ALTER an existing legacy table to the pruned schema)."""
     engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
     return engine

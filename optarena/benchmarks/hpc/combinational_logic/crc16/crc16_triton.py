@@ -52,8 +52,7 @@ def crc16_naive(data, poly=0x8408):
 
 
 def crc16(data, poly=0x8408, crc=None):
-    """``crc`` is a (1,) output buffer; the checksum is written into
-    ``crc[0]`` in place."""
+    """crc is a (1,) output buffer; checksum written into crc[0] in place."""
     # return crc16_naive(data, poly)
     lookup_table = torch.empty(256, dtype=torch.uint16)
     out = torch.empty(1, dtype=torch.uint16)

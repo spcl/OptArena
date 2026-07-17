@@ -1,10 +1,7 @@
 # Copyright 2026 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Cluster-pair inputs for the GROMACS NBNxM 4x4 kernel. The input generator stays
-# in the numpy reference: the kernel's own constants and the standalone extraction
-# tests (tests/test_gromacs_nbnxm.py) share it, so it has one home there and this
-# module imports it rather than keeping a second copy.
+# Cluster-pair inputs for the GROMACS NBNxM 4x4 kernel; imports from the numpy reference to avoid a second copy.
 
 import numpy as np
 
@@ -52,8 +49,7 @@ def initialize(
         table_size=table_size,
         include_exclusions=bool(include_exclusions),
     )
-    # The force / virial outputs are passed-in buffers (agentbench ABI): allocate them
-    # zeroed here so the harness has buffers for the in-place kernel.
+    # force/virial outputs are passed-in buffers (agentbench ABI); allocate them zeroed here.
     f = np.zeros((x.shape[0], 3), dtype=np.float64)
     fshift = np.zeros_like(shift_vec, dtype=np.float64)
     return (

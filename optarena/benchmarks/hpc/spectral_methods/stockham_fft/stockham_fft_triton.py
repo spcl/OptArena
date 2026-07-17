@@ -79,8 +79,7 @@ def _kernel(
 
 
 def stockham_fft(_, R, K, x, y):
-    # Move input x to output y
-    # to avoid overwriting the input.
+    # Move input x to output y to avoid overwriting the input.
     y[:] = x[:]
     y0 = x.clone()
 

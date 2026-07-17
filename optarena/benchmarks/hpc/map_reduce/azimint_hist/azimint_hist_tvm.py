@@ -1,30 +1,4 @@
-"""TVM impl of ``azimint_hist`` (histogram-weighted azimuthal mean).
-
-One file for both backends: ``build_primfunc`` (the TIR) and ``_run`` (the host
-wrapper) are shared; ``active_kernel`` picks the CPU (``llvm``) or GPU (``cuda``)
-:class:`TvmKernel` for whichever framework drives the run, so the numerics are
-identical and only the target / device differ.
-
-Reference (numpy)::
-
-    histu = np.histogram(radius, npt)[0]
-    histw = np.histogram(radius, npt, weights=data)[0]
-    return histw / histu
-
-``np.histogram`` with an integer bin count spans ``[radius.min(),
-radius.max()]`` with ``npt`` uniform bins; bin ``i`` is the half-open
-interval ``[edge[i], edge[i+1])`` except the final bin, which is closed.
-
-The bin EDGES are precomputed on the host with ``np.histogram_bin_edges``
-(exactly numpy's edges) and passed in as a tensor, so the kernel does only
-*comparisons* against fixed edge values — no in-kernel edge arithmetic. That
-keeps the membership test bit-identical on CPU and GPU (computing the edges
-in TIR let GPU FMA shift them by a ULP, mis-binning boundary points) and
-matches numpy's binning exactly.
-
-One paired reduction yields, per bin, the weighted sum (``histw``) and the
-count (``histu``); the ``histw / histu`` divide is the cheap host step.
-"""
+"""CPU/GPU TVM impl of azimint_hist (histogram-weighted azimuthal mean) via precomputed bin edges."""
 import numpy as np
 import tvm
 from tvm import te
@@ -63,9 +37,7 @@ def build_primfunc(n, npt, dtype):
     return te.create_prim_func([data, radius, edges, histw, histu]).with_attr("global_symbol", "azimint_hist")
 
 
-# Both backends share the TIR builder; only the target / device differ. Building
-# the GPU kernel is lazy (its device callable fires only on use), so this stays
-# safe to construct on a CPU-only box.
+# GPU kernel build is lazy (fires on first use), so this stays safe to construct on a CPU-only box.
 _K_cpu = TvmKernel("azimint_hist_cpu", build_primfunc, cpu_target, lambda: tvm.cpu(0))
 _K_gpu = TvmKernel("azimint_hist_gpu", build_primfunc, gpu_target, lambda: tvm.cuda(0))
 

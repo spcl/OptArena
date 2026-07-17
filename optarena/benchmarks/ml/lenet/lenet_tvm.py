@@ -1,28 +1,4 @@
-"""CPU TVM impl of the ``lenet5`` deep-learning microapp (inference).
-
-Reference (``lenet_numpy.py``)::
-
-    x = relu(conv2d(input, conv1) + conv1bias)   # NHWC, valid, 5x5
-    x = maxpool2d(x)                             # 2x2 stride-2 max
-    x = relu(conv2d(x, conv2) + conv2bias)
-    x = maxpool2d(x)
-    x = reshape(x, (N, C_before_fc1))            # contiguous NHWC flatten
-    x = relu(x @ fc1w + fc1b)
-    x = relu(x @ fc2w + fc2b)
-    return x @ fc3w + fc3b
-
-This is a *composite* net. Rather than one monolithic PrimFunc with control
-flow, each layer is its own autotunable ``build_primfunc`` + ``TvmKernel``;
-the Python entry chains them through intermediate ``tvm.runtime.Tensor``s
-(the approach the authoring spec recommends for multi-layer nets). The
-``reshape`` between the conv stack and the dense stack is folded into the
-first dense kernel (``flatten_dense_relu``): numpy's C-order
-``reshape(N, Hp*Wp*C)`` maps flat column ``f = (hp*Wp + wp)*C + c``, so that
-kernel reduces over ``(hp, wp, c)`` indexing ``fc1w`` at exactly that flat row.
-
-``build_primfunc`` (required by the GPU build-check / shared-builder contract)
-aliases the conv+bias+relu builder, the first/most representative layer.
-"""
+"""CPU TVM impl of the ``lenet5`` deep-learning microapp (inference)."""
 import tvm
 from tvm import te
 
@@ -66,12 +42,7 @@ def build_maxpool2(N, H, W, C, dtype):
 
 
 def build_flatten_dense_relu(N, Hp, Wp, C, units, dtype):
-    """relu( reshape(x,(N, Hp*Wp*C)) @ w + b ); reshape folded in.
-
-    numpy C-order flatten: column f of the (N, Hp*Wp*C) matrix is
-    x[n, f//(Wp*C), (f//C)%Wp, f%C]; equivalently reduce over (hp,wp,c) and
-    index w at row (hp*Wp + wp)*C + c.
-    """
+    """relu( reshape(x,(N, Hp*Wp*C)) @ w + b ); reshape folded in."""
     F = Hp * Wp * C
     x = te.placeholder((N, Hp, Wp, C), name="x", dtype=dtype)
     w = te.placeholder((F, units), name="w", dtype=dtype)

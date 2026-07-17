@@ -12,17 +12,8 @@ _AUTOTUNE_SUBSET_APPLIED = False
 
 
 def _apply_autotune_subset_once():
-    """Cap each kernel's Triton autotune-config sweep to the unified search
-    budget. Triton kernels in optarena ship with itertools.product sweeps that
-    explode to 32-60 configs; running the full sweep on every S-preset run dwarfs
-    the per-call work, so the default ``small`` budget caps it. The cap comes
-    from the ONE shared knob (:class:`optarena.optimize.OptimizeBudget`, driven by
-    ``$OPTARENA_OPTIMIZE_BUDGET``); the ``full`` budget runs the whole sweep.
-
-    The implementation monkey-patches triton.runtime.autotuner.Autotuner so
-    every autotuned kernel sees only the first N configs. Must run before any
-    `*_triton.py` module is imported, which TritonFramework.__init__ guarantees.
-    """
+    """Cap each kernel's Triton autotune-config sweep to the shared OptimizeBudget (else a 32-60
+    config sweep dwarfs the per-call work); monkey-patches Autotuner before any *_triton.py import."""
     global _AUTOTUNE_SUBSET_APPLIED
     if _AUTOTUNE_SUBSET_APPLIED:
         return
@@ -48,24 +39,18 @@ def _apply_autotune_subset_once():
 
 
 class TritonFramework(TorchCudaEventTiming, Framework):
-    """A class for reading and processing framework information.
-
-    An :class:`optarena.optimize.Optimizer`: each kernel's ``@triton.autotune``
-    config sweep is the search, capped to :meth:`optimize_budget`'s ``configs``
-    (see :func:`_apply_autotune_subset_once`).
-    """
+    """An :class:`optarena.optimize.Optimizer`: each kernel's ``@triton.autotune`` config sweep is the
+    search, capped to :meth:`optimize_budget`'s configs (see :func:`_apply_autotune_subset_once`)."""
 
     is_optimizer = True
 
     def __init__(self, fname: str):
-        """ Reads framework information.
-        :param fname: The framework name.
-        """
+        """Reads framework information."""
         _apply_autotune_subset_once()
         super().__init__(fname)
 
     def version(self) -> str:
-        """ Return the framework version. """
+        """Return the framework version."""
         return importlib.metadata.version("triton")
 
     def imports(self) -> Dict[str, Any]:
@@ -77,8 +62,7 @@ class TritonFramework(TorchCudaEventTiming, Framework):
         torch.set_default_device('cuda')
 
         def inner(arr):
-            # Sparse A passes through as a scipy matrix; the kernel uploads
-            # its CSR buffers to the GPU for the SpMV.
+            # Sparse A passes through as a scipy matrix; the kernel uploads its CSR buffers for the SpMV.
             if sp.issparse(arr):
                 return arr.copy()
             copy = torch.from_numpy(arr).to('cuda')
@@ -87,15 +71,12 @@ class TritonFramework(TorchCudaEventTiming, Framework):
         return inner
 
     def post_call(self, result: Any) -> Any:
-        """Sync the CUDA stream so the timed bracket captures the async kernel
-        launch (replaces the old ``; torch.cuda.synchronize()`` appended to an
-        exec string)."""
+        """Sync the CUDA stream so the timed bracket captures the async kernel launch."""
         import torch
         torch.cuda.synchronize()
         return result
 
-    # Native GPU timing (torch CUDA events) comes from the TorchCudaEventTiming
-    # mixin -- the one torch-backed GPU timing path.
+    # Native GPU timing (torch CUDA events) comes from the TorchCudaEventTiming mixin.
 
     def set_datatype(self, datatype):
         super().set_datatype(datatype)

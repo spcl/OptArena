@@ -1,17 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Run a callable in a forked child and SURFACE its failure instead of eating it.
-
-Native (no-container) collection runs each kernel in its own child process so a
-segfault or a framework exception in one kernel cannot take down the whole sweep --
-and, unlike a swallow-everything harness, the cause is reported: a fatal signal
-(``SIGSEGV`` / ``SIGABRT`` / ... from a crashing kernel) is decoded to its name, any
-Python traceback is printed to stdout by the child before it exits, and a child that
-runs past ``timeout`` seconds is terminated and reported as ``TIMEOUT``.
-
-This is the shared isolation primitive for the native framework-baseline collection
-and the native agent run (and the per-kernel wall-clock budget).
-"""
+"""Run a callable in a forked child and SURFACE its failure (signal/traceback/timeout) instead of eating it."""
 import multiprocessing
 import queue
 import signal
@@ -23,20 +12,14 @@ from typing import Any, Callable, Optional
 
 from optarena import osinfo
 
-#: Grace period (seconds) to drain the result queue after the child has exited
-#: cleanly -- the process is done but the queue feeder thread may still be flushing.
+#: Grace period (seconds) to drain the result queue after the child exits cleanly.
 _DRAIN_S = 5.0
 
 
 @dataclass
 class RunResult:
-    """Outcome of a forked run. ``ok`` is the only success signal. On failure the cause
-    is either a kill -- ``signal`` names the fatal signal / ``TIMEOUT`` and ``error`` may
-    carry a human-readable detail (e.g. the timeout seconds) -- or a non-signal fault,
-    where ``error`` alone holds the traceback / message and ``signal`` is ``None``. Use
-    :func:`forked_failure_reason` for the one-line cause (it prefers ``signal``).
-    ``result`` carries the callable's return value on success (must be picklable;
-    ``None`` if it was not)."""
+    """Outcome of a forked run: ``ok`` is the success signal; on failure ``signal``/``error`` name the
+    cause (see :func:`forked_failure_reason`); ``result`` carries the picklable return value."""
     ok: bool
     exit_code: Optional[int] = None
     signal: Optional[str] = None
@@ -45,8 +28,7 @@ class RunResult:
 
 
 def forked_failure_reason(r: RunResult) -> str:
-    """One-line cause for a failed :class:`RunResult`: the fatal signal name, else the
-    last line of the child's traceback, else ``"unknown"``."""
+    """One-line cause for a failed :class:`RunResult`: signal name, else last traceback line, else "unknown"."""
     return r.signal or (r.error.strip().splitlines()[-1] if r.error else "unknown")
 
 
@@ -65,9 +47,7 @@ def _child(fn, args, kwargs, q):
 
 
 def _drain(progress_q, current):
-    """Return the LAST item the child pushed to ``progress_q`` (or the prior
-    ``current`` if it pushed nothing new), so a killed child's most recent reported
-    progress survives the kill."""
+    """Return the last item pushed to ``progress_q`` (or ``current``), so a kill preserves the last progress."""
     try:
         while True:
             current = progress_q.get_nowait()
@@ -83,26 +63,10 @@ def run_forked(fn: Callable,
                stream_progress: bool = False,
                mp_context: Optional[str] = None,
                **kwargs) -> RunResult:
-    """Run ``fn(*args, **kwargs)`` in a forked child.
-
-    Returns a failed :class:`RunResult` -- and logs the cause to stdout -- on a fatal
-    signal (segfault), an exception (traceback), or a ``timeout`` overrun; otherwise
-    ``ok=True`` with the (picklable) return value. ``timeout`` is a per-call wall-clock
-    budget in seconds (``None`` waits forever); ``label`` tags the stdout log lines.
-
-    ``mp_context`` forces the multiprocessing start method (e.g. ``"spawn"`` for a
-    device call whose CUDA context does not survive ``fork``); when unset the OS default
-    (:func:`osinfo.mp_context`, honouring a config/env override) is used.
-
-    With ``stream_progress=True`` the child receives a ``progress`` multiprocessing
-    queue (as a keyword arg) it can ``.put()`` best-so-far snapshots on; the last one
-    is preserved in ``RunResult.result`` EVEN when the child is later killed by the
-    timeout or a signal -- so an overrun still yields its best-so-far (the online-exam
-    snapshot) instead of nothing."""
-    # fork on Linux/WSL2 (cheap -- the child inherits the parent's inputs); spawn on
-    # macOS, where forking after numpy/BLAS/Accelerate threads can abort the child
-    # (osinfo.mp_context resolves the OS default, honouring a config/env override).
-    # A caller may override the start method via mp_context (e.g. device -> spawn).
+    """Run ``fn(*args, **kwargs)`` in a forked child; returns a failed RunResult (cause logged to stdout) on
+    a fatal signal, exception, or timeout overrun, else ``ok=True`` with the picklable return value.
+    ``stream_progress=True`` preserves the child's last ``progress`` snapshot even if it is later killed."""
+    # fork is cheap on Linux/WSL2; spawn on macOS, where forking after numpy/BLAS threads can abort the child.
     ctx = multiprocessing.get_context(mp_context if mp_context is not None else osinfo.mp_context())
     q = ctx.Queue()
     progress_q = ctx.Queue() if stream_progress else None
@@ -113,13 +77,8 @@ def run_forked(fn: Callable,
     p.start()
     last_progress = None
     deadline = (time.monotonic() + timeout) if timeout is not None else None
-    # Poll at a fixed interval so the RESULT queue is drained WHILE the child is still
-    # alive. A child that puts a payload larger than the OS pipe buffer (~64 KB -- e.g.
-    # an L/XL preset's output arrays) blocks in its queue-feeder thread until the parent
-    # reads it, so it never exits: joining-then-reading would deadlock (forever with
-    # timeout=None, or surface as a false TIMEOUT otherwise). Draining here frees the
-    # feeder. A blocking ``q.get(timeout=poll)`` wakes the instant the child puts, so it
-    # doubles as the wait and adds no latency to a fast success.
+    # Poll so the result queue drains while the child is alive -- a payload bigger than the OS
+    # pipe buffer would otherwise block the child's feeder thread forever (join-then-read deadlocks).
     poll = 0.1
     result_item = None  # (status, payload) once the child's single result is received
     while p.is_alive():

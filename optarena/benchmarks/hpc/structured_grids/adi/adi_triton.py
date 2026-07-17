@@ -27,22 +27,7 @@ def _sweep1_kernel(
     f,
     BLOCK_I: tl.constexpr,
 ):
-    """
-    Implements:
-
-        for j in range(1, N - 1):
-            p[1:N - 1, j] = -c / (a * p[1:N - 1, j - 1] + b)
-            q[1:N - 1, j] = (
-                -d * u[j, 0:N - 2]
-                + (1.0 + 2.0 * d) * u[j, 1:N - 1]
-                - f * u[j, 2:N]
-                - a * q[1:N - 1, j - 1]
-            ) / (a * p[1:N - 1, j - 1] + b)
-        v[N - 1, 1:N - 1] = 1.0
-
-    We parallelize over i = 1..N-2 (the slice 1:N-1 on the first axis),
-    and keep j as a sequential loop inside the kernel.
-    """
+    """Forward sweep 1 (p, q update from u); parallel over i = 1..N-2, sequential j loop inside."""
 
     pid = tl.program_id(0)
 
@@ -63,11 +48,7 @@ def _sweep1_kernel(
         idx_p_cur = i * N + j
         tl.store(p_ptr + idx_p_cur, p_cur, mask=mask_i)
 
-        # For a given i in [1..N-2], we map:
-        #   u[j, 0:N-2] -> u[j, i-1]
-        #   u[j, 1:N-1] -> u[j, i]
-        #   u[j, 2:N]   -> u[j, i+1]
-
+        # u[j, 0:N-2]/[1:N-1]/[2:N] -> u[j, i-1]/i/i+1
         j_row = j
 
         idx_u_left = j_row * N + (i - 1)
@@ -89,8 +70,7 @@ def _sweep1_kernel(
 
         j += 1
 
-    # v[N-1, 1:N-1] = 1.0
-    # i indexes 1..N-2 -> columns 1:N-1 on the last row
+    # v[N-1, 1:N-1] = 1.0: i indexes columns 1:N-1 on the last row
     idx_v = (N - 1) * N + i
     tl.store(v_ptr + idx_v, 1.0, mask=mask_i)
 
@@ -146,20 +126,7 @@ def _sweep2_kernel(
     f,
     BLOCK_I: tl.constexpr,
 ):
-    """
-    Implements:
-
-        for j in range(1, N - 1):
-            p[1:N - 1, j] = -f / (d * p[1:N - 1, j - 1] + e)
-            q[1:N - 1, j] = (
-                -a * v[0:N - 2, j]
-                + (1.0 + 2.0 * a) * v[1:N - 1, j]
-                - c * v[2:N, j]
-                - d * q[1:N - 1, j - 1]
-            ) / (d * p[1:N - 1, j - 1] + e)
-
-    with i = 1..N-2 mapped to rows, j to columns.
-    """
+    """Forward sweep 2 (p, q update from v); i = 1..N-2 mapped to rows, j to columns."""
 
     pid = tl.program_id(0)
     # i = 1..N-2
@@ -179,9 +146,7 @@ def _sweep2_kernel(
         idx_p_cur = i * N + j
         tl.store(p_ptr + idx_p_cur, p_cur, mask=mask_i)
 
-        # v_up = v[0:N-2, j]   -> row i-1
-        # v_mid = v[1:N-1, j]  -> row i
-        # v_down = v[2:N, j]   -> row i+1
+        # v[0:N-2, j]/[1:N-1, j]/[2:N, j] -> row i-1/i/i+1
         idx_v_up = (i - 1) * N + j
         idx_v_mid = i * N + j
         idx_v_down = (i + 1) * N + j
@@ -212,14 +177,7 @@ def _backward_sweep2(
     N: tl.constexpr,
     BLOCK_I: tl.constexpr,
 ):
-    """
-    Implements:
-
-        for j in range(N - 2, 0, -1):
-            u[1:N - 1, j] = p[1:N - 1, j] * u[1:N - 1, j + 1] + q[1:N - 1, j]
-
-    We map i = 1..N-2 (row index) onto threads, and keep the j loop inside.
-    """
+    """Backward sweep: u[1:N-1, j] = p*u[.., j+1] + q; i = 1..N-2 (row index) onto threads."""
 
     pid = tl.program_id(0)
     # i indexes the rows 1..N-2
@@ -248,20 +206,7 @@ def _backward_sweep2(
 
 
 def kernel(TSTEPS, N, u):
-    """
-    Triton implementation of the OptArena / Polybench ADI kernel.
-
-    Parameters
-    ----------
-    TSTEPS : int
-    N      : int
-    u      : torch.Tensor, shape (N, N), on CUDA
-
-    Returns
-    -------
-    u : torch.Tensor (same tensor, updated in-place)
-    """
-
+    """Triton implementation of the OptArena / Polybench ADI kernel; updates u in-place."""
     assert u.is_cuda, "u must be a CUDA tensor"
     assert u.shape == (N, N)
 

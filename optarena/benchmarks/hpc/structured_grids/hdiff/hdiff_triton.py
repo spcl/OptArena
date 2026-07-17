@@ -20,12 +20,7 @@ def hdiff_kernel(
     K: tl.int32,
     BLOCK_SIZE_K: tl.constexpr,
 ):
-    """
-    Triton kernel for horizontal diffusion, fusing all intermediate steps.
-    
-    This kernel calculates the output for one (i, j) column, processing
-    BLOCK_SIZE_K elements in the k-dimension at a time.
-    """
+    """Horizontal diffusion, fusing all intermediate steps; one (i, j) column, BLOCK_SIZE_K at a time."""
     i = tl.program_id(0)
     j = tl.program_id(1)
     pid_k = tl.program_id(2)
@@ -33,41 +28,29 @@ def hdiff_kernel(
     k_offsets = pid_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     k_mask = k_offsets < K
 
-    # Load 5x5 Input Patch
-    # To compute out[i, j, k], we need a 5x5 patch from in_field,
-    # starting at in[i, j, k].
-    # We load all 13 necessary values for the k-block.
-
-    # Pre-calculate base pointers for the (i, j) location
+    # 5x5 input patch around in[i, j, k] (13 loads); var names in_iN_jM mean row i+N, col j+M.
     stride_in_i = K * (J + 4)
     in_ptr = in_field_ptr + i * stride_in_i + j * K
 
-    # Load the 5x5 patch (13 loads)
-    # Row i
     in_i0_j2 = tl.load(in_ptr + 0 * stride_in_i + 2 * K + k_offsets, mask=k_mask, other=0.0)
 
-    # Row i+1
     in_i1_j1 = tl.load(in_ptr + 1 * stride_in_i + 1 * K + k_offsets, mask=k_mask, other=0.0)
     in_i1_j2 = tl.load(in_ptr + 1 * stride_in_i + 2 * K + k_offsets, mask=k_mask, other=0.0)
     in_i1_j3 = tl.load(in_ptr + 1 * stride_in_i + 3 * K + k_offsets, mask=k_mask, other=0.0)
 
-    # Row i+2
     in_i2_j0 = tl.load(in_ptr + 2 * stride_in_i + 0 * K + k_offsets, mask=k_mask, other=0.0)
     in_i2_j1 = tl.load(in_ptr + 2 * stride_in_i + 1 * K + k_offsets, mask=k_mask, other=0.0)
-    in_i2_j2 = tl.load(  # This is the "center"
+    in_i2_j2 = tl.load(  # center
         in_ptr + 2 * stride_in_i + 2 * K + k_offsets, mask=k_mask, other=0.0)
     in_i2_j3 = tl.load(in_ptr + 2 * stride_in_i + 3 * K + k_offsets, mask=k_mask, other=0.0)
     in_i2_j4 = tl.load(in_ptr + 2 * stride_in_i + 4 * K + k_offsets, mask=k_mask, other=0.0)
 
-    # Row i+3
     in_i3_j1 = tl.load(in_ptr + 3 * stride_in_i + 1 * K + k_offsets, mask=k_mask, other=0.0)
     in_i3_j2 = tl.load(in_ptr + 3 * stride_in_i + 2 * K + k_offsets, mask=k_mask, other=0.0)
     in_i3_j3 = tl.load(in_ptr + 3 * stride_in_i + 3 * K + k_offsets, mask=k_mask, other=0.0)
 
-    # Row i+4
     in_i4_j2 = tl.load(in_ptr + 4 * stride_in_i + 2 * K + k_offsets, mask=k_mask, other=0.0)
 
-    # --- 4. Load Coefficient ---
     coeff = tl.load(coeff_ptr + i * J * K + j * K + k_offsets, mask=k_mask, other=0.0)
     # Naming: lap_i_j1 corresponds to lap_field[i, j+1, k]
 
@@ -106,7 +89,6 @@ def hdiff_kernel(
     cond_fly_j1 = in_i2_j3 - in_i2_j2
     fly_j1 = tl.where((res_fly_j1 * cond_fly_j1) > 0.0, 0.0, res_fly_j1)
 
-    # Divergence term
     flx_div = flx_i1 - flx_i
     fly_div = fly_j1 - fly_j
     div = flx_div + fly_div

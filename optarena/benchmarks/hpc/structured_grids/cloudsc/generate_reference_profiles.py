@@ -1,25 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Regenerate ``cloudsc_reference_profiles.npz`` from the ECMWF dwarf-p-cloudsc
-serialbox reference input.
-
-The committed ``.npz`` is the single source of physical truth for the CLOUDSC
-initializer: per-level moments and occurrence frequencies of the real ECMWF L137
-input column ensemble (KLON=100 columns, KLEV=137 levels). ``initialize`` reads
-it, interpolates onto the requested ``nlev`` and samples seeded columns that
-reproduce those statistics, so the kernel sees a physically valid atmosphere
-(monotone pressure, lapse-rate temperature, mostly-near-zero hydrometeors with a
-realistic cloudy fraction) rather than degenerate uniform noise.
-
-Run with no network dependency on a prior clone, OR let it clone fresh:
-
-    python generate_reference_profiles.py            # clones to a temp dir
-    python generate_reference_profiles.py <data_dir> # uses an existing dwarf data/
-
-Provenance of every extracted statistic is the field named in the loop below,
-read from ``input_<FIELD>.dat`` (Apache-2.0, ECMWF; see NOTICE). We store derived
-moments, never the raw licensed arrays verbatim.
-"""
+"""Regenerates cloudsc_reference_profiles.npz (per-level moments) from the ECMWF dwarf-p-cloudsc input."""
 import json
 import subprocess
 import sys
@@ -68,8 +49,7 @@ def main(argv):
         out[name.lower() + "_mean"] = a.mean(axis=1)
         out[name.lower() + "_std"] = a.std(axis=1)
     out["pa_mean"] = lev("PA").mean(axis=1)  # cloud fraction in [0, 1]
-    # Hydrometeor species and sparse convective fields: per-level occurrence
-    # frequency (fraction of columns nonzero) and per-level mean (incl. zeros).
+    # Hydrometeor / convective fields: per-level occurrence frequency and mean (incl. zeros).
     for key, arr in (("ql", pclv[0]), ("qi", pclv[1]), ("qs", pclv[3]), ("plu", lev("PLU")), ("plude", lev("PLUDE")),
                      ("pmfu", lev("PMFU")), ("psupsat", lev("PSUPSAT"))):
         out[key + "_occ"] = (arr != 0).mean(axis=1)

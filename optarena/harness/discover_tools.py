@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""Probe the host for the compilers + libraries optarena/agent-bench can use.
-
-Reads the discovery wishlist ``optarena/envs/toolset.yaml`` and reports, for each
-tool, whether it is present (with version + path) -- so the harness/agent knows
-which toolchains and numeric libraries the *user's* machine actually offers.
-
-    python -m optarena.harness.discover_tools                 # human report (all targets)
-    python -m optarena.harness.discover_tools --json          # machine-readable JSON
-    python -m optarena.harness.discover_tools --yaml -o env.yaml
-    python -m optarena.harness.discover_tools --require nvidia # exit 1 if an nvidia-
-                                                       # required tool is missing
-
-Detection uses only the stdlib + the system's own tools (shutil.which,
-pkg-config, ldconfig); nothing is installed. macOS / WSL / Linux are handled.
-"""
+"""Probe the host for the compilers + libraries optarena/agent-bench can use; stdlib-only detection."""
 import argparse
 import functools
 import glob
@@ -34,7 +20,6 @@ TARGETS = ("cpu", "nvidia", "amd")
 _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
 
-# ------------------------------------------------------------------ platform ---
 def detect_platform():
     sysname = platform.system()  # Linux / Darwin / Windows
     info = {"system": sysname.lower(), "machine": platform.machine(), "wsl": False}
@@ -64,7 +49,6 @@ def _linux_distro():
     return f"{name} {ver}".strip()
 
 
-# ------------------------------------------------------------- search paths ---
 def _accel_roots():
     """CUDA + ROCm roots (which are usually NOT on the default loader path)."""
     roots = []
@@ -115,7 +99,6 @@ def _ldconfig_index():
     return index
 
 
-# -------------------------------------------------------------- detectors -----
 def _run_version(cmd, args):
     for a in (args or []):
         try:
@@ -186,7 +169,6 @@ def detect_header(spec):
 DETECTORS = {"binary": detect_binary, "library": detect_library, "header": detect_header}
 
 
-# ---------------------------------------------------------------- report ------
 def discover():
     toolset = yaml.safe_load(TOOLSET.read_text())
     report = {"platform": detect_platform(), "categories": {}}

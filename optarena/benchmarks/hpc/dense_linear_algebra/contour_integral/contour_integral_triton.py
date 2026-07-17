@@ -45,20 +45,16 @@ def _kernel_lu_div_column(
     N,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """
-    for i in k+1..N-1: A[i,k] /= A[k,k]
-    """
+    """for i in k+1..N-1: A[i,k] /= A[k,k]."""
     pid = tl.program_id(axis=0)
     rows = k + 1 + pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     col = k
 
-    # pivot
     pivot_real_ptr = M_real + k * N + k
     pivot_imag_ptr = M_imag + k * N + k
     pivot_real = tl.load(pivot_real_ptr)
     pivot_imag = tl.load(pivot_imag_ptr)
 
-    # column to scale
     col_real_ptrs = M_real + rows * N + col
     col_imag_ptrs = M_imag + rows * N + col
     mask = rows < N
@@ -82,9 +78,7 @@ def _kernel_lu_trailing_update(
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
 ):
-    """
-    A[k+1:, k+1:] -= A[k+1:, k] @ A[k, k+1:]   (rank-1 update)
-    """
+    """A[k+1:, k+1:] -= A[k+1:, k] @ A[k, k+1:] (rank-1 update)."""
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
 
@@ -98,10 +92,10 @@ def _kernel_lu_trailing_update(
 
         a_real_ptrs = M_real + rows[:, None] * N + cols[None, :]
         a_imag_ptrs = M_imag + rows[:, None] * N + cols[None, :]
-        l_real_ptrs = M_real + rows * N + k  # L col k
-        l_imag_ptrs = M_imag + rows * N + k  # L col k
-        u_real_ptrs = M_real + k * N + cols  # U row k
-        u_imag_ptrs = M_imag + k * N + cols  # U row k
+        l_real_ptrs = M_real + rows * N + k
+        l_imag_ptrs = M_imag + rows * N + k
+        u_real_ptrs = M_real + k * N + cols
+        u_imag_ptrs = M_imag + k * N + cols
 
         Ablk_real = tl.load(a_real_ptrs, mask=mask, other=0.0)
         Ablk_imag = tl.load(a_imag_ptrs, mask=mask, other=0.0)
@@ -134,18 +128,13 @@ def _kernel_forward_row(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
 ):
-    """
-    Compute: y[i] = b[i] - dot(A[i, :i], y[:i])
-    L has unit diagonal, so no division here.
-    """
+    """y[i] = b[i] - dot(A[i, :i], y[:i]); L has unit diagonal, so no division here."""
     m = tl.program_id(axis=0)
 
     for i in range(N):
         acc_real = tl.zeros((BLOCK_SIZE_M, ), dtype=M_real.dtype.element_ty)
         acc_imag = tl.zeros((BLOCK_SIZE_M, ), dtype=M_real.dtype.element_ty)
 
-        # process in tiles of BLOCK_SIZE
-        # num full/partial tiles = ceil(i / BLOCK_SIZE)
         num_tiles = (i + BLOCK_SIZE_N - 1) // BLOCK_SIZE_N
         for t in range(0, num_tiles):
             tile, mask, rows, _ = get_2d_tile_offsets(
@@ -206,15 +195,12 @@ def _kernel_backward_row(
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
 ):
-    """
-    Compute: x[i] = (y[i] - dot(A[i, i+1:], x[i+1:])) / A[i,i]
-    """
+    """x[i] = (y[i] - dot(A[i, i+1:], x[i+1:])) / A[i,i]."""
     m = tl.program_id(axis=0)
     for i in range(N - 1, -1, -1):
         acc_real = tl.zeros((BLOCK_SIZE_M, ), dtype=M_real.dtype.element_ty)
         acc_imag = tl.zeros((BLOCK_SIZE_M, ), dtype=M_real.dtype.element_ty)
 
-        # length of the suffix
         len_suf = N - (i + 1)
         num_tiles = (len_suf + BLOCK_SIZE_N - 1) // BLOCK_SIZE_N
 
@@ -270,14 +256,11 @@ def _linalg_solve(
         y_real,  # (NR, NM)
         y_imag,  # (NR, NM)
 ):
-    """
-    Solves for every X in: \forall nm: M * X_{nm} = A_{nm}
-    """
+    """Solves for every X in: M @ X_nm = A_nm, for each column nm."""
     N = M_real.shape[0]
 
-    # -------- LU factorization (in-place) --------
+    # LU factorization, in-place
     for k in range(N):
-        # 1) scale column below pivot
         if k + 1 < N:
             _kernel_lu_div_column(
                 M_real,
@@ -285,7 +268,6 @@ def _linalg_solve(
                 k,
             )
 
-        # 2) rank-1 update of trailing block
         rem = N - (k + 1)
         if rem > 0:
             grid_upd = lambda meta: (
@@ -299,8 +281,7 @@ def _linalg_solve(
                 k,
             )
 
-    # -------- Forward solve Ly=b (unit lower) --------
-
+    # Forward solve: Ly = b (unit lower)
     _kernel_forward_row(
         M_real,
         M_imag,
@@ -310,8 +291,7 @@ def _linalg_solve(
         y_imag,
     )
 
-    # -------- Backward solve Ux=y --------
-
+    # Backward solve: Ux = y
     _kernel_backward_row(
         M_real,
         M_imag,
@@ -395,14 +375,7 @@ def _calculate_tz(
     slab_per_bc: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """
-        Tz = torch.zeros((NR, NR), dtype=dtype)
-        for n in range(slab_per_bc + 1): # Runs 3 times.
-            zz = torch.pow(z, slab_per_bc / 2 - n)
-            Tz += zz * Ham[n]
-
-        Tz_real, Tz_imag = Tz.real.contiguous(), Tz.imag.contiguous()
-    """
+    """Tz = sum_n z**(slab_per_bc/2 - n) * Ham[n], split into (Tz_real, Tz_imag)."""
     x = tl.program_id(axis=0)
     y = tl.program_id(axis=1)
 
@@ -463,8 +436,7 @@ def contour_integral(
 
     Tz_real = torch.empty((NR, NR), dtype=sdtype, device=Y.device)
     Tz_imag = torch.empty((NR, NR), dtype=sdtype, device=Y.device)
-    # Note: 'int_pts' is on the GPU and should be copied to the CPU as one batch for python iteration, otherwise
-    #       PyTorch performs needless CUDA synchronization.
+    # Copy 'int_pts' to CPU once here; per-iteration access would trigger needless CUDA sync.
     ints = int_pts.tolist()
     for z in ints:
         _calculate_tz(Tz_real, Tz_imag, Ham_real, Ham_imag, float(z.real), float(z.imag))
@@ -473,9 +445,7 @@ def contour_integral(
         X_imag.zero_()
         _linalg_solve(Tz_real, Tz_imag, Y_real, Y_imag, X_real, X_imag, tmp_y_real, tmp_y_imag)
 
-        # TODO: Consider fusing this into backward row. Would save on all the loads of X within '_post_process', but
-        #  not change anything else (in particular peak memory consumption). Profile first! Only guaranteed to improve
-        #  performance if memory bound. Could be worse in performance if compute bound.
+        # TODO: Consider fusing into backward row to save the X loads in '_post_process'; profile first.
         _post_process(X_real, X_imag, P0_real, P1_real, float(z.real), float(z.imag))
 
     return P0, P1

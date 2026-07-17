@@ -1,31 +1,4 @@
-"""CPU TVM impl of the ``nbody`` leapfrog simulation.
-
-The numpy reference runs a Python timestep loop; each step is an O(N^2)
-all-pairs gravitational acceleration plus an energy diagnostic. We compile
-the per-step compute as a set of TIR PrimFuncs and drive the ``Nt``-step
-outer loop in Python, accumulating ``KE`` / ``PE`` into host arrays (which
-is what the reference returns).
-
-TIR PrimFuncs (``dt`` / ``G`` / ``softening`` baked as constants, since
-meta_schedule rejects scalar PrimFunc params; the compile-cache key
-carries them):
-
-* ``getacc`` — ``acc[i,c] = sum_j G*(pos[j,c]-pos[i,c]) * inv_r3 * mass[j]``
-  with ``inv_r3 = (r^2+soft^2)^-1.5`` (``soft^2 > 0`` so no zero-division).
-* ``ke_raw`` — ``sum_i mass[i]*|vel[i]|^2`` (single reduction; the ``0.5``
-  factor is applied on the host).
-* ``pe_raw`` — ``sum_{i<j} -(mass_i*mass_j)/r_ij`` (single reduction; the
-  ``G`` factor is applied on the host).
-* ``axpy_half`` / ``axpy_full`` — ``x + y*(dt/2)`` and ``x + y*dt`` for the
-  kick / drift updates.
-
-Each PrimFunc has at most one reduction feeding its output: meta_schedule's
-scheduler rejects a block that consumes two reduction producers, so the KE
-and PE reductions are separate kernels (scaled and summed on the host) and
-the one-time center-of-mass shift — an O(N) setup, not the hot loop — is
-done on the host too. State order per step matches the reference exactly:
-half-kick, drift, recompute acc, half-kick, then energy.
-"""
+"""CPU/GPU TVM impl of the nbody leapfrog simulation: per-step compute as TIR PrimFuncs, Nt-step loop driven from Python."""
 import numpy as np
 import tvm
 from tvm import te
@@ -36,14 +9,7 @@ _EPS = 1e-300  # guards the unused 1/r on the i>=j (non-upper-triangle) branch
 
 
 def _compile(prim_func, target, name, key):
-    """Autotune ``prim_func`` (auto-opt track), falling back to a plain
-    ``tvm.compile`` on a default schedule.
-
-    meta_schedule's ``compile_tir`` returns ``None`` for kernels too tiny
-    to yield a tuning record (the per-step O(N) updates and the KE
-    reduction at small ``N``); the bare ``tvm.compile`` lowers the
-    unscheduled PrimFunc directly, so every nbody stage still runs in TVM.
-    """
+    """Autotune prim_func, falling back to plain tvm.compile when meta_schedule skips kernels too tiny to tune."""
     try:
         return tune_compile(prim_func, target, name, key)
     except Exception:
@@ -108,14 +74,12 @@ def _build_axpy(n, dtype, scale, name):
 
 
 def build_primfunc(n, dtype, dt, G, soft):
-    """Default builder (the GPU build-check's reachability probe); returns
-    the acceleration kernel, the dominant O(N^2) stage."""
+    """Default builder (GPU build-check's reachability probe); returns the acceleration kernel, the dominant O(N^2) stage."""
     return _build_getacc(n, dtype, dt, G, soft)
 
 
 class _NbodyKernels:
-    """Bundle of the per-step kernels, tuned+compiled once per
-    ``(N, dtype, dt, G, soft)`` and reused across the timestep loop."""
+    """Bundle of the per-step kernels, tuned+compiled once per (N, dtype, dt, G, soft) and reused across the loop."""
 
     def __init__(self, target_fn, device_fn, tag):
         self.target_fn = target_fn
@@ -161,8 +125,7 @@ def _run(kernels, device, mass, pos, vel, N, Nt, dtype, G):
 
     mass_np = mass.numpy()
 
-    # Center-of-mass frame (one-time O(N) host setup):
-    #   vel -= mean(mass*vel, axis=0) / mean(mass)
+    # Center-of-mass frame (one-time O(N) host setup): vel -= mean(mass*vel, axis=0) / mean(mass).
     vel_np = vel.numpy()
     shift = (mass_np * vel_np).mean(axis=0) / mass_np.mean()
     vel = to_dev(vel_np - shift)

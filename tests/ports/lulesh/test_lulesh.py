@@ -1,41 +1,11 @@
 # Copyright 2026 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Correctness gate for the full LULESH numpy reference.
-
-Three layers pin the numpy SoA port (``lulesh_numpy.py``) against the GENUINE
-vendored LULESH Fortran kernels (``baseline/lulesh_comp_kernels_original.f90``,
-a copy of the dace-fortran fixture ``tests/lulesh/lulesh_comp_kernels.f90`` --
-the same source the dace-fortran SDFG / generated C++ are validated against, with
-three serial-path bugs fixed in this copy; see ``baseline/NOTICE.md``). A
-``bind(c)`` harness (``baseline/lulesh_xcheck_caller.f90``) forwards to the
-genuine kernels; Fortran and numpy run from one identical input snapshot.
-
-1. PER-KERNEL cross-checks at machine precision:
-     * Geometric / physics LEAVES (CalcElemVolume, shape-fn derivatives, node
-       normals, volume derivative, characteristic length, velocity gradient,
-       Flanagan-Belytschko hourglass force) -- to ~1e-12..1e-13.
-     * The full nodal-FORCE assembly (CalcVolumeForceForElems: stress integration
-       + hourglass, scatter-assembled onto nodes) -- to ~1e-15.
-     * The full EOS (ApplyMaterialPropertiesForElems -> CalcEnergy /
-       CalcPressure / CalcSoundSpeed), single region -- to machine zero.
-
-2. BIT-EXACT FULL-TRAJECTORY reference (``test_full_trajectory_bit_exact``): the
-   genuine ``LagrangeLeapFrog`` is run for N steps on the Sedov ICs via
-   ``c_run_full`` and the FULL final state (energy, pressure, q, relative volume,
-   node positions, node velocities) is asserted to match the numpy port to
-   rtol/atol 1e-10/1e-12 (observed max diff ~1e-13). This is the real end-to-end
-   oracle, made possible by fixing three never-executed upstream serial-path bugs
-   in this vendored copy (off-by-one loop in InitStressTermsForElems; unallocated
-   fx_local in IntegrateStressForElems; 1-based row-slice pointer bounds in the
-   ``elemToNode => m_nodelist(i,:)`` consumers) -- each marked per GPL section 5.
-   The user-owned dace-fortran source is left untouched.
-
-3. END-TO-END invariants (no Fortran needed): the plane-0 energy SYMMETRY
-   invariant the LULESH driver itself tests (``e[j*ne+k] == e[k*ne+j]``); volume
-   positivity, finiteness, run-to-run determinism; Sedov energy deposition.
-
-Skips cleanly when gfortran is unavailable.
-"""
+"""Correctness gate for the full LULESH numpy reference, in three layers: (1) per-kernel cross-checks
+against the genuine vendored LULESH Fortran kernels (``baseline/lulesh_comp_kernels_original.f90``,
+with three serial-path bugs fixed in this copy; see ``baseline/NOTICE.md``) at machine precision; (2)
+bit-exact full-trajectory reference via the genuine ``LagrangeLeapFrog`` on the Sedov ICs; (3)
+end-to-end invariants needing no Fortran (plane-0 energy symmetry, volume positivity, determinism,
+Sedov energy deposition). Skips cleanly when gfortran is unavailable."""
 import ctypes
 import importlib.util
 import shutil
@@ -50,8 +20,7 @@ _HERE = Path(__file__).resolve().parent
 _BASE = _HERE / "baseline"
 _KERNELS = _BASE / "lulesh_comp_kernels_original.f90"
 _CALLER = _BASE / "lulesh_xcheck_caller.f90"
-# The NumPy kernel + generator stay in the benchmark tree; only this port test
-# and its vendored Fortran oracle (baseline/) live under tests/ports/.
+# The NumPy kernel + generator stay in the benchmark tree; the vendored Fortran oracle lives here.
 _BENCH = _HERE.parents[2] / "optarena" / "benchmarks" / "hpc" / "unstructured_grids" / "lulesh"
 sys.path.insert(0, str(_BENCH))
 
@@ -210,8 +179,7 @@ def test_velocity_gradient_and_hourglass_force(fort):
 
 
 def test_full_nodal_force_assembly(fort):
-    """CalcVolumeForceForElems: stress integration + Flanagan-Belytschko
-    hourglass, scatter-assembled onto nodes -- vs the genuine leaf kernels."""
+    """CalcVolumeForceForElems: stress + hourglass, scatter-assembled onto nodes, vs the genuine kernels."""
     ln = _load("lulesh_numpy")
     li = _load("lulesh")
     st = dict(zip(_ARG_NAMES, list(li.initialize(27, 1))))
@@ -246,8 +214,7 @@ def test_full_nodal_force_assembly(fort):
 
 
 def test_full_eos(fort):
-    """ApplyMaterialPropertiesForElems (CalcEnergy/Pressure/SoundSpeed) -- vs
-    the genuine vendored domain routine (single-region; no buggy paths)."""
+    """ApplyMaterialPropertiesForElems (CalcEnergy/Pressure/SoundSpeed) vs the genuine domain routine."""
     ln = _load("lulesh_numpy")
     rng = np.random.default_rng(7)
     N = 40
@@ -279,13 +246,8 @@ def test_full_eos(fort):
 
 @pytest.mark.parametrize("edgeElems,nsteps", [(2, 10), (4, 30), (8, 30), (16, 15)])
 def test_full_trajectory_bit_exact(fort, edgeElems, nsteps):
-    """BIT-EXACT full-trajectory reference: the GENUINE vendored
-    ``LagrangeLeapFrog`` (now that the three serial-path bugs are fixed in
-    ``baseline/lulesh_comp_kernels_original.f90``, marked per GPL section 5) is
-    run for ``nsteps`` cycles on the Sedov ICs via ``c_run_full``, and the FULL
-    final state -- energy, pressure, q, relative volume, node positions and node
-    velocities -- is compared against the numpy port on the same problem. This is
-    the real end-to-end oracle (numpy == genuine Fortran), not just an invariant."""
+    """BIT-EXACT full-trajectory reference: the genuine vendored ``LagrangeLeapFrog`` run for
+    ``nsteps`` on the Sedov ICs, with the full final state compared against the numpy port."""
     li = _load("lulesh")
     ln = _load("lulesh_numpy")
     nE = edgeElems ** 3
@@ -318,9 +280,7 @@ def test_full_trajectory_bit_exact(fort, edgeElems, nsteps):
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("numElem", [64, 512, 4096])
 def test_plane0_energy_symmetry(numElem):
-    """The exact invariant the LULESH driver tests (lulesh.f90 lines 740-757):
-    after the run, plane-0 energy is symmetric, e[j*ne+k] == e[k*ne+j]. A
-    cube-symmetric Sedov blast must preserve this through the WHOLE pipeline."""
+    """The exact invariant the LULESH driver tests: plane-0 energy is symmetric, e[j*ne+k] == e[k*ne+j]."""
     ini = _load("lulesh").initialize
     kern = _load("lulesh_numpy").lulesh
     ne = round(numElem ** (1.0 / 3.0))
@@ -350,8 +310,7 @@ def test_invariants_and_determinism(numElem):
 
 
 def test_sedov_energy_deposited():
-    """The Sedov origin energy is deposited as einit = ebase*(ne/45)^3 and is the
-    only element energised in the initial state."""
+    """The Sedov origin energy is deposited as einit = ebase*(ne/45)^3, the only energised element."""
     ini = _load("lulesh").initialize
     args = ini(512, 0)  # nsteps=0: just the initial state
     e = args[0]

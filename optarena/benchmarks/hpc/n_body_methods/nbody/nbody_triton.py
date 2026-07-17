@@ -19,14 +19,7 @@ def get_configs():
 @triton.jit
 def _get_acc(pos, mass, G, softening, acc, N, DTYPE: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
              BLOCK_SIZE_K: tl.constexpr):
-    """
-    Calculate the acceleration on each particle due to Newton's Law 
-    pos  is an N x 3 matrix of positions
-    mass is an N x 1 vector of masses
-    G is Newton's Gravitational constant
-    softening is the softening length
-    a is N x 3 matrix of accelerations
-    """
+    """Compute Newtonian gravitational acceleration on each particle (pos: Nx3, mass: Nx1) via pairwise sum."""
 
     pid = tl.program_id(0)
 
@@ -62,8 +55,7 @@ def _get_acc(pos, mass, G, softening, acc, N, DTYPE: tl.constexpr, BLOCK_SIZE_N:
 
         inv_r3 = tl.zeros_like(r2)
         valid = mask_ij & (r2 > 0)
-        # libdevice.pow requires matching dtypes; the literal -1.5 would
-        # otherwise be fp32 by default and clash with fp64 r2.
+        # libdevice.pow requires matching dtypes; -1.5 defaults to fp32 and would clash with fp64 r2.
         inv_r3 = tl.where(valid, libdevice.pow(r2, tl.cast(-1.5, r2.dtype)), 0.0)
 
         mj_2d = mj[None, :]  # [1, BLOCK_SIZE_K]
@@ -81,15 +73,7 @@ def _get_acc(pos, mass, G, softening, acc, N, DTYPE: tl.constexpr, BLOCK_SIZE_N:
 @triton.autotune(configs=get_configs(), key=["N"], cache_results=True)
 @triton.jit
 def _get_energy(pos, mass, G, pe, N, DTYPE: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
-    """
-    Get kinetic energy (KE) and potential energy (PE) of simulation
-    pos is N x 3 matrix of positions
-    vel is N x 3 matrix of velocities
-    mass is an N x 1 vector of masses
-    G is Newton's Gravitational constant
-    KE is the kinetic energy of the system
-    PE is the potential energy of the system
-    """
+    """Compute total kinetic (KE) and potential (PE) energy of the N-body system."""
 
     pid_i = tl.program_id(0)  # block index over i
     pid_j = tl.program_id(1)  # block index over j
@@ -147,15 +131,7 @@ def _get_energy(pos, mass, G, pe, N, DTYPE: tl.constexpr, BLOCK_SIZE_N: tl.const
 
 
 def nbody(mass, pos, vel, N, Nt, dt, G, softening):
-    """
-    Calculate the acceleration on each particle due to Newton's Law 
-    pos  is an N x 3 matrix of positions
-    mass is an N x 1 vector of masses
-    G is Newton's Gravitational constant
-    softening is the softening length
-    a is N x 3 matrix of accelerations
-    vel is N x 3 matrix of velocities
-    """
+    """Run the leapfrog N-body simulation for Nt steps, returning per-step (KE, PE) energy arrays."""
     # Make sure N, Nt, G, softening, dt are plain Python scalars
     N = int(N)
     Nt = int(Nt)
@@ -174,21 +150,16 @@ def nbody(mass, pos, vel, N, Nt, dt, G, softening):
     grid_2d = lambda meta: (triton.cdiv(N, meta["BLOCK_SIZE_N"]), triton.cdiv(N, meta["BLOCK_SIZE_K"]))
 
     # Convert to Center-of-Mass frame
-    # vel -= np.mean(mass * vel, axis=0) / np.mean(mass)
     mom = (mass * vel).mean(dim=0)  # shape (3,)
     m_mean = mass.mean()  # scalar
 
     vel -= mom / m_mean
 
     # calculate initial gravitational accelerations
-    # acc = getAcc(pos, mass, G, softening)
     acc = torch.zeros((N, 3), dtype=pos.dtype)
     _get_acc[grid_1d](pos, mass, G, softening, acc, N, DTYPE)
 
-    # # calculate initial energy of system
-    # KE = np.ndarray(Nt + 1, dtype=mass.dtype)
-    # PE = np.ndarray(Nt + 1, dtype=mass.dtype)
-    # KE[0], PE[0] = getEnergy(pos, vel, mass, G)
+    # calculate initial energy of system
     KE = torch.empty(Nt + 1, dtype=dtype)
     PE = torch.empty(Nt + 1, dtype=dtype)
     pe_acc = torch.zeros((1, ), dtype=dtype)

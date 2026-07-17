@@ -1,26 +1,4 @@
-"""CPU TVM implementation of deriche (Deriche edge-detector IIR filter).
-
-The reference applies four 2nd-order recursive (IIR) passes — a horizontal
-forward + backward sweep producing ``imgOut = y1 + y2``, then a vertical
-forward + backward sweep producing the final ``imgOut`` — with coefficients
-``a1..a8, b1, b2`` derived from the scalar ``alpha``. ``imgIn`` is shape
-``(W, H)``; the horizontal sweeps run along the ``H`` axis parallel over the
-``W`` rows, the vertical sweeps along the ``W`` axis parallel over the ``H``
-columns.
-
-Every pass has the same shape: a line update that is *sequential* along the
-sweep axis but fully *parallel over the batch axis*::
-
-    out_line = s0*in0_line + s1*in1_line + s2*prev0_line + s3*prev1_line
-
-so we compile ONE generic IIR-2 line kernel (parametrised by the line length
-L and four runtime scalars) and drive the sequential line loops in Python,
-once per pass. Two shapes of the kernel are used (L = W for the vertical
-sweeps, L = H for the horizontal sweeps).
-
-``output_args`` is empty and the reference returns ``imgOut``, so the
-validation list is just ``[imgOut]``; we return the computed image.
-"""
+"""CPU/GPU TVM Deriche IIR filter: one generic IIR-2 line kernel, driven by Python loops per sweep."""
 import numpy as np
 import tvm
 from tvm import te
@@ -29,10 +7,7 @@ from optarena.frameworks.tvm_build import TvmKernel, cpu_target, empty, gpu_targ
 
 
 def build_primfunc(L, dtype):
-    """One IIR-2 line update, parallel over the length-``L`` batch axis::
-
-        out[m] = s0*in0[m] + s1*in1[m] + s2*prev0[m] + s3*prev1[m]
-    """
+    """One IIR-2 line update, parallel over the length-``L`` batch axis."""
     s0 = te.var("s0", dtype=dtype)
     s1 = te.var("s1", dtype=dtype)
     s2 = te.var("s2", dtype=dtype)
@@ -66,18 +41,13 @@ def _coeffs(alpha):
 
 
 def run_deriche(get_exe, alpha, imgIn, dev):
-    """Device-parametrised driver shared by the CPU and GPU entry points.
-
-    ``get_exe(L)`` returns the compiled IIR-2 line kernel for line length L.
-    """
+    """Device-parametrised driver shared by the CPU and GPU entry points; get_exe(L) compiles the line kernel."""
     img = imgIn.numpy()  # (W, H) host copy
     W, H = img.shape
     dt = img.dtype
     (a1, a2, a3, a4, a5, a6, a7, a8, b1, b2) = _coeffs(float(alpha))
 
-    # Horizontal sweeps step along H but each *line* is a length-W column, so
-    # they use the length-W kernel; vertical sweeps step along W with length-H
-    # rows, so they use the length-H kernel.
+    # Horizontal sweeps step along H over length-W columns; vertical sweeps step along W over length-H rows.
     exe_W = get_exe(W)  # length-W line kernel (horizontal sweeps)
     exe_H = get_exe(H)  # length-H line kernel (vertical sweeps)
 

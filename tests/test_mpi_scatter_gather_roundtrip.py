@@ -1,17 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exhaustive scatter/gather round-trip matrix for the MPI data distribution.
-
-Data-distribution correctness is the #1 risk of the multi-node track: a scatter and gather that
-disagree silently corrupt a distributed result, and the whole-domain numpy oracle would then
-grade garbage. Scatter and gather both come from the SAME
-:class:`~optarena.harness.mpi_descriptor.Descriptor`, so any mismatch shows up here as
-``gather(scatter(A)) != A``. This file drives that identity across the FULL matrix -- every
-scheme (block / block-cyclic / cyclic / replicated, and per-axis mixes) x dimensionality {1..4}
-x grid shape (1xR, Rx1, PxQ, PxQxS, near-square) x ragged + edge sizes (size<ranks, length-1,
-length-0 axes) x dtype {f32,f64,i32,i64} -- plus the partition-completeness invariant (the owned
-interiors tile the global array exactly once). All pure numpy: no cluster, gates every CI run.
-"""
+"""Exhaustive scatter/gather round-trip matrix for MPI data distribution: scheme x dim x grid x dtype."""
 import numpy as np
 import pytest
 
@@ -31,9 +20,7 @@ def _arr(shape, dtype="float64"):
 
 
 def _axis_dist(ndim, grid, scheme, block_size=2):
-    """Map array axis ``d`` -> grid dim ``d`` under ``scheme`` when that grid dim splits (>1),
-    else replicate the axis. Requires ``len(grid.dims) <= ndim`` so every split dim is owned by
-    an axis (else coordinates on an unmapped split dim double-own the array)."""
+    """Map array axis `d` -> grid dim `d` under `scheme` when that grid dim splits (>1), else replicate."""
     axes = []
     for d in range(ndim):
         if d < len(grid.dims) and grid.dims[d] > 1:
@@ -58,9 +45,7 @@ def _check(a, dist, grid):
     return tiles
 
 
-# --------------------------------------------------------------------------------------- #
-# The core matrix: scheme x dim x ranks x dtype, on the near-square N-D grid
-# --------------------------------------------------------------------------------------- #
+# --- The core matrix: scheme x dim x ranks x dtype, on the near-square N-D grid ---
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4])
@@ -81,9 +66,7 @@ def test_block_cyclic_tiles_1d(ranks, block_size):
     _check(a, ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block_cyclic", block_size=block_size), )), grid)
 
 
-# --------------------------------------------------------------------------------------- #
-# Canonical ScaLAPACK grid shapes on a 2-D array: 1xR (block-col), Rx1 (block-row), PxQ (2-D)
-# --------------------------------------------------------------------------------------- #
+# --- Canonical ScaLAPACK grid shapes on a 2-D array: 1xR (block-col), Rx1 (block-row), PxQ (2-D) ---
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("dims", [(1, 4), (4, 1), (2, 2), (2, 3), (3, 2), (1, 6), (6, 1)])
 def test_roundtrip_2d_grid_shapes(dims, scheme):
@@ -119,16 +102,9 @@ def test_3d_array_on_2d_grid_trailing_axis_replicated():
     _check(a, dist, grid)
 
 
-# --------------------------------------------------------------------------------------- #
-# The two headline cases, validated element-by-element against an INDEPENDENT owner
-# reference (the ScaLAPACK owner formula) -- not just the round-trip identity.
-#   1. splitting an array over a processor grid: a 2-D array on a 2x2 grid, each rank a
-#      quarter (block x block).
-#   2. block-cyclic with a per-axis block-tuple (MB, NB): the ScaLAPACK 2-D workhorse.
-# --------------------------------------------------------------------------------------- #
+# --- The two headline cases, validated element-by-element against an independent owner reference ---
 def _owner_grid(shape, dist, grid):
-    """owner[idx] = the single rank that owns global element ``idx`` under ``dist`` -- built
-    from the descriptor's own ``owned_indices`` (an independent cross-check of scatter)."""
+    """owner[idx] = the single rank that owns global element `idx` under `dist` (independent cross-check)."""
     owner = np.full(shape, -1, dtype=np.int64)
     for r in range(grid.nranks):
         owner[np.ix_(*[owned_indices(shape[d], dist.axes[d], grid, grid.coords_of(r)) for d in range(len(shape))])] = r
@@ -137,8 +113,7 @@ def _owner_grid(shape, dist, grid):
 
 @pytest.mark.parametrize("shape", [(8, 8), (9, 8), (7, 10), (5, 5)])
 def test_processor_grid_2d_quarter_split(shape):
-    # A 2-D array on a 2x2 grid: each rank owns exactly one contiguous quarter (block on both
-    # axes). Row-major rank<->coords => rank 0=TL, 1=TR, 2=BL, 3=BR.
+    # A 2-D array on a 2x2 grid: each rank owns one contiguous quarter; rank 0=TL, 1=TR, 2=BL, 3=BR.
     grid = Grid((2, 2))
     m, n = shape
     mi, nj = (m + 1) // 2, (n + 1) // 2  # load-balanced split point (first half gets the extra)
@@ -160,8 +135,7 @@ def test_processor_grid_2d_quarter_split(shape):
 
 @pytest.mark.parametrize("grid_dims,mb,nb", [((2, 2), 2, 3), ((2, 3), 3, 2), ((3, 2), 1, 2), ((2, 2), 4, 1)])
 def test_block_cyclic_2d_block_tuple_matches_scalapack_owner(grid_dims, mb, nb):
-    # 2-D block-cyclic with a per-axis block-tuple (MB, NB) on a PxQ grid: the owner of
-    # global (i, j) must be ScaLAPACK's (floor(i/MB) % P, floor(j/NB) % Q).
+    # 2-D block-cyclic (MB, NB) on a PxQ grid: owner(i,j) must be ScaLAPACK's (floor(i/MB)%P, floor(j/NB)%Q).
     grid = Grid(grid_dims)
     p, q = grid_dims
     shape = (11, 13)  # ragged vs every block size and grid dim
@@ -177,9 +151,7 @@ def test_block_cyclic_2d_block_tuple_matches_scalapack_owner(grid_dims, mb, nb):
     np.testing.assert_array_equal(owner, expect)
 
 
-# --------------------------------------------------------------------------------------- #
-# Replicated + the length-1 / scalar convention (rank 0 authoritative on gather)
-# --------------------------------------------------------------------------------------- #
+# --- Replicated + the length-1 / scalar convention (rank 0 authoritative on gather) ---
 @pytest.mark.parametrize("ranks", RANKS)
 @pytest.mark.parametrize("shape", [(1, ), (5, ), (3, 4), (2, 2, 2)])
 def test_replicated_full_copy_and_gather_from_rank0(ranks, shape):
@@ -194,9 +166,7 @@ def test_replicated_full_copy_and_gather_from_rank0(ranks, shape):
     np.testing.assert_array_equal(out, a)
 
 
-# --------------------------------------------------------------------------------------- #
-# Ragged + edge sizes: size < ranks, length-1 axis, length-0 axis
-# --------------------------------------------------------------------------------------- #
+# --- Ragged + edge sizes: size < ranks, length-1 axis, length-0 axis ---
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("n", [1, 2, 3, 5, 7])
 def test_size_smaller_or_ragged_vs_ranks_1d(n, scheme):
@@ -225,9 +195,7 @@ def test_length_zero_axis():
     assert out.shape == (0, 4)
 
 
-# --------------------------------------------------------------------------------------- #
-# Partition completeness, stated directly (disjoint + covering)
-# --------------------------------------------------------------------------------------- #
+# --- Partition completeness, stated directly (disjoint + covering) ---
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("ranks", [2, 3, 4, 6])
 def test_owned_indices_partition_each_axis(ranks, scheme):
@@ -251,9 +219,7 @@ def test_scatter_tiles_disjoint_and_cover(ranks, ndim):
     np.testing.assert_array_equal(gather(tiles, dist, grid, a.shape, a.dtype), a)
 
 
-# --------------------------------------------------------------------------------------- #
-# The default distribution + factor_grid helpers
-# --------------------------------------------------------------------------------------- #
+# --- The default distribution + factor_grid helpers ---
 @pytest.mark.parametrize("ranks", RANKS)
 @pytest.mark.parametrize("ndim", [1, 2, 3])
 def test_default_distribution_roundtrip(ranks, ndim):

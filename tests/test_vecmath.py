@@ -1,26 +1,8 @@
-"""Guards for glibc's vector libm (libmvec) across the compiler matrix.
-
-libmvec turns a scalar libm call in a hot loop into one vector call (``_ZGV<isa><n>v_exp``
-and friends). Measured on an exp/log loop, one thread, best of 7: 33.18ms without ->
-10.60ms with, a 3.13x gap, checksum identical.
-
-That gap is why these are correctness guards and not performance trivia. libmvec used to be
-on for clang (``-fveclib=libmvec``) and off for gcc, so the cc-vs-llvm column reported
-33.18ms vs 8.93ms -- 3.7x -- of which almost all was libmvec-vs-no-libmvec rather than
-gcc-vs-clang. With both carrying it the honest compiler gap is 1.19x. A benchmark whose
-compiler axis silently measures a library difference is reporting the wrong number, so the
-invariant worth pinning is: EVERY CPU baseline reaches libmvec, by whatever knob its
-compiler family offers.
-
-The knobs differ, which is the whole reason this can drift:
-  * clang    -- ``-fveclib=libmvec`` (built in).
-  * gcc/g++  -- no such flag (``-mveclibabi=`` knows only acml/aocl/svml), and glibc's own
-                <bits/math-vector.h> hides its decls behind __FAST_MATH__, which optarena
-                does not set. So flags.py -include's optarena/envs/vecmath.h instead.
-  * gfortran -- nothing from us: glibc ships the same decls as Fortran directives and the
-                driver spec pre-includes them. That is a property of the HOST toolchain, so
-                it is asserted here rather than assumed.
-"""
+"""Guards for glibc's vector libm (libmvec) across the compiler matrix: EVERY CPU baseline must reach
+libmvec (a ~3x gap), by whatever knob its compiler family offers, or the compiler axis silently
+measures a library difference instead of a compiler one. clang gets ``-fveclib=libmvec`` built in;
+gcc/g++ need ``-include vecmath.h`` (glibc hides its decls behind __FAST_MATH__, which we don't set);
+gfortran gets it for free from the driver spec, a host property asserted here rather than assumed."""
 import ctypes.util
 import pathlib
 import re
@@ -66,12 +48,8 @@ end subroutine kern
 
 
 def compile_object(tmp_path, source: str, suffix: str, exe: str, baseline: str, *extra: str) -> pathlib.Path:
-    """Compile ``source`` with ``baseline`` and return the object path.
-
-    The baseline is passed EXACTLY as the build path expands it (``shlex.split`` of the
-    ``{baseline}`` token in compilers.yaml), so these tests exercise the same string a
-    kernel build gets rather than a hand-written approximation of it.
-    """
+    """Compile ``source`` with ``baseline`` and return the object path; ``baseline`` is passed exactly
+    as the build path expands it, so this exercises the same string a kernel build gets."""
     src = tmp_path / f"probe{suffix}"
     src.write_text(source)
     obj = tmp_path / f"probe{suffix}.o"
@@ -82,11 +60,7 @@ def compile_object(tmp_path, source: str, suffix: str, exe: str, baseline: str, 
 
 
 def libmvec_calls(obj: pathlib.Path) -> set:
-    """The libmvec symbols ``obj`` calls, read from its UNDEFINED symbols.
-
-    A vectorized libm call leaves an undefined ``_ZGV...`` reference for the linker, so
-    ``nm --undefined-only`` answers this without disassembling.
-    """
+    """The libmvec symbols ``obj`` calls, read via ``nm --undefined-only`` (no disassembling needed)."""
     out = subprocess.run(["nm", "--undefined-only", str(obj)], capture_output=True, text=True, check=True).stdout
     return set(LIBMVEC_SYMBOL.findall(out))
 
@@ -99,8 +73,7 @@ def declared_functions() -> list:
 
 
 def test_the_vecmath_header_ships_with_the_package():
-    """flags.py -include's this path on every gcc/g++ compile; a wheel without it cannot
-    build a single native C/C++ kernel. setup.py package_data + MANIFEST.in list it."""
+    """flags.py -include's this path on every gcc/g++ compile; setup.py + MANIFEST.in must list it."""
     assert flags.VECMATH_H.is_file(), f"{flags.VECMATH_H} is missing"
     root = pathlib.Path(flags.__file__).resolve().parents[1]
     manifest = (root / "MANIFEST.in").read_text()
@@ -110,11 +83,10 @@ def test_the_vecmath_header_ships_with_the_package():
 
 
 def test_every_cpu_baseline_reaches_libmvec():
-    """The point of the whole file: no CPU baseline may silently lack the vector libm while
-    another has it, or the compiler axis measures libmvec instead of the compiler."""
+    """The point of the whole file: no CPU baseline may silently lack the vector libm while another
+    has it, or the compiler axis measures libmvec instead of the compiler."""
     if not osinfo.IS_LINUX:
-        # Not a skip: on macOS there IS no libmvec (libSystem ships no vector libm), so the
-        # correct, assertable state is that NEITHER knob is present.
+        # Not a skip: on macOS there is no libmvec, so the correct state is that neither knob is present.
         assert "-fveclib" not in flags.CPU_BASELINE_CLANG
         assert "-include" not in flags.CPU_BASELINE_GCC
         return
@@ -123,25 +95,22 @@ def test_every_cpu_baseline_reaches_libmvec():
 
 
 def test_the_fortran_baseline_does_not_carry_the_c_header():
-    """gfortran rejects a C header: "valid for C/C++/Cobol/ObjC/ObjC++ but not for Fortran"
-    -- a warning on EVERY Fortran compile, and fatal under -Werror. It gets libmvec from
-    glibc's Fortran directives instead (asserted for real below)."""
+    """gfortran rejects a C header (a warning on every compile, fatal under -Werror); it gets libmvec
+    from glibc's Fortran directives instead (asserted for real below)."""
     assert "-include" not in flags.CPU_BASELINE_GFORTRAN
     assert "vecmath.h" not in flags.CPU_BASELINE_GFORTRAN
 
 
 @pytest.mark.parametrize("block", ["gfortran", "mpifort"])
 def test_fortran_compilers_use_the_fortran_baseline(block):
-    """Both gfortran blocks must name CPU_BASELINE_GFORTRAN. mpifort wraps gfortran, so it
-    inherits the same C-header incompatibility and is easy to forget."""
+    """Both gfortran blocks must name CPU_BASELINE_GFORTRAN; mpifort wraps gfortran and is easy to forget."""
     compilers = _load_compilers()
     assert compilers[block]["baseline_ref"] == "CPU_BASELINE_GFORTRAN"
 
 
 def test_the_header_declares_nothing_libmvec_does_not_export():
-    """gcc turns each decl into a call to _ZGV<isa><n>v_<fn>; declaring a function libmvec
-    does not export makes every kernel using it fail to LINK on an undefined symbol. Assert
-    it here, where the message says which function, instead of mid-build."""
+    """Declaring a function libmvec does not export makes every kernel using it fail to link; assert it
+    here, where the message says which function, instead of mid-build."""
     if not osinfo.IS_LINUX:
         return
     libmvec = ctypes.util.find_library("mvec")
@@ -162,8 +131,8 @@ def test_the_header_declares_nothing_libmvec_does_not_export():
 
 
 def test_gcc_vectorizes_libm_at_the_baseline(tmp_path):
-    """The regression this file exists for. Before the header, gcc called scalar libm in a
-    loop while clang vectorized the same source."""
+    """The regression this file exists for: before the header, gcc called scalar libm in a loop while
+    clang vectorized the same source."""
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("gcc"), "gcc is required to build native C kernels"
@@ -174,8 +143,7 @@ def test_gcc_vectorizes_libm_at_the_baseline(tmp_path):
 
 
 def test_gxx_vectorizes_libm_at_the_baseline(tmp_path):
-    """C++ is a separate risk from C: the decls must survive <cmath>'s extern "C" + noexcept
-    declarations, which a C++-linkage redeclaration would collide with."""
+    """C++ is a separate risk from C: the decls must survive <cmath>'s extern "C" + noexcept."""
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("g++"), "g++ is required to build native C++ kernels"
@@ -184,10 +152,8 @@ def test_gxx_vectorizes_libm_at_the_baseline(tmp_path):
 
 
 def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path):
-    """gfortran gets libmvec with no flag from us, via the driver spec's pre-include of
-    glibc's math-vector-fortran.h. That is a DISTRO spec, not upstream gcc, so it is a host
-    property: on a host whose spec omits it, Fortran silently loses libmvec while C keeps
-    it, and the fortran column stops being comparable. Fail here if so."""
+    """gfortran gets libmvec for free via the driver spec's pre-include; a host whose spec omits it
+    silently loses libmvec while C keeps it, so the fortran column stops being comparable."""
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
@@ -199,8 +165,7 @@ def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path):
 
 
 def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
-    """The concrete reason CPU_BASELINE_GFORTRAN exists: the C/C++ baseline made gfortran
-    warn on every single compile."""
+    """The concrete reason CPU_BASELINE_GFORTRAN exists: the C/C++ baseline made gfortran warn on every compile."""
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
@@ -220,13 +185,8 @@ def test_the_fortran_baseline_compiles_without_warnings(tmp_path):
 
 
 def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path):
-    """Unlocking glibc's own decls with -D__FAST_MATH__ was rejected because the macro is a
-    lie that leaks: <bits/c++config.h> turns it into _GLIBCXX_FAST_MATH=1, changing
-    libstdc++'s std::complex infinity handling. Our header must not do that.
-
-    The control half matters as much as the assertion: a probe that cannot detect real
-    -ffast-math would pass no matter what the header did.
-    """
+    """-D__FAST_MATH__ was rejected because <bits/c++config.h> turns it into _GLIBCXX_FAST_MATH=1,
+    changing libstdc++'s complex infinity handling; our header must not do that."""
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("g++"), "g++ is required to build native C++ kernels"
@@ -245,8 +205,7 @@ def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path):
 
 
 def test_the_header_does_not_change_math_errhandling(tmp_path):
-    """The C half of the same lie: -D__FAST_MATH__ flips math_errhandling from
-    MATH_ERREXCEPT (2) to 0, claiming FP exceptions are not raised either."""
+    """The C half of the same lie: -D__FAST_MATH__ flips math_errhandling from MATH_ERREXCEPT to 0."""
     if not osinfo.IS_LINUX:
         return
     assert shutil.which("gcc"), "gcc is required to build native C kernels"

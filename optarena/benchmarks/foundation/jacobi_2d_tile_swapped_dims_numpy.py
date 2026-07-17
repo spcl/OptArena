@@ -1,8 +1,4 @@
-"""Foundation adversarial kernel ``jacobi_2d_tile_swapped_dims`` (numpy reference).
-
-Hand-authored: the source IS the bad code. The puzzle is to
-recognise the pathology and emit faster, correct replacement.
-"""
+"""Foundation adversarial kernel ``jacobi_2d_tile_swapped_dims`` (numpy reference)."""
 
 
 def jacobi_2d_tile_swapped_dims(N, TSTEPS, A, B):

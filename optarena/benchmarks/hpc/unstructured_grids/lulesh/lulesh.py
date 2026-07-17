@@ -1,40 +1,9 @@
 # Copyright 2026 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""LULESH cubic-mesh + Sedov-blast input generator.
-
-Builds the full LULESH initial state for an ``edgeElems^3`` hexahedral box and
-the Sedov point-blast initial conditions, exactly as the dace-fortran driver
-``tests/lulesh/lulesh.f90`` does (BuildMesh + nodelist + nodal mass + symmetry
-nodesets + face connectivity lxim/lxip/letam/letap/lzetam/lzetap + boundary-
-condition flags + deposited origin energy). The authoritative LLNL/AWE LULESH
-source is GPL-3.0-or-later; see ``baseline/NOTICE.md`` for provenance.
-
-``numElem`` MUST be a perfect cube (= edgeElems**3); the manifest restricts the
-S/M/L/XL presets to {8, 64, 512, 4096} (edgeElems 2/4/8/16). ``nsteps`` fixes the
-number of Lagrange-leapfrog cycles so the benchmark is deterministic (the real
-driver runs to cycle 231 / stoptime 1e-2; a small fixed count keeps the harness
-cheap while exercising every kernel and the dt feedback loop).
-
-Why this exact state and not random input (data-validity mode = invariant-
-structured): LULESH is a shock-hydro proxy whose kernels (EOS, monotonic-q,
-hourglass) are only meaningful on a physically consistent state -- a valid
-hexahedral mesh, positive reference volumes, and a single energy spike at the
-origin (the Sedov point blast). That spike is what launches the spherical shock,
-so depositing all initial energy in element 0 is what makes the run exercise the
-real dynamics AND makes the plane-symmetry invariant hold (the canonical LULESH
-acceptance check); random e/p/v would NaN the EOS and break symmetry.
-
-Single-region configuration (the driver's ``numReg == 1`` branch): every element
-is its own region, so the region-indexset arrays collapse to the identity and are
-not materialised here -- the numpy kernel's EOS / monotonic-q loops run once over
-all elements. The multi-region load-imbalance path (seeded by libc ``rand()``) is
-out of scope: it is a runtime-balancing artefact that does not change the
-single-region numerics and is not reproducible across C libraries.
-"""
+"""LULESH cubic-mesh + Sedov-blast input generator, matching the dace-fortran driver tests/lulesh/lulesh.f90 exactly."""
 import numpy as np
 
-# Sedov deposited-energy base (lulesh.f90 PARAMETER ebase), scaled by
-# (edgeElems/45)**3 -- the canonical LULESH initial origin-element energy.
+# Sedov deposited-energy base (lulesh.f90 PARAMETER ebase), scaled by (edgeElems/45)**3.
 _EBASE = 3.948746e7
 
 # Boundary-condition bit masks (lulesh.f90).
@@ -51,8 +20,7 @@ def _edge_elems(numElem):
 
 
 def _calc_elem_volume(xl, yl, zl):
-    """Single-hexahedron volume (CalcElemVolume) for the reference-volume init.
-    xl/yl/zl are (numelem, 8)."""
+    """Single-hexahedron volume (CalcElemVolume) for the reference-volume init; xl/yl/zl are (numelem, 8)."""
 
     def c(a, i):
         return a[:, i]
@@ -97,8 +65,7 @@ def initialize(numElem, nsteps, datatype=np.float64):
 
     # --- elemToNode connectivity (nodelist), shape (numElem, 8) -------------
     ci, ri, pi = np.meshgrid(np.arange(edgeElems), np.arange(edgeElems), np.arange(edgeElems), indexing="ij")
-    # Match the driver's plane->row->col nest: nidx = plane*eN^2 + row*eN + col
-    # (it advances nidx by +1 per col, +1 extra per row, +edgeNodes per plane).
+    # matches the driver's plane->row->col nest: nidx = plane*eN^2 + row*eN + col.
     plane = pi.transpose(2, 1, 0).reshape(-1)
     row = ri.transpose(2, 1, 0).reshape(-1)
     col = ci.transpose(2, 1, 0).reshape(-1)
@@ -156,11 +123,7 @@ def initialize(numElem, nsteps, datatype=np.float64):
     fy = np.zeros(numNode, dtype=datatype)
     fz = np.zeros(numNode, dtype=datatype)
 
-    # --- Deposit initial Sedov energy at the origin element -----------------
-    # The whole problem is driven by a single energy spike at element 0 (the
-    # point-blast source); every other element starts at rest (e=p=q=0, v=1).
-    # The (edgeElems/45)^3 scale is the canonical LULESH normalisation so the
-    # deposited energy is mesh-resolution-independent.
+    # deposit the Sedov point-blast energy spike at element 0 (canonical (edgeElems/45)^3 normalisation); rest starts at e=p=q=0, v=1.
     scale = edgeElems / 45.0
     einit = _EBASE * scale * scale * scale
     e[0] = einit

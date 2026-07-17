@@ -32,6 +32,7 @@ keeping ``correct == true``.
 import contextlib
 import dataclasses
 import json
+import multiprocessing
 import queue
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
@@ -335,6 +336,11 @@ def build_device_pool(slots: Optional[List[DeviceSlot]] = None) -> "queue.Queue"
     return pool
 
 
+#: Modules the forkserver preimports once so per-rep native-call forks inherit them instead of
+#: re-importing (measured 235ms -> 5ms per fork; the scorer forks ~2*repeat times per grade).
+FORKSERVER_PRELOAD = ["numpy", "scipy", "optarena.harness.native_call"]
+
+
 def make_server(host: str, port: int, cfg: RunConfig, slots: Optional[List[DeviceSlot]] = None) -> ThreadingHTTPServer:
     """A threading HTTP server bound to ``(host, port)`` serving the judge API. Concurrent grades
     are bounded + pinned to a shared device-slot pool so kernels sequentialize per device; pass
@@ -345,11 +351,12 @@ def make_server(host: str, port: int, cfg: RunConfig, slots: Optional[List[Devic
 
 def serve(host: str = "0.0.0.0", port: int = 8800, cfg: Optional[RunConfig] = None) -> int:
     """Run the judge service until interrupted (the ``optarena serve`` entry)."""
-    # The server is multi-threaded; forking a native-call child from a thread can
-    # deadlock on a lock held by another thread. Pin the scorer's isolated calls
-    # to forkserver (forks from a clean single-threaded helper) via the global
-    # config -- no environment munging.
+    # Threaded server: forking a native child from a thread can deadlock, so pin the scorer's
+    # isolated calls to forkserver (forks from a clean single-threaded helper).
     config.set_override("runtime.mp_context", "forkserver")
+    # forkserver forks a clean helper that does NOT inherit our imports; preload the heavy ones
+    # once so each timed fork skips a ~235ms numpy/scipy re-import (else repeat=100 blows the timeout).
+    multiprocessing.set_forkserver_preload(FORKSERVER_PRELOAD)
     cfg = cfg or from_config()
     srv = make_server(host, port, cfg)
     print(f"optarena judge service on http://{host}:{port}  "

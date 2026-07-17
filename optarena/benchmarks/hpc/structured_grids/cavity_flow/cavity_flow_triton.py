@@ -39,23 +39,17 @@ def build_b_kernel(
     tl.static_assert(BLOCK_SIZE_X < 2 * nx)
     tl.static_assert(BLOCK_SIZE_Y < 2 * ny)
 
-    # 1. Coordinate Setup using Utility
     pid_x = tl.program_id(0)
     pid_y = tl.program_id(1)
 
-    # We get the flat memory offsets (idx) and the row/col vectors for logic
     offsets, mask_bounds, rows, cols = get_2d_tile_offsets(pid_x * BLOCK_SIZE_X, pid_y * BLOCK_SIZE_Y, BLOCK_SIZE_X,
                                                            BLOCK_SIZE_Y, nx, ny)
 
-    # 2. Logic Masks
-    # Interior points only: 1 to nx-2
-    # Note: rows/cols are 1D vectors, we broadcast them to create the 2D mask
+    # Interior points only (1 to nx-2 / ny-2); rows/cols are 1D, broadcast to a 2D mask.
     mask_interior = ((cols[None, :] > 0) & (cols[None, :] < nx - 1)) & \
                     ((rows[:, None] > 0) & (rows[:, None] < ny - 1))
 
-    # 3. Load Neighbors
-    # Since 'offsets' contains the flat index (row-major), we can use simple scalar arithmetic
-    # for East/West (+1/-1). For North/South we jump by 'nx' (stride).
+    # offsets is the flat row-major index: East/West are +-1, North/South jump by the 'nx' stride.
     u_east = tl.load(u_ptr + offsets + 1, mask=mask_interior, other=0.0)
     u_west = tl.load(u_ptr + offsets - 1, mask=mask_interior, other=0.0)
     u_north = tl.load(u_ptr + offsets + nx, mask=mask_interior, other=0.0)
@@ -66,7 +60,6 @@ def build_b_kernel(
     v_north = tl.load(v_ptr + offsets + nx, mask=mask_interior, other=0.0)
     v_south = tl.load(v_ptr + offsets - nx, mask=mask_interior, other=0.0)
 
-    # 4. Physics Calculation
     term1 = ((u_east - u_west) / (2 * dx) + (v_north - v_south) / (2 * dy)) / dt
     term2 = ((u_east - u_west) / (2 * dx)) * ((u_east - u_west) / (2 * dx))
     term3 = 2 * ((u_north - u_south) / (2 * dy) * (v_east - v_west) / (2 * dx))
@@ -108,12 +101,10 @@ def pressure_step_kernel(
     offsets, mask_bounds, rows, cols = get_2d_tile_offsets(pid_x * BLOCK_SIZE_X, pid_y * BLOCK_SIZE_Y, BLOCK_SIZE_X,
                                                            BLOCK_SIZE_Y, nx, ny)
 
-    # Interior Logic mask
     mask_interior = ((cols[None, :] > 0) & (cols[None, :] < nx - 1)) & \
                     ((rows[:, None] > 0) & (rows[:, None] < ny - 1))
 
     for _ in range(nit):
-        # Load neighbors
         p_east = tl.load(p_curr_ptr + offsets + 1, mask=mask_interior, other=0.0)
         p_west = tl.load(p_curr_ptr + offsets - 1, mask=mask_interior, other=0.0)
         p_north = tl.load(p_curr_ptr + offsets + nx, mask=mask_interior, other=0.0)
@@ -127,8 +118,6 @@ def pressure_step_kernel(
         p_new = (num / denom) - term_b
 
         # --- Boundary Conditions ---
-        # We use the row/col vectors returned by get_2d_tile_offsets for readability
-
         # Top Wall (y=ny-1)
         is_top = (rows[:, None] == ny - 1)
 
@@ -181,23 +170,19 @@ def velocity_update_kernel(u_new_ptr, v_new_ptr, u_curr_ptr, v_curr_ptr, p_ptr, 
     mask_interior = ((cols[None, :] > 0) & (cols[None, :] < nx - 1)) & \
                     ((rows[:, None] > 0) & (rows[:, None] < ny - 1))
 
-    # Load Central
     u_c = tl.load(u_curr_ptr + offsets, mask=mask_interior, other=0.0)
     v_c = tl.load(v_curr_ptr + offsets, mask=mask_interior, other=0.0)
 
-    # Load Neighbors (U)
     u_e = tl.load(u_curr_ptr + offsets + 1, mask=mask_interior, other=0.0)
     u_w = tl.load(u_curr_ptr + offsets - 1, mask=mask_interior, other=0.0)
     u_n = tl.load(u_curr_ptr + offsets + nx, mask=mask_interior, other=0.0)
     u_s = tl.load(u_curr_ptr + offsets - nx, mask=mask_interior, other=0.0)
 
-    # Load Neighbors (V)
     v_e = tl.load(v_curr_ptr + offsets + 1, mask=mask_interior, other=0.0)
     v_w = tl.load(v_curr_ptr + offsets - 1, mask=mask_interior, other=0.0)
     v_n = tl.load(v_curr_ptr + offsets + nx, mask=mask_interior, other=0.0)
     v_s = tl.load(v_curr_ptr + offsets - nx, mask=mask_interior, other=0.0)
 
-    # Load Pressure
     p_e = tl.load(p_ptr + offsets + 1, mask=mask_interior, other=0.0)
     p_w = tl.load(p_ptr + offsets - 1, mask=mask_interior, other=0.0)
     p_n = tl.load(p_ptr + offsets + nx, mask=mask_interior, other=0.0)
@@ -233,9 +218,7 @@ def velocity_update_kernel(u_new_ptr, v_new_ptr, u_curr_ptr, v_curr_ptr, p_ptr, 
     tl.store(v_new_ptr + offsets, v_final, mask=mask_bounds)
 
 
-# -----------------------------------------------------------------------------
-# Host Driver
-# -----------------------------------------------------------------------------
+# Host driver
 def cavity_flow(nx, ny, nt, nit, u, v, dt, dx, dy, p, rho, nu):
     dx = float(dx)
     dy = float(dy)
@@ -255,7 +238,6 @@ def cavity_flow(nx, ny, nt, nit, u, v, dt, dx, dy, p, rho, nu):
     barrier = torch.zeros(1, dtype=torch.int32)
 
     for n in range(nt):
-        # 1. Build B
         build_b_kernel(
             b,
             u_prev,
@@ -266,10 +248,8 @@ def cavity_flow(nx, ny, nt, nit, u, v, dt, dx, dy, p, rho, nu):
             dy,
         )
 
-        # 2. Pressure Poisson
         pressure_step_kernel(p_curr, p_prev, b, dx, dy, barrier, nit=nit, num_sms=num_sms, launch_cooperative_grid=True)
 
-        # 3. Velocity Update
         velocity_update_kernel(
             u,
             v,  # Out

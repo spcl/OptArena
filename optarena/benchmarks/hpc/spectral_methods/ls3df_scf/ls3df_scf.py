@@ -1,14 +1,7 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Inputs for ls3df_scf: the fixed physics of a fragment-DFT SCF on an N^3 real-space grid
-# (spacing h = 0.2 bohr, so half_inv_h2 = 1/(2 h^2), dvol = h^3) -- a smooth attractive
-# ionic potential V_ion, and for each of nfrag fragments an Lb^3 box with a periodic corner
-# offset, an inclusion-exclusion sign alpha in {+1,-1}, a Kleinman-Bylander projector set
-# (proj, dij), and a random trial block of nstate wavefunctions (psi_frag). rho is a
-# positive normalized seed density; V_tot is the potential buffer the kernel fills. nscf
-# (SCF steps) and m (Chebyshev degree) are size parameters; mix is the linear density-
-# mixing weight; occ are the (unit) state occupations.
+# Inputs for ls3df_scf: fixed physics of a fragment-DFT SCF on an N^3 grid (h=0.2 bohr), nfrag Lb^3 KB-projector fragments.
 import numpy as np
 
 

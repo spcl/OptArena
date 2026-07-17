@@ -2,13 +2,7 @@ import triton
 import triton.language as tl
 
 from optarena.frameworks.triton_utilities import get_2d_tile_offsets
-"""
-Triton implementation of:
-
-Katz, Gary J., and Joseph T. Kider. ‘All-Pairs Shortest-Paths for Large Graphs on the GPU’. 
-Proceedings of the 23rd ACM SIGGRAPH/EUROGRAPHICS Symposium on Graphics Hardware (Goslar, DEU), GH ’08, 
-Eurographics Association, 20 June 2008, 47–55.
-"""
+"""Triton port of Katz & Kider, 'All-Pairs Shortest-Paths for Large Graphs on the GPU', GH'08."""
 
 
 @triton.jit()
@@ -74,12 +68,7 @@ def _2dim_thread_part(path, k, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
 
 def kernel(path  # (N, N)
            ):
-    """
-    for k in range(path.shape[0]):
-        for i in range(path.shape[0]):
-            for j in range(path.shape[0]):
-                path[i, j] = minimum(path[i, j], path[i, k] + path[k, j])
-    """
+    """Block-tiled equivalent of the triple-nested O(N^3) Floyd-Warshall relaxation."""
 
     BLOCK_SIZE = 32
     num_warps = 4

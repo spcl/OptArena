@@ -1,11 +1,4 @@
-"""Validate the standalone kernel extraction in this directory.
-
-These tests compare the NumPy adaptation with the standalone C/C++/Fortran
-reference implementation built as a shared library. They also cross-check
-against an independent Python reference implementation when present.
-Deterministic, edge-case, invalid-input, and randomized cases are included
-where applicable.
-"""
+"""Cross-check the NumPy lavaMD kernel against a C++ reference and an independent Python reference."""
 
 import ctypes
 import subprocess
@@ -513,8 +506,7 @@ def run_randomized_tests(counters):
             alpha=alpha,
         )
 
-        # Keep randomized stress broad but tractable; dense connectivity is
-        # covered explicitly by fixed/edge cases above.
+        # keep randomized stress tractable; dense connectivity is covered by fixed/edge cases above.
         if max_neighbors > 2:
             inputs[2][:] = np.minimum(inputs[2], 2)
 

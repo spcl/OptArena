@@ -1,32 +1,4 @@
-"""CPU TVM impl of ``mandelbrot2`` (escape-iteration fractal, freeze-on-escape).
-
-Reference (numpy / jax)::
-
-    Xi, Yi = mgrid[0:xn, 0:yn]
-    X = linspace(xmin, xmax, xn)[Xi]; Y = linspace(ymin, ymax, yn)[Yi]
-    C = X + Y * 1j                          # (xn, yn) complex128
-    N_ = zeros; Z_ = zeros; Z = zeros; mask = ones
-    for i in range(itermax):
-        Z = Z * Z + C                       # advance first
-        I = (abs(Z) > horizon) & mask       # newly escaped (still active)
-        N_ = where(I, i + 1, N_)            # freeze escape iteration
-        Z_ = where(I, Z, Z_)               # freeze escape value
-        mask = mask & ~I
-    return Z_.T, N_.T
-
-Unlike ``mandelbrot1`` (which records the *last* still-active iteration),
-this records the *first* escaping iteration and freezes ``Z`` at the
-escaping value. The numpy/jax version compacts the still-active set each
-step; per pixel that is just a freeze, so the compiled step advances every
-pixel and freezes the recorded ``(N_, Z_)`` once it escapes. Complex
-arithmetic is split into real/imag planes; ``itermax`` is the Python-driven
-loop over the compiled step; the iteration index is a length-1 int64
-tensor; ``horizon`` is baked.
-
-The grid is built on the host (matching numpy's ``linspace``) as
-``C[a, b] = X[a] + Y[b]*1j`` of shape ``(xn, yn)``; results are transposed
-to ``(yn, xn)`` and ``Z_`` reassembled into a complex array before return.
-"""
+"""CPU TVM impl of mandelbrot2 (escape fractal, freeze-on-first-escape) via a per-iteration TIR step."""
 import numpy as np
 import tvm
 from tvm import te
@@ -35,13 +7,7 @@ from optarena.frameworks.tvm_build import cpu_target, tune_compile, gpu_target, 
 
 
 class _StepKernel:
-    """Shape-keyed compile cache for the escape-iteration step PrimFunc,
-    with a non-tuned ``tvm.compile`` fallback.
-
-    meta_schedule's ``compile_tir`` can return ``None`` for a kernel it
-    declines to tune; the fallback lowers the unscheduled PrimFunc so the
-    step always runs in TVM. Mirrors the shared ``TvmKernel`` interface
-    (``get`` / ``device_fn``) used by the Python iteration driver."""
+    """Shape-keyed compile cache for the escape-iteration step PrimFunc, with an untuned fallback."""
 
     def __init__(self, name, build, target_fn, device_fn):
         self.name = name
@@ -66,12 +32,7 @@ class _StepKernel:
 
 
 def build_primfunc(xn, yn, dtype, horizon):
-    """One escape-iteration step over the whole ``(xn, yn)`` grid.
-
-    State planes: working ``Zr/Zi``, recorded ``Nrec`` / ``Zrec_r/Zrec_i``,
-    and an int64 ``active`` flag (1 = not yet escaped). ``nval`` is a
-    length-1 int64 tensor holding the current iteration ``i``.
-    """
+    """One escape-iteration step over the (xn, yn) grid; records first-escape Nrec/Zrec while active."""
     Zr = te.placeholder((xn, yn), name="Zr", dtype=dtype)
     Zi = te.placeholder((xn, yn), name="Zi", dtype=dtype)
     Cr = te.placeholder((xn, yn), name="Cr", dtype=dtype)
