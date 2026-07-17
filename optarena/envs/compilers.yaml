@@ -37,11 +37,15 @@ gpp:
   compile: ["{cc}", "{baseline}", "-std=c++23", "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}", "-lm"]
 
+# CPU_BASELINE_GFORTRAN, not CPU_BASELINE_GCC: the C/C++ one carries the libmvec decl
+# header via -include, which gfortran rejects as "valid for C/C++/... but not for Fortran".
+# gfortran gets libmvec from glibc's Fortran directives instead (the driver spec
+# pre-includes math-vector-fortran.h), so it needs no flag of ours here.
 gfortran:
   lang: fortran
   install: {apt: gfortran, spack: gcc}
   cc: gfortran
-  baseline_ref: CPU_BASELINE_GCC
+  baseline_ref: CPU_BASELINE_GFORTRAN
   autopar_ref: GCC_AUTOPAR
   report_ref: GCC_OPT_REPORT
   compile: ["{cc}", "{baseline}", "-ffree-form", "-ffree-line-length-none",
@@ -151,7 +155,7 @@ mpifort:
   mpi: true
   install: {apt: libmpich-dev, spack: mpich}
   cc: mpifort.mpich
-  baseline_ref: CPU_BASELINE_GCC
+  baseline_ref: CPU_BASELINE_GFORTRAN   # wraps gfortran -- see the gfortran block
   compile: ["{cc}", "{baseline}", "-ffree-form", "-ffree-line-length-none", "-std=f2018", "-c", "{src}", "-o", "{obj}"]
   link:    ["{cc}", "{objs}", "-o", "{exe}"]
 

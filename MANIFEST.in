@@ -8,3 +8,7 @@
 recursive-include optarena *.yaml
 recursive-include optarena *.schema.yaml
 include optarena/container_backends.txt
+# envs/vecmath.h is a BUILD INPUT, not documentation: flags.py puts it on every gcc/g++
+# compile line via -include (CPU_BASELINE_GCC). Dropped from the wheel, every native C/C++
+# kernel fails to compile with "vecmath.h: No such file or directory".
+include optarena/envs/vecmath.h

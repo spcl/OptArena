@@ -46,6 +46,7 @@ FRAMEWORK_LANG: Dict[str, str] = {
     "cc_autopar": "c",
     "llvm": "cpp",
     "fortran": "fortran",
+    "fortran_autopar": "fortran",
     "flang": "fortran",
     "polly": "cpp",
     "pluto": "cpp",
@@ -78,6 +79,7 @@ FRAMEWORK_COMPILER: Dict[str, str] = {
 #: be a polycc pass, intentionally out of scope for the flag preset).
 FRAMEWORK_FLAGS: Dict[str, str] = {
     "cc_autopar": "GCC_AUTOPAR",
+    "fortran_autopar": "GCC_AUTOPAR",
     "polly": "POLLY_PAR",
     "pluto": "PLUTO_PAR",
 }

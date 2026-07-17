@@ -21,11 +21,13 @@ the framework's :meth:`compile_args`.
 """
 import enum
 import os
+import pathlib
 import re
+import shlex
 import subprocess
 from typing import Dict, Optional
 
-from optarena import osinfo
+from optarena import osinfo, paths
 
 
 class Mode(enum.Enum):
@@ -59,20 +61,49 @@ _FP_RELAX = "-fno-math-errno -fno-trapping-math -fno-signed-zeros"
 # ``-mcpu=native``. (2) clang's OpenMP runtime: GNU ``libgomp`` is a glibc/Linux package
 # (ubiquitous there, ships with gcc) that does NOT exist on macOS, where Homebrew ships
 # ``libomp``; on macOS the portable ``-fopenmp`` resolves to whatever the compiler carries
-# (brew gcc's libgomp, or a libomp-equipped clang). (3) ``-fveclib=libmvec`` is glibc's
-# vector libm -- Linux only (macOS libSystem has none).
+# (brew gcc's libgomp, or a libomp-equipped clang). (3) libmvec is glibc's vector libm --
+# Linux only (macOS libSystem has none), and reached by a DIFFERENT knob per compiler
+# family; see the libmvec block below.
 _ARCH_NATIVE = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_arm()) else "-march=native"
 _OPENMP_CLANG = "-fopenmp=libgomp" if osinfo.IS_LINUX else "-fopenmp"
-_VECLIB = " -fveclib=libmvec" if osinfo.IS_LINUX else ""
+
+#: The libmvec decl header handed to GCC (see the file for the full rationale).
+VECMATH_H: pathlib.Path = paths.ROOT / "optarena" / "envs" / "vecmath.h"
+
+# glibc's vector libm, per compiler family. Both baselines must carry it or neither: with
+# libmvec on clang only, the cc-vs-llvm column compares libmvec against no-libmvec rather
+# than gcc against clang (measured 3.7x apart on an exp/log loop; the honest gap is 1.19x).
+#
+# clang has a built-in flag. GCC has none -- its -mveclibabi= knows only acml/aocl/svml --
+# and glibc's own <bits/math-vector.h> gates the decls behind __FAST_MATH__, which we do
+# not set (see the fast-math note above). Faking that macro is not an option: it leaks into
+# <bits/c++config.h> as _GLIBCXX_FAST_MATH=1 and flips math_errhandling 2 -> 0. So GCC gets
+# an equivalent decl header via -include instead. shlex.quote because {baseline} is
+# expanded with shlex.split (languages.py) -- an unquoted path with a space would split.
+_VECLIB_CLANG = " -fveclib=libmvec" if osinfo.IS_LINUX else ""
+_VECLIB_GCC = f" -include {shlex.quote(str(VECMATH_H))}" if osinfo.IS_LINUX else ""
 
 #: Clang baseline: -O3 + native arch + OpenMP + vectorized libm (no fast-math). On Linux
 #: OpenMP is pinned to GNU ``libgomp`` (like POLLY_PAR/PLUTO_PAR -- clang's default
 #: ``libomp`` is a separate, frequently-absent package) and glibc's ``libmvec`` is added;
 #: on macOS both are dropped (neither exists there -- see the OS-aware pieces above).
-CPU_BASELINE_CLANG = (f"-O3 {_ARCH_NATIVE} {_OPENMP_CLANG} {_FP_RELAX} -fstrict-aliasing -fPIC{_VECLIB}")
+CPU_BASELINE_CLANG = (f"-O3 {_ARCH_NATIVE} {_OPENMP_CLANG} {_FP_RELAX} -fstrict-aliasing -fPIC{_VECLIB_CLANG}")
 
-#: GCC baseline: -O3 + native arch + OpenMP (no fast-math; libmvec implicit on glibc).
-CPU_BASELINE_GCC = (f"-O3 {_ARCH_NATIVE} -fopenmp {_FP_RELAX} -fstrict-aliasing -fPIC")
+#: GCC baseline for C / C++: -O3 + native arch + OpenMP + vectorized libm (no fast-math).
+#: The libmvec half arrives as a decl header, not a flag -- gcc has no -fveclib. This line
+#: previously claimed "libmvec implicit on glibc"; it is not, and was not: glibc's decls
+#: need __FAST_MATH__, so gcc built every libm call scalar while clang vectorized it.
+CPU_BASELINE_GCC = (f"-O3 {_ARCH_NATIVE} -fopenmp {_FP_RELAX} -fstrict-aliasing -fPIC{_VECLIB_GCC}")
+
+#: GCC baseline for Fortran -- CPU_BASELINE_GCC minus the C decl header. gfortran cannot
+#: consume one ("valid for C/C++/... but not for Fortran"): a warning on every compile, and
+#: fatal under -Werror. It does not need one either -- glibc ships the same declarations as
+#: Fortran directives (math-vector-fortran.h) and the gcc driver spec pre-includes them, so
+#: gfortran already emits libmvec calls at this baseline WITHOUT -ffast-math. That
+#: pre-include is a distro spec, not upstream gcc, so it is a host property rather than
+#: something we can assert from here: tests/test_vecmath.py checks gfortran really does
+#: vectorize libm, and fails loudly on a host whose spec omits it.
+CPU_BASELINE_GFORTRAN = (f"-O3 {_ARCH_NATIVE} -fopenmp {_FP_RELAX} -fstrict-aliasing -fPIC")
 
 #: Intel icpx (LLVM-based oneAPI) baseline: -O3 + xHost + OpenMP + ZMM hint (no fast-math).
 CPU_BASELINE_ICPX = (f"-O3 -xHost -fopenmp {_FP_RELAX} -fPIC -qopt-zmm-usage=high")

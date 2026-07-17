@@ -42,6 +42,9 @@ setup(
             'config.yaml',
             'container_backends.txt',
             'envs/*.yaml',
+            # A build input, not data: CPU_BASELINE_GCC -include's it on every gcc/g++
+            # compile, so without it native C/C++ kernels do not compile from a wheel.
+            'envs/vecmath.h',
         ],
     },
     # What the LIBRARY itself needs to import -- every module-level third-party import under

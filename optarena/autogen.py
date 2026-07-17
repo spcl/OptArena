@@ -144,6 +144,7 @@ NATIVE_FRAMEWORKS = {
     "cc_autopar": "c",  # same emitted C as ``cc``; the delta is gcc's autopar flags
     "llvm": "cpp",
     "fortran": "fortran",
+    "fortran_autopar": "fortran",  # same emitted Fortran as ``fortran``; delta is autopar
     "flang": "fortran",  # same emitted Fortran; the delta is the LLVM driver
     "polly": "cpp",
     "pluto": "cpp",

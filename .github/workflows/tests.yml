@@ -75,12 +75,16 @@ jobs:
         # test_bindings.py ran in NO job until now, which is why the C ABI could type nbody's
         # dt: 0.05 as int64 -- int(0.05) == 0, a zero timestep -- corpus-wide and unnoticed.
         # It is seconds of pure-python assertions over the manifests; it belongs in the cheap phase.
+        # test_vecmath.py is here for the same reason: libmvec was on for clang and off for gcc,
+        # so the cc-vs-llvm column reported 3.7x when the real compiler gap is 1.19x -- the rest
+        # was a library difference. Its compile probes need only gcc/g++/gfortran, all preinstalled.
         run: |
           python -m pytest -q -p no:cacheprovider --timeout=600 \
             tests/test_yaml_style.py \
             tests/test_tree_structure.py \
             tests/test_bindings.py \
             tests/test_compile_flags.py \
+            tests/test_vecmath.py \
             tests/test_firewall.py \
             tests/test_hf_export.py
 

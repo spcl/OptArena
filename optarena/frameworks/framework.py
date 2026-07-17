@@ -282,6 +282,22 @@ FRAMEWORK_META: Dict[str, Dict[str, Any]] = {
         "compiler": "gfortran",
         "precisions": IEEE_PRECISIONS,
     },
+    # The Fortran half of the autopar axis. C had ``cc_autopar`` and C++ had ``polly``, but
+    # Fortran had no auto-parallelized flavor at all -- gfortran's ``autopar_ref:
+    # GCC_AUTOPAR`` in compilers.yaml only fires at Mode.MULTI_CORE, which the framework
+    # build path never asks for, so the declaration reached nothing. Same emitted Fortran as
+    # ``fortran``; the delta is gcc's autopar flags.
+    "fortran_autopar": {
+        "base": "native",
+        "full_name": "Fortran autopar (gfortran)",
+        "prefix": "fortran_autopar",
+        "postfix": "cpp",
+        "arch": "cpu",
+        "language": "fortran",
+        "compiler": "gfortran",
+        "flags": "fortran_autopar",
+        "precisions": IEEE_PRECISIONS,
+    },
     # LLVM Fortran, the flang half of the gfortran/flang pair -- the Fortran counterpart of
     # the cc/llvm (gcc/clang) split, which Fortran had no equivalent of. compilers.yaml has
     # carried a full `flang` block all along, but no flavor named it, so the block was dead
