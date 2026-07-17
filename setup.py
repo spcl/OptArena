@@ -44,6 +44,32 @@ setup(
             'envs/*.yaml',
         ],
     },
+    # What the LIBRARY itself needs to import -- every module-level third-party import under
+    # optarena/ outside benchmarks/ and tests/. requirements/<hw>.txt stays the FRAMEWORK MATRIX
+    # (torch/jax/tvm/triton/numba/pythran/xgboost + the hdf5/netcdf bindings): those are
+    # hardware-dependent and are chosen per platform, which is why they are not pinned here.
+    #
+    # Without this, `pip install optarena` (or `pip install -e .`) yields an unimportable package:
+    # it resolves ZERO dependencies. That was survivable only because every in-repo consumer
+    # installs `-r requirements/<hw>.txt` FIRST (.github/actions/setup, containers/*.def,
+    # optarena.Dockerfile) -- a downstream repo doing just `pip install -e .` gets
+    # ModuleNotFoundError one dep at a time (sqlmodel, via optarena/frameworks/schema.py, is how
+    # this surfaced).
+    #
+    # dace is deliberately ABSENT: the PyPI wheel is an old release that imports the numpy-2-removed
+    # ``np.int``. Consumers install spcl/dace@extended editable instead (see requirements/cpu.txt).
+    install_requires=[
+        'numpy>=2,<3',  # the array type of every benchmark + translator signature
+        'scipy',  # optarena/support/helpers/sparse/generators.py, plotting
+        'pandas',  # optarena/plotting.py
+        'matplotlib',  # optarena/plotting.py
+        'ml_dtypes',  # optarena/precision.py -- the low-precision dtypes
+        'pyyaml',  # optarena/config.py + languages.py, read at import
+        'sqlmodel',  # optarena/frameworks/schema.py -- the typed results-DB schema
+        'jinja2',  # optarena/harness/prompts.py
+        'cffi',  # optarena/harness/native_call.py
+        'sympy',  # numpyto_common/lowering.py -- symbolic shape lowering
+    ],
     entry_points={
         'console_scripts': [
             # The main CLI (serve / run / agent / ...). Without this the documented
