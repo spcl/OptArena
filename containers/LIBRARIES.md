@@ -116,7 +116,7 @@ submission in-container. All from apt on the same shared install line.
 
 | Tool | apt package | Provides / use |
 |---|---|---|
-| perf | `linux-tools-generic` | Linux `perf` -- cycle / cache-miss / hotspot sampling (`linux-tools-common` alone lacks the binary) |
+| perf | `linux-perf` | Linux `perf` -- cycle / cache-miss / hotspot sampling. NOT `linux-tools-common`/`linux-tools-generic`: neither ships a perf binary on this base, and linux-tools-generic pins a kernel-ABI package whose wrapper dispatches on the host kernel (never matches a container) |
 | GDB | `gdb` | interactive debugger |
 | Valgrind | `valgrind` | memcheck / cachegrind / callgrind memory + cache profiling |
 | numactl | `numactl` | NUMA CLI -- bind memory/CPU nodes, inspect topology (`--hardware`) |

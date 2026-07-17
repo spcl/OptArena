@@ -6,6 +6,7 @@ no real container, GPU, or LLM, so this runs on any CI runner.
 
 The bash<->Python golden parity test lives in test_container_launch_parity.py."""
 import os
+import subprocess
 
 import pytest
 
@@ -112,3 +113,84 @@ def test_harbor_env_for_maps_and_raises():
     assert containers.harbor_env_for("apptainer") == "singularity"
     with pytest.raises(ValueError):
         containers.harbor_env_for("podman")  # podman is launched directly, not via Harbor
+
+
+# --------------------------------------------------------------------------- #
+# install_apptainer retry. Both fetches are live-network (the installer, and the EPEL
+# listing it scrapes through the fedoraproject REDIRECTOR), so a single bad mirror used to
+# fail the whole install -- it reds the CI container job. subprocess/sleep are stubbed, so
+# these stay pure-unit: no network, no real apptainer.
+# --------------------------------------------------------------------------- #
+
+
+def _stub_installer(monkeypatch, bash_returncodes, curl_error=None):
+    """Stub curl+bash. ``bash_returncodes`` is consumed one per install attempt; ``curl_error``
+    (a returncode) instead makes the FIRST curl raise, as a failed download does. Records the
+    executable of every call plus every backoff delay slept.
+
+    ``containers.subprocess`` IS the one global subprocess module object, so patching ``run`` on it
+    hijacks EVERY caller in the process, not just install_apptainer's. Anything else that shells out
+    while the patch is live (a pytest plugin, coverage) would land in here and eat a
+    ``bash_returncodes`` entry -- an intermittent failure with no connection to the code under test.
+    So only the two argv this stub models are intercepted; everything else is delegated to the real
+    subprocess.run."""
+    calls, sleeps, pending = [], [], list(bash_returncodes)
+    real_run = subprocess.run
+
+    def fake_run(argv, **kwargs):
+        if not argv or argv[0] not in ("curl", "bash"):
+            return real_run(argv, **kwargs)  # not ours -- never consume a queued returncode
+        calls.append(argv[0])
+        if argv[0] == "curl":
+            failed = curl_error is not None and calls.count("curl") == 1
+            returncode = curl_error if failed else 0
+            stdout = "" if failed else "#!/bin/bash\ntrue\n"
+        else:
+            returncode, stdout = pending.pop(0), ""
+        # Honour subprocess.run's REAL contract -- check=True is what turns a nonzero rc into
+        # CalledProcessError. Raising straight from the stub flag instead would leave the
+        # ``check=True`` at the curl call site untested, and dropping it there is a silent
+        # false-success: a failed curl returns nonzero with EMPTY stdout, the empty script pipes
+        # to bash, bash exits 0, and the install reports success having installed nothing.
+        if kwargs.get("check") and returncode != 0:
+            raise subprocess.CalledProcessError(returncode, argv)
+        return subprocess.CompletedProcess(argv, returncode, stdout=stdout)
+
+    monkeypatch.setattr(containers.subprocess, "run", fake_run)
+    monkeypatch.setattr(containers.time, "sleep", lambda s: sleeps.append(s))
+    return calls, sleeps
+
+
+def test_install_apptainer_retries_a_transient_mirror_failure(monkeypatch):
+    """A mirror blip is retried in a FRESH process -- the point of retrying at OUR level.
+
+    Upstream's own loop cannot recover from this: it caches the fetched listing in a shell
+    variable and skips the re-fetch while that is non-empty, so only a new process re-queries
+    the redirector and can land on a different mirror."""
+    calls, sleeps = _stub_installer(monkeypatch, bash_returncodes=[2, 2, 0])
+    assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=4) == 0
+    assert calls.count("bash") == 3, "each attempt must re-run the installer in a fresh process"
+    assert sleeps == [5, 10], "backoff must grow, and must NOT sleep after the attempt that succeeded"
+
+
+def test_install_apptainer_gives_up_and_reports_the_installer_returncode(monkeypatch):
+    """Exhausting the attempts still surfaces the real failure -- never a false success."""
+    calls, sleeps = _stub_installer(monkeypatch, bash_returncodes=[2, 2, 2])
+    assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=3) == 2
+    assert calls.count("bash") == 3
+    assert sleeps == [5, 10], "no trailing sleep after the final attempt"
+
+
+def test_install_apptainer_retries_a_failed_installer_download(monkeypatch):
+    """The installer download is live-network too, so a curl failure retries rather than raising."""
+    calls, _ = _stub_installer(monkeypatch, bash_returncodes=[0], curl_error=6)
+    assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=3) == 0
+    assert calls.count("curl") == 2, "the failed download must be re-fetched, not raised to the caller"
+
+
+def test_install_apptainer_succeeds_first_try_without_sleeping(monkeypatch):
+    """The happy path must not pay any backoff (guards against an off-by-one in the loop)."""
+    calls, sleeps = _stub_installer(monkeypatch, bash_returncodes=[0])
+    assert containers.install_apptainer("/tmp/apptainer-prefix") == 0
+    assert calls.count("bash") == 1
+    assert sleeps == []

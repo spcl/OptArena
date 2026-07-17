@@ -60,6 +60,11 @@ RUN set -eu; \
 
 # --- Common toolchain + numeric libs (containers/LIBRARIES.md) + perf/profiling tools, then the
 # per-HW GPU stack. The common apt list is verbatim from all three retired recipes (they matched).
+# perf comes from ``linux-perf``, NOT ``linux-tools-generic``: on this base neither linux-tools-common
+# nor linux-tools-generic ships a perf binary at all, so the image built clean and only died at the
+# Phase 6a ``command -v perf`` check. linux-tools-generic is also wrong in principle for a container --
+# it depends on a kernel-ABI-pinned linux-tools-<uname -r> whose wrapper dispatches on the HOST kernel,
+# which never matches the version baked into the image. linux-perf depends only on libs, so it works.
 # GPU note (UNVERIFIED): on the CSCS public GPU base the CUDA/ROCm stack is PREINSTALLED, so the
 # nvidia/amd apt packages below are redundant there (apt treats them as satisfied) and MAY conflict
 # with a newer base CUDA -- drop or version-pin them once the real base image is known.
@@ -67,7 +72,7 @@ RUN set -eu; \
     apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev \
       gcc g++ gfortran clang flang \
-      gdb valgrind linux-tools-common linux-tools-generic linux-cpupower util-linux hwloc \
+      gdb valgrind linux-tools-common linux-perf linux-cpupower util-linux hwloc \
       msr-tools numactl libgoogle-perftools-dev heaptrack likwid papi-tools \
       libpapi-dev strace ltrace binutils \
       ca-certificates git curl wget openssh-client gnupg ripgrep fd-find jq less tree htop \

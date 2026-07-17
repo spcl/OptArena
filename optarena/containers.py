@@ -20,6 +20,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import List, Mapping, Optional, Sequence, Tuple
 
@@ -180,16 +181,42 @@ def harbor_env_for(backend: Optional[str] = None) -> str:
     return name
 
 
-def install_apptainer(prefix="~/.local"):
+def install_apptainer(prefix="~/.local", attempts=4):
     """Install Apptainer unprivileged (no sudo) into ``prefix`` via its official
     installer. Returns the subprocess return code.
 
     The installer is downloaded then piped to ``bash`` over stdin, with ``prefix``
     passed as a real argv element -- NOT interpolated into a ``shell=True`` string
-    (which would let a crafted ``prefix`` inject arbitrary commands)."""
+    (which would let a crafted ``prefix`` inject arbitrary commands).
+
+    Retried with backoff (as ``pip_retry`` does for the CI pip installs) because BOTH
+    fetches are live-network: the installer itself, and the EPEL package listing the
+    installer scrapes to resolve the latest apptainer RPM. That listing is served by the
+    ``download.fedoraproject.org`` REDIRECTOR, so a single bad mirror fails the install
+    outright. Upstream's own retry loop cannot absorb that -- it NEVER sleeps between
+    attempts, so a momentarily unreachable mirror burns all of its retries in under a second
+    (seen in CI: five attempts, 0.80 s total, against a listing that resolves in 0.43 s when
+    healthy). Retrying the whole script in a FRESH process is what actually helps: the
+    installer caches the fetched listing in a shell variable and skips the re-fetch when
+    it is non-empty, so only a new process re-queries the redirector and can land on a
+    different mirror."""
     prefix = os.path.expanduser(prefix)
-    script = subprocess.run(["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True, text=True).stdout
-    return subprocess.run(["bash", "-s", "-", prefix], input=script, text=True).returncode
+    returncode = 1
+    for attempt in range(1, attempts + 1):
+        try:
+            script = subprocess.run(["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True,
+                                    text=True).stdout
+            returncode = subprocess.run(["bash", "-s", "-", prefix], input=script, text=True).returncode
+            if returncode == 0:
+                return 0
+        except subprocess.CalledProcessError as exc:
+            returncode = exc.returncode
+        if attempt < attempts:
+            delay = 5 * attempt
+            print(f"apptainer install attempt {attempt}/{attempts} failed (rc={returncode}); retrying in {delay}s",
+                  file=sys.stderr)
+            time.sleep(delay)
+    return returncode
 
 
 def install_apptainer_main(argv=None):
