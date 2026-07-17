@@ -219,3 +219,100 @@ def test_phantom_np_arg_filtered():
     assert by["y"].is_const is False and by["y"].role == "output"
     assert by["x"].is_const is True
     assert by["N"].role == "symbol" and by["N"].is_const is True
+
+
+# --------------------------------------------------------------------------- #
+# Scalar dtype honesty, over the WHOLE corpus                                  #
+# --------------------------------------------------------------------------- #
+# The binding is the agent-facing C ABI. It used to GUESS: every ``parameters`` key was
+# typed int64 (they are "size symbols") and every undeclared scalar float64. Both guesses
+# were wrong, in opposite directions, and neither is cosmetic -- int and float are
+# different x86-64 SysV argument register classes, so a wrong type is a wrong call.
+#   nbody declares dt: 0.05 / softening: 0.1 -> typed int64 -> native_call passed int(0.05)
+#   = 0, so a C port got a ZERO TIMESTEP and could not reproduce the reference at all.
+#   minres got tol=0; mandelbrot1's viewport collapsed to integers.
+#   Conversely tsvc_2_s122's n1 (a loop bound, declared 1) and velocity_tendencies'
+#   logical flags were typed double, disagreeing with the emitters.
+# These assert over every kernel because both bugs were corpus-wide and invisible per-kernel.
+
+
+def _declared_value(spec, name):
+    """The value the manifest declares for ``name``, or None if it declares none."""
+    for size_class in spec.parameters.values():
+        if name in size_class:
+            return size_class[name]
+    if spec.init is not None and name in spec.init.scalars:
+        return spec.init.scalars[name]
+    return None
+
+
+def _corpus_specs():
+    from optarena.spec import KERNELS, BenchSpec
+    for key in sorted(KERNELS):
+        stem = key.rsplit("/", 1)[-1]
+        try:
+            yield stem, BenchSpec.load(stem)
+        except Exception:  # noqa: BLE001 -- ambiguous stem; the spec suite covers loadability
+            continue
+
+
+def test_no_fractional_scalar_is_bound_as_an_integer():
+    """A scalar whose declared value is fractional must never be bound integer.
+
+    This is the truncation bug directly: the ABI may not cast a float to an int, because
+    the value cannot survive it (dt=0.05 -> 0)."""
+    import numpy as np
+
+    from optarena.support.bindings.contract import binding_from_spec
+    offenders = []
+    for stem, spec in _corpus_specs():
+        try:
+            binding = binding_from_spec(spec)
+        except Exception:  # noqa: BLE001
+            continue
+        for arg in binding.args:
+            if arg.kind != "scalar":
+                continue
+            value = _declared_value(spec, arg.name)
+            if isinstance(value, float) and np.issubdtype(np.dtype(arg.dtype), np.integer):
+                offenders.append(f"{stem}.{arg.name} declared {value!r} but bound {arg.dtype}")
+    assert not offenders, ("the C ABI would truncate a fractional scalar to an integer:\n  " + "\n  ".join(offenders))
+
+
+def test_no_integer_scalar_is_bound_as_a_float():
+    """The mirror: an integer-declared scalar must not reach the kernel as a double.
+
+    Same register-class hazard, and it is how integer loop bounds / logical flags ended up
+    typed double while the emitters typed them int64_t."""
+    import numpy as np
+
+    from optarena.support.bindings.contract import binding_from_spec
+    offenders = []
+    for stem, spec in _corpus_specs():
+        try:
+            binding = binding_from_spec(spec)
+        except Exception:  # noqa: BLE001
+            continue
+        for arg in binding.args:
+            if arg.kind != "scalar":
+                continue
+            value = _declared_value(spec, arg.name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            if np.issubdtype(np.dtype(arg.dtype), np.floating):
+                offenders.append(f"{stem}.{arg.name} declared {value!r} but bound {arg.dtype}")
+    assert not offenders, ("an integer-declared scalar would reach the kernel as a float:\n  " + "\n  ".join(offenders))
+
+
+def test_nbody_timestep_survives_the_abi():
+    """The concrete regression: nbody's dt/softening/G must be fp64, not int64.
+
+    Named explicitly because a corpus-wide assertion can be satisfied by deleting a kernel;
+    this one cannot."""
+    from optarena.spec import BenchSpec
+    from optarena.support.bindings.contract import binding_from_spec
+    by = {a.name: a for a in binding_from_spec(BenchSpec.load("nbody")).args}
+    for name in ("dt", "softening", "G", "tEnd"):
+        assert by[name].dtype == "float64", (f"nbody.{name} bound {by[name].dtype}: int(0.05) == 0, so a C "
+                                             f"implementation would integrate with a zero timestep")
+    assert by["N"].dtype == "int64", "nbody.N is a genuine size symbol and must stay int64"

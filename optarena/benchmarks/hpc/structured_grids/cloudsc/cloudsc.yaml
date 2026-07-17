@@ -162,6 +162,7 @@ init:
   dtypes:
     ldcum: int32
     ktype: int32
+    kfdia: int64
 input_args:
 - ktype
 - ldcum

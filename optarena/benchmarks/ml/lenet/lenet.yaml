@@ -40,6 +40,8 @@ init:
   - out
   - C_before_fc1
   func_name: initialize
+  dtypes:
+    C_before_fc1: int64
 array_args:
 - input
 - conv1

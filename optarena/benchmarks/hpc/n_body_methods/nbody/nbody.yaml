@@ -43,6 +43,8 @@ init:
   - vel
   - Nt
   func_name: initialize
+  dtypes:
+    Nt: int64
 array_args:
 - mass
 - pos

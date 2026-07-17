@@ -108,6 +108,8 @@ init:
   - numElem
   - numNode
   - nsteps
+  dtypes:
+    numNode: int64
 input_args:
 - e
 - p

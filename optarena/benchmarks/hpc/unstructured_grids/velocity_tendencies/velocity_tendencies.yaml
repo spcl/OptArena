@@ -251,6 +251,9 @@ init:
     p_patch_verts_start_block: int32
     p_patch_verts_end_block: int32
     p_patch_cells_decomp_info_owner_mask: int8
+    nflatlev_jg: int64
+    nlevp1: int64
+    nrdmax_jg: int64
 input_args:
   - p_patch_cells_area
   - p_patch_cells_neighbor_idx

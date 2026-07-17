@@ -195,6 +195,37 @@ def _symbol_names(spec: BenchSpec) -> Tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def _symbol_dtype(spec: BenchSpec, sym: str) -> str:
+    """The dtype of one ``parameters`` entry, read off its DECLARED value.
+
+    Not every parameter is a size. ``nbody`` declares ``dt: 0.05`` / ``softening: 0.1`` /
+    ``G: 1.0``, ``minres`` declares ``tol: 1e-06``, ``mandelbrot1`` declares
+    ``xmin: -1.75`` -- physical constants that merely live in the same block as ``N``.
+    Typing the whole block int64 made :mod:`optarena.harness.native_call` pass them
+    through ``int(...)``, so a C implementation received ``dt = 0`` and could not
+    reproduce the reference at all: no timestep, zero tolerance, a mandelbrot viewport
+    collapsed to integers. It also silently disagreed with the emitters, which type these
+    ``double`` -- and an int64 argument where the callee reads a double is the wrong
+    x86-64 SysV register class, so even the whole-valued ``G: 1.0`` was unsafe.
+
+    The YAML literal's own type is the declaration: ``0.05`` and ``1.0`` are floats,
+    ``25`` is an int. Integrality of the VALUE is deliberately not consulted -- ``G: 1.0``
+    is a float the author wrote as a float, and must reach the kernel as one.
+    An explicit ``init.dtypes`` override still wins, as it does for arrays.
+    """
+    if spec.init is not None and sym in spec.init.dtypes:
+        return spec.init.dtypes[sym]
+    for size_class in spec.parameters.values():
+        value = size_class.get(sym)
+        # bool is an int subclass; no parameter is boolean today, but check first so one
+        # never silently reads as an integer size.
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, float):
+            return DEFAULT_FLOAT_DTYPE
+    return DEFAULT_SYMBOL_DTYPE
+
+
 def _sparse_format(spec: BenchSpec, config: str, logical: str) -> Optional[str]:
     """Resolve the format chosen for ``logical`` under ``config`` (or None)."""
     cfg = spec.configurations.get(config)
@@ -208,6 +239,32 @@ def _dense_dtype(spec: BenchSpec, name: str) -> str:
     (e.g. an int index array) else the fp64 leg of the precision sweep."""
     if spec.init is not None and name in spec.init.dtypes:
         return spec.init.dtypes[name]
+    return DEFAULT_FLOAT_DTYPE
+
+
+def _scalar_dtype(spec: BenchSpec, name: str) -> str:
+    """Dtype of a plain scalar input, read off its DECLARED ``init.scalars`` value.
+
+    An array has no declared value to read, so :func:`_dense_dtype` must assume the float
+    leg -- but a scalar DOES: the manifest states ``n1: 1`` / ``poly: 4129`` /
+    ``lvn_only: 0``. Assuming float64 for all of them typed integer loop bounds, a CRC
+    polynomial and ICON's logical flags as ``double``, disagreeing with the emitters
+    (which infer ``int64_t`` from use) -- and int/float are different x86-64 SysV argument
+    register classes, so the disagreement is a wrong call, not a cosmetic one.
+
+    The declared literal's type is the declaration, exactly as in :func:`_symbol_dtype`.
+    bool is checked first because it is an int subclass. A scalar the manifest does not
+    declare a value for keeps the float default -- there is nothing to read, and that gap
+    is a manifest bug to fix in the manifest, not to guess at here.
+    """
+    if spec.init is not None and name in spec.init.dtypes:
+        return spec.init.dtypes[name]
+    if spec.init is not None:
+        value = spec.init.scalars.get(name)
+        if isinstance(value, bool) or isinstance(value, int):
+            return DEFAULT_SYMBOL_DTYPE
+        if isinstance(value, float):
+            return DEFAULT_FLOAT_DTYPE
     return DEFAULT_FLOAT_DTYPE
 
 
@@ -300,7 +357,7 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
             Arg(
                 name=name,
                 kind="scalar",
-                dtype=_dense_dtype(spec, name),
+                dtype=_scalar_dtype(spec, name),
                 is_const=True,  # every scalar input is const (§5)
             ))
 
@@ -310,7 +367,7 @@ def binding_from_spec(spec: BenchSpec, config: Optional[str] = None) -> Binding:
         scalars.append(Arg(
             name=sym,
             kind="scalar",
-            dtype=DEFAULT_SYMBOL_DTYPE,
+            dtype=_symbol_dtype(spec, sym),
             is_const=True,
             role="symbol",
         ))

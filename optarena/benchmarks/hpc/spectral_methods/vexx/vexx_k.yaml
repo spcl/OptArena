@@ -286,6 +286,8 @@ init:
     erfc_scrlen: 0.0
     yukawa: 0.0
     eps_occ: 1.0e-08
+  dtypes:
+    ngm: int64
 input_args:
 - psi
 - hpsi
