@@ -155,8 +155,14 @@ def test_two_containers_judge_and_agent_via_tools(tmp_path):
     judge_log = tmp_path / "judge.log"
     # Container #1 -- the judge (baseline always C). Apptainer shares the host
     # network, so 127.0.0.1:port is reachable from container #2 and the host.
+    # ``python3``, not ``python``: cpu.def's base is ubuntu:26.04, which installs python3 +
+    # python3-pip but NOT python-is-python3, so no bare ``python`` exists on PATH -- the
+    # launch died with "exec: python: not found" (rc=127) and the judge never came up, which
+    # this test could only report as a 120s timeout. Every line inside the .def files already
+    # says python3; only these two callers did not. PEP 394 makes python3 the spelling that
+    # is always there.
     judge = _exec(sif,
-                  "python",
+                  "python3",
                   "-m",
                   "optarena.cli",
                   "serve",
@@ -192,7 +198,7 @@ def test_two_containers_judge_and_agent_via_tools(tmp_path):
                         f"--- judge container output ---\n{output}")
 
         # Container #2 -- the agent, driving verify + score through the tools client.
-        agent = _exec(sif, "python", "-c", _AGENT_SNIPPET, env={"JUDGE_URL": url})
+        agent = _exec(sif, "python3", "-c", _AGENT_SNIPPET, env={"JUDGE_URL": url})
         assert agent.returncode == 0, agent.stderr
         lines = agent.stdout.strip().splitlines()
         assert lines, f"agent produced no stdout (rc=0); stderr:\n{agent.stderr}"
