@@ -1,0 +1,16 @@
+# Build-system declaration ONLY. The package's metadata still lives in setup.py
+# (setuptools.build_meta reads it), so this is a minimal migration, not a rewrite.
+#
+# Why it must exist: without a pyproject.toml, `pip install -e .` falls back to the
+# legacy `setup.py develop` path, which puts only the project ROOT on sys.path and
+# does NOT honor setup.py's `package_dir` remapping. optarena maps the numpyto_*
+# translator packages to optarena/numpy_translators/src via package_dir, so under
+# legacy develop `import numpyto_common` fails (ModuleNotFoundError) -- which is
+# exactly what broke the judge container, where pip fell back to legacy develop.
+# Declaring a build-system makes pip use a PEP 517/660 editable install, and
+# setuptools' PEP 660 backend honors package_dir, so the translators import.
+#
+# setuptools>=64 is the first release with the PEP 660 editable backend.
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"

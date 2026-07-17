@@ -24,11 +24,20 @@ From: optarena-cpu.sif
 %files
     optarena /opt/optarena/optarena
     setup.py /opt/optarena/setup.py
+    # pyproject.toml MUST ship alongside setup.py. Without it, `pip install -e` in this
+    # container falls back to legacy `setup.py develop`, which does not honor setup.py's
+    # package_dir remap of the numpyto_* translators (mapped to
+    # optarena/numpy_translators/src) -- so `import numpyto_common` fails at judge startup
+    # with ModuleNotFoundError. The pyproject build-system declaration makes pip do a PEP
+    # 660 editable, whose finder honors package_dir. (The dev box only worked because its
+    # newer pip already chose PEP 660; the container's pip defaulted to legacy develop.)
+    pyproject.toml /opt/optarena/pyproject.toml
 
 %post
     # Editable install (pip-managed, no hand-set PYTHONPATH): ships the optarena
     # harness and the numpyto_* translators, and keeps the benchmark/config data
-    # tree readable from the source layout.
+    # tree readable from the source layout. PEP 660 editable (forced by the shipped
+    # pyproject.toml) so the translators' package_dir remap is honored.
     pip install --break-system-packages -e /opt/optarena
 
 %environment

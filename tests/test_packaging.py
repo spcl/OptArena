@@ -38,8 +38,22 @@ def test_wheel_is_pip_installable_and_complete(tmp_path):
     for mod in ("optarena/harbor_adapter.py", "optarena/containers.py", "optarena/harness/harbor_grade.py",
                 "optarena/support/bindings/__init__.py", "optarena/config.yaml"):
         assert mod in names, f"{mod} missing from the wheel"
+    # The numpyto_* translators are package_dir-remapped to optarena/numpy_translators/src; a
+    # broken remap drops them from the wheel silently (they are what a legacy editable install
+    # also fails to expose -- the numpyto_common ModuleNotFoundError that broke the judge image).
+    assert any(n.startswith("numpyto_common/") for n in names), "numpyto_common missing from the wheel"
     ep = next(n for n in names if n.endswith("entry_points.txt"))
     assert "optarena-install-apptainer" in zipfile.ZipFile(whl[0]).read(ep).decode()
+
+
+def test_pyproject_declares_a_build_system():
+    """Without a [build-system], `pip install -e` falls back to legacy `setup.py develop`, which
+    ignores setup.py's package_dir remap of the numpyto_* translators, so `import numpyto_common`
+    fails. That is exactly what broke the judge container. This is the fast static guard; the slow
+    end-to-end proof is test_apptainer_builds_and_imports below."""
+    pyproject = _ROOT / "pyproject.toml"
+    assert pyproject.is_file(), "pyproject.toml is missing; pip falls back to legacy setup.py develop"
+    assert "[build-system]" in pyproject.read_text(), "pyproject.toml declares no [build-system]"
 
 
 def test_container_defs_are_well_formed():
@@ -56,11 +70,16 @@ def test_container_defs_are_well_formed():
     assert "From: optarena-cpu.sif" in judge  # layered on the agent image
     assert "pip install --break-system-packages -e /opt/optarena" in judge  # the package (ships numpyto_* too)
     assert "export PYTHONPATH" not in judge  # pip-managed, no hand-set path directive
+    # pyproject.toml MUST ship beside setup.py, or `pip install -e` here falls back to legacy
+    # `setup.py develop` and the package_dir-remapped numpyto_* translators are not importable
+    # (numpyto_common ModuleNotFoundError at judge startup).
+    assert "pyproject.toml /opt/optarena/pyproject.toml" in judge, \
+        "judge.def copies setup.py but not pyproject.toml -> legacy develop -> numpyto_common unimportable"
 
     for spec in (cpu, judge):
         for line in spec.splitlines():
             line = line.strip()
-            if line.startswith(("requirements/", "optarena ", "setup.py")):
+            if line.startswith(("requirements/", "optarena ", "setup.py", "pyproject.toml")):
                 src = line.split()[0]
                 assert (_ROOT / src).exists(), f"%files source {src!r} does not exist"
 
@@ -69,23 +88,30 @@ def test_container_defs_are_well_formed():
                     reason="set OPTARENA_CONTAINER_BUILD_TEST=1 with apptainer to run a real build")
 def test_apptainer_builds_and_imports(tmp_path):
     """REAL build: a minimal image that pip-installs optarena and imports it -- the
-    same editable-install flow judge.def relies on, on a light base (opt-in)."""
+    same editable-install flow judge.def relies on, on a light base (opt-in).
+
+    Copies pyproject.toml alongside setup.py and imports numpyto_common (NOT just
+    optarena) -- that translator is the one the legacy-develop fallback drops, so
+    importing it is what actually exercises the PEP 660 / package_dir fix end to end.
+    """
     sif = tmp_path / "smoke.sif"
     deffile = tmp_path / "smoke.def"
     deffile.write_text(f"""Bootstrap: docker
 From: python:3.12-slim
 %files
     {_ROOT}/setup.py /opt/optarena/setup.py
+    {_ROOT}/pyproject.toml /opt/optarena/pyproject.toml
     {_ROOT}/optarena /opt/optarena/optarena
 %post
     pip install --no-cache-dir pyyaml
     pip install --no-deps -e /opt/optarena
-    python -c "import optarena.containers; print('import OK')"
+    python -c "import numpyto_common; print('import OK')"
 """)
     build = subprocess.run(["apptainer", "build", str(sif), str(deffile)], capture_output=True, text=True)
     if build.returncode != 0 and any(s in build.stderr for s in ("newuidmap", "fakeroot", "subuid")):
         pytest.skip(f"host cannot build unprivileged (apptainer rootless tooling missing): {build.stderr.strip()}")
     assert build.returncode == 0, build.stderr
-    run = subprocess.run(
-        ["apptainer", "run", str(sif), "python", "-c", "import optarena.containers"], capture_output=True, text=True)
+    run = subprocess.run(["apptainer", "run", str(sif), "python", "-c", "import numpyto_common"],
+                         capture_output=True,
+                         text=True)
     assert run.returncode == 0, run.stderr
