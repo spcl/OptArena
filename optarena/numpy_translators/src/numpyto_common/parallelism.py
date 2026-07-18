@@ -159,15 +159,24 @@ def reduction_op(value: ast.AST, acc: str):
     ('+', '*', 'max', 'min'); else None. Recognizes ``acc + x`` / ``acc * x``
     (either operand order) and ``max(acc, x)`` / ``np.maximum(acc, x)`` / min."""
     if isinstance(value, ast.BinOp) and isinstance(value.op, (ast.Add, ast.Mult)):
-        if _reads_acc(value.left, acc) or _reads_acc(value.right, acc):
-            return "+" if isinstance(value.op, ast.Add) else "*"
-        return None
+        left_acc, right_acc = _reads_acc(value.left, acc), _reads_acc(value.right, acc)
+        # Exactly one operand must be the BARE accumulator and the other independent of it.
+        # ``acc + acc*x`` reads acc on both sides -- a recurrence, not a reduction; treating it
+        # as reduction(+) makes each thread start from the identity and drop the compounding.
+        if left_acc == right_acc:
+            return None
+        other = value.right if left_acc else value.left
+        if reads_name(other, acc):
+            return None
+        return "+" if isinstance(value.op, ast.Add) else "*"
     if isinstance(value, ast.Call):
         leaf = _call_leaf(value.func)
-        if leaf in _MAX_NAMES and any(_reads_acc(a, acc) for a in value.args):
-            return "max"
-        if leaf in _MIN_NAMES and any(_reads_acc(a, acc) for a in value.args):
-            return "min"
+        if leaf in _MAX_NAMES or leaf in _MIN_NAMES:
+            # one arg is the bare accumulator, every other arg independent of it.
+            bare = [a for a in value.args if _reads_acc(a, acc)]
+            rest = [a for a in value.args if not _reads_acc(a, acc)]
+            if len(bare) == 1 and not any(reads_name(a, acc) for a in rest):
+                return "max" if leaf in _MAX_NAMES else "min"
     return None
 
 

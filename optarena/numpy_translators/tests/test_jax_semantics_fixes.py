@@ -144,3 +144,36 @@ def test_chained_subscript_2d_store():
                    },
                    backends=("jax", ))
     _assert_jax_ok(st, "chain-2d")
+
+
+def test_partial_range_loop_is_not_whole_array_vectorized():
+    # A ``for i in range(1, len)`` writes only the tail; lowering it to a whole-array rebind
+    # (``a = b * 2.0``) clobbers a[0]. It must stay an index-preserving fori/.at form, while a
+    # full-extent ``range(len)`` still vectorizes.
+    partial = ("import numpy as np\n"
+               "def f(a, b):\n"
+               "    for i in range(1, a.shape[0]):\n"
+               "        a[i] = b[i] * 2.0\n"
+               "    return a\n")
+    js = emit_jax(partial, "f", jit=True)
+    assert "a = b * 2.0" not in js and ".at[" in js, js
+    full = partial.replace("range(1, a.shape[0])", "range(a.shape[0])")
+    assert "a = b * 2.0" in emit_jax(full, "f", jit=True)
+
+
+def test_partial_range_preserves_head_end_to_end():
+    # out[0] is set, then only out[1:] is written; the head must survive (the old
+    # whole-array rebind set out[0] to b[0]*2 instead).
+    no = _oracle()
+    st = no.run_op(
+        "import numpy as np\n"
+        "def f(b, out):\n"
+        "    out[0] = 100.0\n"
+        "    for i in range(1, out.shape[0]):\n"
+        "        out[i] = b[i] * 2.0\n", "f", {"b": np.array([5.0, 2.0, 3.0, 4.0])}, {"out": (4, )}, {"N": 4},
+        shapes={
+            "b": "(N,)",
+            "out": "(N,)"
+        },
+        backends=("jax", ))
+    _assert_jax_ok(st, "partial-range-head")

@@ -4928,10 +4928,17 @@ def expand_histogram(target: ast.expr,
                                      right=ast.BinOp(left=hi, op=ast.Sub(), right=lo))
                        ],
                        keywords=[])
+    # int() each clamp bound so every min/max operand is int64: bins-1 and 0 are otherwise
+    # default-kind integers, and Fortran's min(default, INT(.., c_int64_t)) is a mixed-kind
+    # GNU extension that -std=f2018 rejects (harmless (int64_t) casts in C).
     clamp = ast.Call(func=_name("min"),
                      args=[
-                         ast.BinOp(left=bins, op=ast.Sub(), right=_const(1)),
-                         ast.Call(func=_name("max"), args=[_const(0), bin_idx], keywords=[])
+                         ast.Call(func=_name("int"),
+                                  args=[ast.BinOp(left=bins, op=ast.Sub(), right=_const(1))],
+                                  keywords=[]),
+                         ast.Call(func=_name("max"),
+                                  args=[ast.Call(func=_name("int"), args=[_const(0)], keywords=[]), bin_idx],
+                                  keywords=[])
                      ],
                      keywords=[])
     add_val: ast.expr
@@ -4939,11 +4946,22 @@ def expand_histogram(target: ast.expr,
         add_val = ast.Subscript(value=_name(weights.id), slice=_name("__hi"), ctx=ast.Load())
     else:
         add_val = _const(1.0)
+    # numpy drops samples outside [lo, hi] (only the last bin is closed); guard the increment so
+    # they are not folded into the edge bins. An auto lo/hi (a.min()/a.max()) makes this a no-op.
+    in_range = ast.BoolOp(op=ast.And(),
+                          values=[
+                              ast.Compare(left=copy.deepcopy(lo), ops=[ast.LtE()], comparators=[copy.deepcopy(a_i)]),
+                              ast.Compare(left=copy.deepcopy(a_i), ops=[ast.LtE()], comparators=[copy.deepcopy(hi)]),
+                          ])
     bin_body = [
         ast.Assign(targets=[_store("__bidx")], value=clamp),
-        ast.AugAssign(target=ast.Subscript(value=_name(target.id), slice=_name("__bidx"), ctx=ast.Store()),
-                      op=ast.Add(),
-                      value=add_val),
+        ast.If(test=in_range,
+               body=[
+                   ast.AugAssign(target=ast.Subscript(value=_name(target.id), slice=_name("__bidx"), ctx=ast.Store()),
+                                 op=ast.Add(),
+                                 value=add_val)
+               ],
+               orelse=[]),
     ]
     out.append(
         ast.For(target=_store("__hi"),

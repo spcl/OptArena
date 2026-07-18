@@ -299,7 +299,34 @@ def _classify_for(node: ast.For) -> str:
     for s in node.body:
         if isinstance(s.targets[0], ast.Name) and s.targets[0].id in stored:
             return LoopKind.FORI
+    # A whole-array rebind is correct only if the loop writes EVERY index; a partial range
+    # (explicit start, explicit step, or an offset stop like N-1) leaves some elements
+    # untouched, so vectorising would clobber them -- keep the index-preserving fori form.
+    if not _range_covers_full_extent(node.iter):
+        return LoopKind.FORI
     return LoopKind.VECTORIZE
+
+
+def _range_covers_full_extent(it: ast.AST) -> bool:
+    """True for a ``range(stop)`` that spans an array's whole first axis: a single argument
+    (start 0, step 1) that is a bare size symbol, ``len(x)``, ``x.shape[k]``, or a literal.
+    Two+ args (explicit start/step) or an arithmetic stop (``N-1``, ``N//2``) are partial."""
+    if not (isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range"):
+        return False
+    if len(it.args) != 1 or it.keywords:
+        return False
+    arg = it.args[0]
+    if isinstance(arg, ast.Name):
+        return True
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
+        return True
+    if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "len":
+        return True
+    if isinstance(arg, ast.Attribute) and arg.attr == "shape":
+        return True
+    if isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Attribute) and arg.value.attr == "shape":
+        return True
+    return False
 
 
 def _is_index_i(sl: ast.AST, i: str) -> bool:

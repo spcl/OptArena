@@ -1625,10 +1625,15 @@ class _HistogramHoister(ast.NodeTransformer):
             lo_s, hi_s = f"({ast.unparse(lo)})", f"({ast.unparse(hi)})"
         temp = f"{p}_o"
         add = f"{ast.unparse(weights)}[{p}_i]" if weights is not None else "1.0"
+        # numpy drops samples outside [lo, hi] (only the last bin is closed); the clamp alone
+        # would fold them into bin 0 / bin-1 instead. Guard the increment. For an auto lo/hi
+        # (a.min()/a.max()) every element is in range, so the guard is a no-op there.
         lines += [
             f"{temp} = np.zeros({bins}, np.float64)", f"for {p}_i in range({a}.shape[0]):",
-            f"    {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))", f"    if {p}_b < 0: {p}_b = 0",
-            f"    if {p}_b > {bins} - 1: {p}_b = {bins} - 1", f"    {temp}[{p}_b] += {add}"
+            f"    if {lo_s} <= {a}[{p}_i] <= {hi_s}:",
+            f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))",
+            f"        if {p}_b < 0: {p}_b = 0", f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
+            f"        {temp}[{p}_b] += {add}"
         ]
         self.pre.extend(ast.parse("\n".join(lines)).body)
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)

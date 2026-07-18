@@ -218,3 +218,14 @@ def test_emit_fortran_omp_scatter_is_refused():
                ["idx", "x", "out"], {"idx": "(N,)", "x": "(N,)", "out": "(N,)"}, {"idx": "int64"})
     with pytest.raises(UnsupportedParallelError):
         emit_fortran_omp(kir, fn_name="f")
+
+
+def test_reduction_rejects_self_referential_recurrence():
+    # Genuine reductions: the non-accumulator operand is loop data, not the accumulator.
+    assert loop_reduction(_stmt("for i in range(N):\n s = s + a[i]\n")) == ("+", "s")
+    assert loop_reduction(_stmt("for i in range(N):\n p = p * a[i]\n")) == ("*", "p")
+    assert loop_reduction(_stmt("for i in range(N):\n m = max(m, a[i])\n")) == ("max", "m")
+    # A self-referential recurrence reads the accumulator on BOTH sides -- reduction(+:ema)
+    # would start each thread at the identity and lose the compounding, so it must NOT match.
+    assert loop_reduction(_stmt("for i in range(N):\n ema = ema + ema * alpha\n")) is None
+    assert loop_reduction(_stmt("for i in range(N):\n m = max(m, m * 2.0)\n")) is None
