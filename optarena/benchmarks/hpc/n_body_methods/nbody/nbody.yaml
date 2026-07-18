@@ -50,8 +50,8 @@ array_args:
 - pos
 - vel
 output_args:
-- pos
-- vel
+- KE
+- PE
 taxonomy:
   track: hpc
   subtrack: nbody

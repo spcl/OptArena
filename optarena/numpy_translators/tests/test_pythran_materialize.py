@@ -1,7 +1,8 @@
-"""Pythran cannot reshape a non-materialized object nor index a lazy
-``numpy_expr`` passed into a helper (KernelBench lenet/mlp). ``_PythranMaterialize``
-forces evaluation with ``np.ascontiguousarray``; these AST tests pin the rewrite,
-and the end-to-end bit-exact numba/pythran validation lives in the ml oracle.
+"""Pythran cannot reshape a non-materialized object, index a lazy ``numpy_expr`` passed into a
+helper (KernelBench lenet/mlp), nor reduce a lazy broadcast ``numpy_expr`` correctly -- a column
+broadcast fed to ``np.sum`` reduces to garbage (nbody KE). ``_PythranMaterialize`` forces evaluation
+with ``np.ascontiguousarray``; these AST tests pin the rewrite, and the end-to-end bit-exact
+numba/pythran validation lives in the ml + hpc (nbody) oracle.
 """
 import ast
 
@@ -44,3 +45,22 @@ def test_method_reshape_not_double_wrapped():
     # ``np.reshape`` function form is the failing shape).
     out = _apply("y = x.reshape(N, C)", local_funcs=[])
     assert out == "y = x.reshape(N, C)"
+
+
+def test_reduction_over_compound_broadcast_is_materialized():
+    # pythran reduces a lazy column-vector broadcast (mass(N,1) * vel(N,3)) to garbage;
+    # force the operand concrete first. nbody KE regression.
+    out = _apply("ke = np.sum(mass * vel ** 2)", local_funcs=[])
+    assert out == "ke = np.sum(np.ascontiguousarray(mass * vel ** 2))"
+
+
+def test_reduction_axis_kwarg_is_preserved():
+    # only the array operand is wrapped; axis/other args pass through untouched.
+    out = _apply("m = np.mean(a * b, axis=0)", local_funcs=[])
+    assert out == "m = np.mean(np.ascontiguousarray(a * b), axis=0)"
+
+
+def test_reduction_over_plain_name_untouched():
+    # a bare Name is already concrete -> no wrap (ascontiguousarray would be a needless copy).
+    out = _apply("s = np.sum(x)", local_funcs=[])
+    assert out == "s = np.sum(x)"

@@ -578,20 +578,29 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     # Sparse kirs carry size symbols only in array shapes; collect free idents so each is declared as a dc.symbol.
     arr_shapes = {a.name: [str(s) for s in a.shape] for a in kir.arrays}
     _known = set(arrays) | set(scalars)
+    shape_idents: set = set()
     for _toks in arr_shapes.values():
         for _tok in _toks:
             for _ident in _IDENT_RE.findall(_tok):
+                shape_idents.add(_ident)
                 if _ident not in _known and _ident not in symbol_names:
                     symbol_names.append(_ident)
+    # A scalar param used as an array shape (e.g. ``Nt`` sizing ``KE[Nt + 1]``) must be a dc.symbol:
+    # a dace shape annotation cannot reference a runtime scalar, and a name cannot be both. Promote it
+    # to a module-level symbol and drop it from the scalar params below (the caller binds it as a symbol).
+    shape_scalars = {s for s in scalars if s in shape_idents}
+    for s in shape_scalars:
+        if s not in symbol_names:
+            symbol_names.append(s)
 
     # Program signature: arrays + scalars in original input_args order; symbols are module-level.
     params: List[str] = []
     for arg in kir.input_args:
         if arg in arrays:
             params.append(f"{arg}: {_array_annotation(arrays[arg])}")
-        elif arg in scalars:
+        elif arg in scalars and arg not in shape_scalars:
             params.append(f"{arg}: {_dace_dtype(scalars[arg].dtype)}")
-        # symbols: skip (declared at module scope below)
+        # symbols (and scalars promoted to symbols): skip (declared at module scope below)
 
     needs_complex = any(_dace_dtype(a.dtype) == "dc_complex_float"
                         for a in kir.arrays) or any(_dace_dtype(s.dtype) == "dc_complex_float" for s in kir.scalars)

@@ -881,11 +881,23 @@ def _run_bounded(cmd, timeout, cwd):
         raise
 
 
+def _pluto_reject_reason(stderr: str) -> str:
+    """The salient pet/pluto rejection message (e.g. ``data dependent conditions not supported``) pulled
+    from polycc's stderr, so a skip self-documents WHY the scop is outside pluto's affine model instead
+    of an opaque ``polycc`` tag. ``''`` when nothing recognizable -- caller keeps the bare tag."""
+    for line in stderr.splitlines():
+        if any(k in line.lower() for k in ("not supported", "non-affine", "nonaffine", "unsupported")):
+            msg = line.rsplit(":", 1)[-1].strip() if ":" in line else line.strip()
+            return "-".join(msg.split())[:60]
+    return ""
+
+
 def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, atol, c_status) -> str:
     """Pluto backend: transform the emitted scop with ``polycc``, compile, and call through the C
     binding. Best effort: a polycc-tiled miscompile against a bit-exact ``c`` result is classified as
     ``skip:unsupported:pluto-miscompile`` (a pluto/pet tool bug), not our FAIL; if ``c`` itself is not
-    ``ok`` the failure stays ``FAIL:*`` so a real emit regression still reds the gate."""
+    ``ok`` the failure stays ``FAIL:*`` so a real emit regression still reds the gate. When polycc
+    rejects the scop outright, its own diagnostic is surfaced in the skip (see _pluto_reject_reason)."""
     if shutil.which("polycc") is None:
         return "skip:not-installed"
     inputs = sorted(tdp.glob(f"*_{fptype}_pluto_input.c"))
@@ -906,7 +918,8 @@ def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, a
     except subprocess.TimeoutExpired:
         return "skip:unsupported:polycc-timeout"
     if rc or not out_c.exists():
-        return "skip:unsupported:polycc"
+        reason = _pluto_reject_reason(_err)
+        return f"skip:unsupported:polycc:{reason}" if reason else "skip:unsupported:polycc"
     so = tdp / f"lib{short}_pluto.so"
     try:
         rc, _out, _err = _run_bounded(COMPILE["c"] + _PLUTO_EXTRA_FLAGS + [str(out_c), "-o", str(so)],
