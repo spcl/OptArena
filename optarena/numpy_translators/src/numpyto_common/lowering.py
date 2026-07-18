@@ -1547,6 +1547,15 @@ def _ssa_rename_reassigned(tree: ast.AST,
                 _apply_renames(stmt.value, rename_map)
                 if isinstance(stmt, ast.AugAssign):
                     _apply_renames(stmt.target, rename_map)
+                else:
+                    # A plain ``arr[idx] = val`` / ``obj.attr = val`` target carries the
+                    # buffer's base Name in Load context; rename it too so a fill that
+                    # follows a reassignment writes the new version, not the stale buffer
+                    # (the Store-context Name of a ``name = ...`` target is left alone, so
+                    # the version-mint decision below still owns plain-Name reassignment).
+                    for tgt in stmt.targets:
+                        if not isinstance(tgt, ast.Name):
+                            _apply_renames(tgt, rename_map)
             elif isinstance(stmt, (ast.If, ast.While)):
                 _apply_renames(stmt.test, rename_map)
             elif isinstance(stmt, ast.For):
@@ -1937,31 +1946,69 @@ class _EyeToZerosDiagonal(ast.NodeTransformer):
         # min(m, n)); ``eye(n)`` / ``identity(n)`` (or ``eye(n, None)``) is square.
         rectangular = (v.func.attr == "eye" and len(v.args) >= 2
                        and not (isinstance(v.args[1], ast.Constant) and v.args[1].value is None))
-        if rectangular:
-            cols = v.args[1]
-            diag = ast.Call(func=ast.Name(id="min", ctx=ast.Load()),
-                            args=[copy.deepcopy(rows), copy.deepcopy(cols)], keywords=[])
-        else:
-            cols = copy.deepcopy(rows)
-            diag = copy.deepcopy(rows)
-        dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
-        zeros = ast.Assign(
-            targets=[ast.Name(id=tgt, ctx=ast.Store())],
-            value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
-                           args=[ast.Tuple(elts=[copy.deepcopy(rows), cols], ctx=ast.Load())], keywords=dtype_kw))
+        cols = v.args[1] if rectangular else copy.deepcopy(rows)
+        # ``k=`` (or eye's 3rd positional) shifts the unit diagonal: numpy writes 1.0 at
+        # (i, i+k). Fill X[t + off_r, t + off_c] for t in range(min(M - off_r, N - off_c))
+        # with off_r = max(0, -k), off_c = max(0, k); k == 0 is the plain main diagonal
+        # (byte-identical to the old output). ``identity`` has no k.
+        k_node = None
+        for kw in v.keywords:
+            if kw.arg == "k":
+                k_node = kw.value
+        if k_node is None and v.func.attr == "eye" and len(v.args) >= 3:
+            k_node = v.args[2]
+        off_zero = k_node is None or (isinstance(k_node, ast.Constant) and k_node.value == 0)
         it = f"__diag{self._n}"
         self._n += 1
-        loop = ast.For(
-            target=ast.Name(id=it, ctx=ast.Store()),
-            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[diag], keywords=[]),
-            body=[ast.Assign(
-                targets=[ast.Subscript(
-                    value=ast.Name(id=tgt, ctx=ast.Load()),
-                    slice=ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()),
-                                          ast.Name(id=it, ctx=ast.Load())], ctx=ast.Load()),
-                    ctx=ast.Store())],
-                value=ast.Constant(value=1.0))],
-            orelse=[])
+
+        def _shift(expr, off, op):
+            if isinstance(off, int):
+                return copy.deepcopy(expr) if off == 0 else ast.BinOp(
+                    left=copy.deepcopy(expr), op=op, right=ast.Constant(value=off))
+            return ast.BinOp(left=copy.deepcopy(expr), op=op, right=copy.deepcopy(off))
+
+        if off_zero:
+            count = ast.Call(func=ast.Name(id="min", ctx=ast.Load()),
+                             args=[copy.deepcopy(rows), copy.deepcopy(cols)], keywords=[]) \
+                if rectangular else copy.deepcopy(rows)
+            row_idx, col_idx = ast.Name(id=it, ctx=ast.Load()), ast.Name(id=it, ctx=ast.Load())
+        else:
+            if isinstance(k_node, ast.Constant) and isinstance(k_node.value, int):
+                off_r, off_c = max(0, -k_node.value), max(0, k_node.value)
+            else:
+                off_r = ast.Call(
+                    func=ast.Name(id="max", ctx=ast.Load()),
+                    args=[ast.Constant(value=0),
+                          ast.UnaryOp(op=ast.USub(), operand=copy.deepcopy(k_node))],
+                    keywords=[])
+                off_c = ast.Call(func=ast.Name(id="max", ctx=ast.Load()),
+                                 args=[ast.Constant(value=0), copy.deepcopy(k_node)],
+                                 keywords=[])
+            count = ast.Call(func=ast.Name(id="min", ctx=ast.Load()),
+                             args=[_shift(rows, off_r, ast.Sub()),
+                                   _shift(cols, off_c, ast.Sub())],
+                             keywords=[])
+            row_idx = _shift(ast.Name(id=it, ctx=ast.Load()), off_r, ast.Add())
+            col_idx = _shift(ast.Name(id=it, ctx=ast.Load()), off_c, ast.Add())
+
+        dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
+        zeros = ast.Assign(targets=[ast.Name(id=tgt, ctx=ast.Store())],
+                           value=ast.Call(func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()),
+                                                             attr="zeros",
+                                                             ctx=ast.Load()),
+                                          args=[ast.Tuple(elts=[copy.deepcopy(rows), cols], ctx=ast.Load())],
+                                          keywords=dtype_kw))
+        loop = ast.For(target=ast.Name(id=it, ctx=ast.Store()),
+                       iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[count], keywords=[]),
+                       body=[
+                           ast.Assign(targets=[
+                               ast.Subscript(value=ast.Name(id=tgt, ctx=ast.Load()),
+                                             slice=ast.Tuple(elts=[row_idx, col_idx], ctx=ast.Load()),
+                                             ctx=ast.Store())
+                           ],
+                                      value=ast.Constant(value=1.0))
+                       ],
+                       orelse=[])
         for s in (zeros, loop):
             ast.copy_location(s, node)
         ast.fix_missing_locations(zeros)
