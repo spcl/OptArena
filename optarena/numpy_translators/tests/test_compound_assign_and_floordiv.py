@@ -91,3 +91,16 @@ def test_floordiv_float_matches_numpy_over_overflow_range():
                  },
                  backends=_NATIVE)
     _assert_native_ok(res)
+
+
+def test_integer_floordiv_index_emits_integer_index():
+    # b[i // 2] is an integer floor-div used as an array index. It must take the integer
+    # FloorDiv branch and emit an INTEGER index -- a real-valued index is rejected by
+    # Fortran -std=f2018 (regression: loop induction vars must type as int64).
+    src = ("import numpy as np\n"
+           "def f(a, b):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        b[i // 2] = b[i // 2] + a[i]\n")
+    a = np.arange(1.0, 9.0)
+    res = run_op(src, "f", {"a": a}, {"b": (4, )}, {"N": 8}, shapes={"a": "(N,)", "b": "(4,)"}, backends=_NATIVE)
+    _assert_native_ok(res)

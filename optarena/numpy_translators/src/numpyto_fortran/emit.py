@@ -1606,6 +1606,11 @@ class _FortranBodyEmitter(BaseEmitter):
         for s in self.kir.symbols:
             if s.name == name:
                 return _SYMBOL_INT_TAG
+        # A range() loop induction variable is always an integer (the int64 ABI kind, like the
+        # size symbols its bound is built from). Without this a bare index reads as untyped, so
+        # ``b[i // 2]`` takes the float FloorDiv path and emits a REAL array index.
+        if name in self._loop_iter_names:
+            return _SYMBOL_INT_TAG
         for a in self.kir.arrays:
             if a.name == name and self._int_tag(a.dtype):
                 return self._int_tag(a.dtype)
