@@ -12,7 +12,7 @@ import numpy as np
 
 
 def relu(x):
-    return np.maximum(x, 0)
+    return np.maximum(x, 0.0)
 
 
 def mnist_infer(x, w1, b1, w2, b2, w3, b3, logits, pred):

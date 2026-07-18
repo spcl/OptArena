@@ -17,7 +17,7 @@ def histogram_equalization(img, out):
 
     # REDUCE: 256-bin intensity histogram (scatter-add each pixel into its bin).
     flat = img.reshape(npix)
-    hist = np.histogram(flat, nbins, range=(0, nbins))[0]
+    hist = np.histogram(flat, nbins, range=(0.0, nbins))[0]
 
     cdf = np.cumsum(hist)
 

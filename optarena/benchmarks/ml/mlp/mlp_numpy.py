@@ -2,7 +2,7 @@ import numpy as np
 
 
 def relu(x):
-    return np.maximum(x, 0)
+    return np.maximum(x, 0.0)
 
 
 # Numerically-stable version of softmax

@@ -30,7 +30,7 @@ def pressure_poisson(nit, p, dx, dy, b):
         p[:, -1] = p[:, -2]  # dp/dx = 0 at x = 2
         p[0, :] = p[1, :]  # dp/dy = 0 at y = 0
         p[:, 0] = p[:, 1]  # dp/dx = 0 at x = 0
-        p[-1, :] = 0  # p = 0 at y = 2
+        p[-1, :] = 0.0  # p = 0 at y = 2
 
 
 def cavity_flow(nx, ny, nt, nit, u, v, dt, dx, dy, p, rho, nu):
@@ -57,11 +57,11 @@ def cavity_flow(nx, ny, nt, nit, u, v, dt, dx, dy, p, rho, nu):
                          (dt / dx**2 * (vn[1:-1, 2:] - 2 * vn[1:-1, 1:-1] + vn[1:-1, 0:-2]) + dt / dy**2 *
                           (vn[2:, 1:-1] - 2 * vn[1:-1, 1:-1] + vn[0:-2, 1:-1])))
 
-        u[0, :] = 0
-        u[:, 0] = 0
-        u[:, -1] = 0
+        u[0, :] = 0.0
+        u[:, 0] = 0.0
+        u[:, -1] = 0.0
         u[-1, :] = 1  # set velocity on cavity lid equal to 1
-        v[0, :] = 0
-        v[-1, :] = 0
-        v[:, 0] = 0
-        v[:, -1] = 0
+        v[0, :] = 0.0
+        v[-1, :] = 0.0
+        v[:, 0] = 0.0
+        v[:, -1] = 0.0

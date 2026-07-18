@@ -74,7 +74,7 @@ def _vcut_init(a, cutoff, security=6.0):
     # short-range (reciprocal): e2 2pi/sigma^2 at q->0 else e2 4pi/q^2 (1-exp(-q^2/2sigma^2))
     q2in = q2[inside]
     sr = np.where(q2in / (sigma * sigma) < 1.0e-6, _E2 * 2.0 * _PI / (sigma * sigma),
-                  _E2 * _FPI / np.where(q2in > 0, q2in, 1.0) * (1.0 - np.exp(-0.5 * q2in / (sigma * sigma))))
+                  _E2 * _FPI / np.where(q2in > 0.0, q2in, 1.0) * (1.0 - np.exp(-0.5 * q2in / (sigma * sigma))))
     # long-range (real space): sum_r wtmp cos(r.q)  -- chunked over table nodes
     lr = np.empty(Qin.shape[0])
     CH = max(1, 2_000_000 // max(1, r.shape[0]))
@@ -98,7 +98,7 @@ def _vcut_get(q, a, cutoff, corrected):
     i1 = np.clip(i[1] + n2, 0, 2 * n2)
     i2 = np.clip(i[2] + n3, 0, 2 * n3)
     tab = corrected[i0, i1, i2]
-    bare = _FPI * _E2 / np.where(qq > 0, qq, 1.0)
+    bare = _FPI * _E2 / np.where(qq > 0.0, qq, 1.0)
     return np.where(qq <= cutoff**2, tab, bare)
 
 
@@ -145,11 +145,11 @@ def _g2_convolution(g,
         gf = np.ones(ngm)
     nonsing = qq > eps_qdiv
     qqn = np.where(nonsing, qq, 1.0)  # guard the divide
-    if gau_scrlen > 0:
+    if gau_scrlen > 0.0:
         return _E2 * (_PI / gau_scrlen)**1.5 * np.exp(-qq / 4.0 / gau_scrlen) * gf
-    if erfc_scrlen > 0:
+    if erfc_scrlen > 0.0:
         fac = _E2 * _FPI / qqn * (1.0 - np.exp(-qqn / 4.0 / erfc_scrlen**2)) * gf
-    elif erf_scrlen > 0:
+    elif erf_scrlen > 0.0:
         fac = _E2 * _FPI / qqn * np.exp(-qqn / 4.0 / erf_scrlen**2) * gf
     else:
         fac = _E2 * _FPI / (qqn + yukawa) * gf

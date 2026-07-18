@@ -101,10 +101,10 @@ def channel_flow(nit, u, v, dt, dx, dy, p, rho, nu, F):
                        (vn[2:, 0] - 2 * vn[1:-1, 0] + vn[0:-2, 0])))
 
         # Wall BC: u,v = 0 @ y = 0,2
-        u[0, :] = 0
-        u[-1, :] = 0
-        v[0, :] = 0
-        v[-1, :] = 0
+        u[0, :] = 0.0
+        u[-1, :] = 0.0
+        v[0, :] = 0.0
+        v[-1, :] = 0.0
 
         udiff = (np.sum(u) - np.sum(un)) / np.sum(u)
         stepcount += 1
