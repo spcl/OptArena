@@ -1630,7 +1630,7 @@ class _HistogramHoister(ast.NodeTransformer):
         # (a.min()/a.max()) every element is in range, so the guard is a no-op there.
         lines += [
             f"{temp} = np.zeros({bins}, np.float64)", f"for {p}_i in range({a}.shape[0]):",
-            f"    if {lo_s} <= {a}[{p}_i] <= {hi_s}:",
+            f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
             f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))",
             f"        if {p}_b < 0: {p}_b = 0", f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
             f"        {temp}[{p}_b] += {add}"
