@@ -1,6 +1,6 @@
 """ABI argument-ordering rule for the emitted C / Fortran signatures.
 
-The convention (``optarena/docs/abi_contract.md`` §4, mirrored by the canonical
+The convention (``optarena/docs/abi_contract.md`` Sec. 4, mirrored by the canonical
 ``optarena/bindings`` generator): all **references** (array / pointer params)
 sorted alphabetically, then all **scalars** (the integer shape ``symbols``
 together with the value ``scalars``) sorted alphabetically. The emitted kernels
@@ -78,7 +78,7 @@ def test_signature_and_binding_agree_with_param_order():
 
 def test_matches_canonical_abi_contract_generator():
     # Cross-check against the authoritative optarena/bindings generator (the
-    # abi_contract.md §4 source). Skipped if the spec/bindings layer is absent.
+    # abi_contract.md Sec. 4 source). Skipped if the spec/bindings layer is absent.
     try:
         from optarena.support.bindings import binding_from_spec
         from optarena.spec import BenchSpec

@@ -58,6 +58,28 @@ jobs:
         with:
           python-version: '3.12'
 
+      # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
+      # embedded paths or timestamps), so every CI run recompiles the very same TUs.
+      # compilers.yaml invokes bare `gcc`/`g++`/`gfortran`, so putting the shim dir first on
+      # PATH routes the whole build through the cache without touching any build code.
+      - name: Setup -- ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ccache
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+      - name: Setup -- restore the compile cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.job }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-
+      # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
+      # would make the end-of-job stats cumulative instead of this run's hit rate.
+      - name: Setup -- reset the ccache counters
+        run: ccache --zero-stats
+
       # Phase 0 runs BEFORE the heavy setup so a formatting slip fails in seconds. yapf /
       # fprettify / clang-format are pip wheels (the clang-format wheel ships the binary).
       - name: Phase 0 -- format check (changed files @ 120 cols)
@@ -152,6 +174,10 @@ jobs:
           path: optarena_hf.parquet
           if-no-files-found: ignore
 
+      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
   # ===========================================================================================
   # translators -- the numpyto_* translator's own suite (~640 tests) plus port fidelity and the
   # benchmark reference validators (fv3 wants gt4py). No framework/Pluto build needed.
@@ -166,6 +192,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
+      # embedded paths or timestamps), so every CI run recompiles the very same TUs.
+      # compilers.yaml invokes bare `gcc`/`g++`/`gfortran`, so putting the shim dir first on
+      # PATH routes the whole build through the cache without touching any build code.
+      - name: Setup -- ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ccache
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+      - name: Setup -- restore the compile cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.job }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-
+      # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
+      # would make the end-of-job stats cumulative instead of this run's hit rate.
+      - name: Setup -- reset the ccache counters
+        run: ccache --zero-stats
       - uses: ./.github/actions/setup
 
       - name: Setup -- gt4py (Phase 2c fv3 reference DSL)
@@ -196,6 +244,10 @@ jobs:
             optarena/benchmarks/hpc/structured_grids/fv3_dycore/test_fv3_dycore_reference.py \
             optarena/benchmarks/hpc/structured_grids/fv3_xppm/test_fv3_xppm_reference.py
 
+      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
   # ===========================================================================================
   # frameworks-pluto -- the ONLY runner that builds Pluto. Codegen frameworks (cc/llvm/tvm/pluto)
   # + fp16, plus the pluto slice of the e2e sweep (pluto is opt-in in run_kernel, named here).
@@ -213,6 +265,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
+      # embedded paths or timestamps), so every CI run recompiles the very same TUs.
+      # compilers.yaml invokes bare `gcc`/`g++`/`gfortran`, so putting the shim dir first on
+      # PATH routes the whole build through the cache without touching any build code.
+      - name: Setup -- ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ccache
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+      - name: Setup -- restore the compile cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.job }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-
+      # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
+      # would make the end-of-job stats cumulative instead of this run's hit rate.
+      - name: Setup -- reset the ccache counters
+        run: ccache --zero-stats
       - uses: ./.github/actions/setup
 
       - name: Setup -- apache-tvm (tvm_cpu framework)
@@ -283,6 +357,10 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
 
+      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
   # ===========================================================================================
   # e2e-native -- the c/cpp/fortran slice of the e2e sweep (heavy-compile, but bounded). Split off
   # from pythran: ubuntu-latest is 4 vCPU / 16 GB and the old combined job died at exit 143 ("runner
@@ -302,6 +380,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
+      # embedded paths or timestamps), so every CI run recompiles the very same TUs.
+      # compilers.yaml invokes bare `gcc`/`g++`/`gfortran`, so putting the shim dir first on
+      # PATH routes the whole build through the cache without touching any build code.
+      - name: Setup -- ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ccache
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+      - name: Setup -- restore the compile cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.job }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-
+      # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
+      # would make the end-of-job stats cumulative instead of this run's hit rate.
+      - name: Setup -- reset the ccache counters
+        run: ccache --zero-stats
       - uses: ./.github/actions/setup
 
       - name: Phase 4b -- integration sweep (CLI -> DB -> plot, numpy + native autopar)
@@ -346,6 +446,10 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
 
+      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
   # ===========================================================================================
   # e2e-pythran -- the pythran slice of the e2e sweep, isolated because pythran is the memory/time
   # pig: a single pythran compile peaks ~7 GB / 11 min while c/cpp/fortran compiles are hundreds of
@@ -362,6 +466,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
+      # embedded paths or timestamps), so every CI run recompiles the very same TUs.
+      # compilers.yaml invokes bare `gcc`/`g++`/`gfortran`, so putting the shim dir first on
+      # PATH routes the whole build through the cache without touching any build code.
+      - name: Setup -- ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ccache
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+      - name: Setup -- restore the compile cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.job }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-
+      # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
+      # would make the end-of-job stats cumulative instead of this run's hit rate.
+      - name: Setup -- reset the ccache counters
+        run: ccache --zero-stats
       - uses: ./.github/actions/setup
 
       - name: Phase 5 -- e2e numerical sweep [pythran] @ S
@@ -378,6 +504,10 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -n 1 --timeout=600 tests/test_e2e_numerical.py
 
+      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
   # ===========================================================================================
   # container-image -- build + smoke-launch the agent-bench CPU container image (docker build ->
   # docker save -> apptainer build -> exec). Split off from the sweep so the heavy docker+apptainer
@@ -489,6 +619,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # ccache -- emitted kernels are byte-identical across runs (deterministic emit, no
+      # embedded paths or timestamps), so every CI run recompiles the very same TUs.
+      # compilers.yaml invokes bare `gcc`/`g++`/`gfortran`, so putting the shim dir first on
+      # PATH routes the whole build through the cache without touching any build code.
+      - name: Setup -- ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ccache
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+      - name: Setup -- restore the compile cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.job }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-
+      # Zero AFTER the restore: the cache carries its own counters back, so zeroing earlier
+      # would make the end-of-job stats cumulative instead of this run's hit rate.
+      - name: Setup -- reset the ccache counters
+        run: ccache --zero-stats
       - uses: ./.github/actions/setup
 
       - name: Setup -- OpenMPI + a source-built mpi4py (real multi-rank on the CI runner)
@@ -535,6 +687,10 @@ jobs:
             tests/test_mpi_scoring.py \
             tests/test_noop_mpi_optimizer.py
 
+      # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
   # ===========================================================================================
   # gpu -- DISABLED extra runner (blocked). GPU codegen tests (tvm-gpu / triton) belong on a real
   # GPU box; this job is the home for them but stays OFF (if: false) until one is provisioned.

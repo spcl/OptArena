@@ -8,7 +8,7 @@
 extern "C" {
 
 // ===============================
-// %4.1 – %4.2 Storage / aliasing
+// %4.1 - %4.2 Storage / aliasing
 // ===============================
 
 // s421_d: xx = flat_2d_array; yy = xx;

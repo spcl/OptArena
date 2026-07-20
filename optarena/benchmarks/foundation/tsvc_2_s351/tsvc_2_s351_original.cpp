@@ -8,7 +8,7 @@
 extern "C" {
 
 // ======================
-// %3.5 – Loop rerolling
+// %3.5 - Loop rerolling
 // ======================
 
 // s351_d: unrolled SAXPY (5-way)

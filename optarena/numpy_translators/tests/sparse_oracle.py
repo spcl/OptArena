@@ -512,7 +512,7 @@ def run_kernel(k: SparseKernel,
         worst = max(worst, err)
         if not np.allclose(got, exp, rtol=rtol, atol=atol):
             ctx.cleanup()
-            return OracleResult(k.short, False, err, f"output {n!r} mismatch (max |Δ|={err:.3e})")
+            return OracleResult(k.short, False, err, f"output {n!r} mismatch (max |delta|={err:.3e})")
     ctx.cleanup()
     return OracleResult(k.short, True, worst, f"{len(out_names)} output(s) match")
 
@@ -576,7 +576,7 @@ def _compare_outputs(k, backend, out_names, got, expected, rtol, atol) -> Oracle
         err = float(np.abs(g - e).max()) if g.size else 0.0
         worst = max(worst, err)
         if not np.allclose(g, e, rtol=rtol, atol=atol):
-            return OracleResult(k.short, False, err, f"{backend} output {n!r} mismatch (max |Δ|={err:.3e})")
+            return OracleResult(k.short, False, err, f"{backend} output {n!r} mismatch (max |delta|={err:.3e})")
     return OracleResult(k.short, True, worst, f"{backend}: {len(out_names)} output(s) match")
 
 

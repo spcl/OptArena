@@ -22,6 +22,27 @@ def _c_type(dtype: str) -> str:
         return "double"
 
 
+#: Integer dtypes NARROWER than the int64 the emitted C computes in. numpy wraps an elementwise
+#: op at these widths; the wide C form does not, so each result is cast back (see _narrow_int_wrap).
+_NARROW_INT_DTYPES = frozenset({"int8", "int16", "int32", "uint8", "uint16", "uint32"})
+
+#: bare-name calls whose RESULT is an integer whatever the argument's dtype (see _is_int_cast).
+_INT_CAST_NAMES = frozenset({"int", "len"})
+
+
+def _is_int_cast(node: ast.AST) -> bool:
+    """True for a call whose result is an integer regardless of its argument dtype
+    (``int(x)``, ``len(x)``, ``np.int32(x)``), so float-ness must not propagate out of it."""
+    if not isinstance(node, ast.Call):
+        return False
+    if isinstance(node.func, ast.Name):
+        return node.func.id in _INT_CAST_NAMES
+    if isinstance(node.func, ast.Attribute):
+        key = node.func.attr[:-1] if node.func.attr.endswith("_") else node.func.attr
+        return key.startswith("int") or key.startswith("uint")
+    return False
+
+
 #: libm functions with a <name>f single-precision variant, emitted in a float32 kernel (see _math_name).
 _FLOATABLE = frozenset({
     "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "exp", "exp2",
@@ -181,17 +202,15 @@ class _CBodyEmitter(BaseEmitter):
         self._loop_iter_names.discard(var)
         if entered_parallel:
             self.parallel_active = False
-        # Negative step -> reverse loop (i > hi); detect the sign from the AST since the emitted text may hide it.
+        # Negative step -> reverse loop (i > hi). When the sign is only known at RUNTIME neither
+        # direction can be baked in, so the guard picks one per evaluation; the step is loop-
+        # invariant, so this costs nothing after hoisting.
         step_node = args[2] if len(args) == 3 else None
-        neg = False
-        if step_node is not None:
-            if isinstance(step_node, ast.UnaryOp) and isinstance(step_node.op, ast.USub):
-                neg = True
-            elif (isinstance(step_node, ast.Constant) and isinstance(step_node.value, (int, float))):
-                neg = step_node.value < 0
-            else:
-                neg = step.startswith("-")
-        cmp = ">" if neg else "<"
+        sign = self.static_step_sign(step_node)
+        if sign is None:
+            cond = f"(({step}) > 0 ? {var} < {hi} : {var} > {hi})"
+        else:
+            cond = f"{var} {'>' if sign < 0 else '<'} {hi}"
         if step == "1":
             inc = f"++{var}"
         elif step == "-1":
@@ -199,7 +218,7 @@ class _CBodyEmitter(BaseEmitter):
         else:
             inc = f"{var} += {step}"
         # Loop iterators are the int64 ABI integer, matching the size symbols they range over.
-        return (f"{omp_prefix}{indent}for ({_c_type('int')} {var} = {lo}; {var} {cmp} {hi}; {inc}) {{\n"
+        return (f"{omp_prefix}{indent}for ({_c_type('int')} {var} = {lo}; {cond}; {inc}) {{\n"
                 f"{body}\n"
                 f"{indent}}}")
 
@@ -344,11 +363,55 @@ class _CBodyEmitter(BaseEmitter):
     # ----- expression-level -----------------------------------------------
 
     def emit_expr(self, node: ast.AST) -> str:
-        """Emit an expression, rounding a float BinOp result back to the fp8 grid when the kernel computes in fp8."""
+        """Emit an expression, re-rounding a float BinOp result to the fp8 grid and re-wrapping a
+        narrow-int result to its element width (both are per-op in numpy, so both are per-op here)."""
         text = self._emit_expr_inner(node)
-        if isinstance(node, ast.BinOp):
-            return self._fp8_round(node, text)
+        if isinstance(node, (ast.BinOp, ast.UnaryOp)):
+            if isinstance(node, ast.BinOp):
+                text = self._fp8_round(node, text)
+            text = self._narrow_int_wrap(node, text)
         return text
+
+    def _narrow_int_wrap(self, node: ast.AST, text: str) -> str:
+        """Re-wrap a narrow-int (int8/16/32, uint8/16/32) result to its ELEMENT width.
+
+        numpy evaluates an elementwise integer op at the operand dtype and wraps there, but the
+        emitted C promotes narrow reads to int64 and computes wide, so an intermediate that
+        overflows the element width never wraps: for int8 ``a = b = 100``, numpy gives
+        ``(a + b) // 2 == -28`` (the sum wraps to -56 first) while the wide form yields 100.
+        Casting each result back to the element type restores the per-op wrap -- the integer
+        counterpart of the fp8 per-op re-round above, and load-bearing for the same reason.
+        Unary is included: ``-(-128)`` is -128 in int8, not 128.
+        """
+        # `not x` is a LOGICAL result, not an integer one -- wrapping it is a type error in
+        # Fortran and meaningless in C.
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return text
+        dt = self._narrow_int_dtype(node)
+        if dt is None:
+            return text
+        return f"(({_c_type(dt)})({text}))"
+
+    def _narrow_int_dtype(self, node: ast.AST):
+        """The single narrow-int element dtype this subtree computes in, else None.
+
+        None whenever the result is not narrow-int-typed in numpy either: any float/complex
+        operand, no array read at all, or a MIX of element dtypes (numpy promotes those to the
+        wider type, so the narrow wrap must not apply). Loop indices are ignored -- only element
+        reads carry the dtype that the arithmetic wraps at.
+        """
+        if self._is_float_operand(node) or self._is_complex_operand(node):
+            return None
+        seen = {
+            self._dtype_for_name(sub.value.id)
+            for sub in ast.walk(node) if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name)
+        }
+        if None in seen:
+            return None  # unknown element type: assume it promotes rather than guess narrow
+        if len(seen) != 1:
+            return None
+        dt = next(iter(seen))
+        return dt if dt in _NARROW_INT_DTYPES else None
 
     def _fp8_round(self, node: ast.BinOp, text: str) -> str:
         """Wrap a float BinOp result in the fp8 round-to-grid helper (per-op rounding is load-bearing, not decorative)."""
@@ -435,18 +498,15 @@ class _CBodyEmitter(BaseEmitter):
                             f"{self.emit_expr(node.right)})")
                 return (f"{self._math_name('pow')}({self.emit_expr(node.left)}, "
                         f"{self.emit_expr(node.right)})")
-            # a // b: integer operands -> int_floor(a, b) (C truncates, Python floors); float operands -> floor(a / b).
+            # a // b and a % b ALWAYS go through the emitted helpers: neither C nor C++ has
+            # numpy's floor-division or sign-of-divisor modulo natively, and the helpers pick
+            # the integer vs floating form from the operand TYPE. Branching here on a dtype
+            # inferred from the AST is what silently truncated ``int(a[i]) // 2`` instead of
+            # flooring it -- the compiler knows the type exactly, this pass does not.
             if isinstance(node.op, ast.FloorDiv):
-                left, right = self.emit_expr(node.left), self.emit_expr(node.right)
-                if self._is_float_operand(node.left) or self._is_float_operand(node.right):
-                    return f"{self._math_name('floor')}(({left}) / ({right}))"
-                return f"int_floor({left}, {right})"
-            # a % b -> python_mod/python_fmod: Python/numpy take the sign of the divisor, C/C++ the dividend.
+                return f"int_floor({self.emit_expr(node.left)}, {self.emit_expr(node.right)})"
             if isinstance(node.op, ast.Mod):
-                left, right = self.emit_expr(node.left), self.emit_expr(node.right)
-                if self._is_float_operand(node.left) or self._is_float_operand(node.right):
-                    return f"python_fmod({left}, {right})"
-                return f"python_mod({left}, {right})"
+                return f"python_mod({self.emit_expr(node.left)}, {self.emit_expr(node.right)})"
             # scalar @ scalar: numpy treats 0-D @ as ordinary multiplication; reached when the matmul hoister rejected it.
             if isinstance(node.op, ast.MatMult):
                 return (f"({self.emit_expr(node.left)} * "
@@ -722,9 +782,20 @@ class _CBodyEmitter(BaseEmitter):
         return _walk_complex(node, self._dtype_for_name) is not None
 
     def _is_float_operand(self, node: ast.AST, _scalars=None) -> bool:
-        """True when node is provably floating-point (float Constant or float-dtype array/local); unknown -> False."""
+        """True when node is provably floating-point (float Constant or float-dtype array/local); unknown -> False.
+
+        Integer-cast subtrees are PRUNED: ``int(a[i])`` is an integer however float ``a``
+        is, so its argument must not leak float-ness outward -- otherwise ``int(a[i]) // 2``
+        takes the float floor-division path, where both emitted operands are already
+        integers, C truncates toward zero and the wrapping ``floor`` is a no-op
+        (``int(-7.5) // 2`` -> -3 instead of numpy's -4).
+        """
         scalars = self._float_scalar_names() if _scalars is None else _scalars
-        for sub in ast.walk(node):
+        stack = [node]
+        while stack:
+            sub = stack.pop()
+            if _is_int_cast(sub):
+                continue  # integer result -- do not inspect the cast's argument
             if isinstance(sub, ast.Constant) and isinstance(sub.value, float):
                 return True
             if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
@@ -737,6 +808,7 @@ class _CBodyEmitter(BaseEmitter):
                     return True
                 if sub.id in scalars:
                     return True
+            stack.extend(ast.iter_child_nodes(sub))
         return False
 
     def _float_scalar_names(self) -> set:
@@ -1127,15 +1199,37 @@ _C_HEADER = ("#define _USE_MATH_DEFINES\n"
              "static inline double __npb_sign(double x) {\n"
              "    return x != x ? x : (double)((x > 0) - (x < 0));\n"
              "}\n"
-             "/* Python ``//`` floor-toward-neg-inf vs C trunc-toward-zero;\n"
-             " * matches numpy ``//`` for both same- and mixed-sign inputs. */\n"
+             "/* Python ``//`` floors toward -inf; C ``/`` truncates toward zero. Integer and\n"
+             " * floating operands need different corrections, so the division helpers dispatch\n"
+             " * on the PROMOTED OPERAND TYPE -- the emitter never has to infer the dtype from\n"
+             " * the source AST (guessing it wrong silently truncated instead of flooring).\n"
+             " * _Generic's controlling expression is unevaluated and each argument is spelled\n"
+             " * once, so operands with side effects are evaluated exactly once. */\n"
+             "static inline int64_t __npb_floordiv_i(int64_t a, int64_t b) {\n"
+             "    return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n"
+             "}\n"
+             "static inline double __npb_floordiv_f(double a, double b) { return floor(a / b); }\n"
              "#ifndef int_floor\n"
-             "#define int_floor(a, b) ((a)/(b) - (((a)%(b)!=0) && (((a)<0)^((b)<0))))\n"
+             "#define int_floor(a, b) _Generic((a) + (b), \\\n"
+             "    float: __npb_floordiv_f, double: __npb_floordiv_f, long double: __npb_floordiv_f, \\\n"
+             "    default: __npb_floordiv_i)((a), (b))\n"
              "#endif\n"
-             "/* Python ``%`` returns sign of divisor; C returns sign of dividend. */\n"
-             "#ifndef python_mod\n"
-             "#define python_mod(a, b) (((a) % (b) + (b)) % (b))\n"
+             "/* Ceil-division counterpart (toward +inf), exact for both signs -- unlike the\n"
+             " * ``(a + b - 1) / b`` idiom, which is correct only for a positive divisor and\n"
+             " * overflows near the integer maximum. */\n"
+             "static inline int64_t __npb_ceildiv_i(int64_t a, int64_t b) {\n"
+             "    return a / b + ((a % b != 0) && ((a < 0) == (b < 0)));\n"
+             "}\n"
+             "static inline double __npb_ceildiv_f(double a, double b) { return ceil(a / b); }\n"
+             "#ifndef int_ceil\n"
+             "#define int_ceil(a, b) _Generic((a) + (b), \\\n"
+             "    float: __npb_ceildiv_f, double: __npb_ceildiv_f, long double: __npb_ceildiv_f, \\\n"
+             "    default: __npb_ceildiv_i)((a), (b))\n"
              "#endif\n"
+             "/* Python ``%`` returns sign of divisor; C returns sign of dividend. Same\n"
+             " * type-dispatch as int_floor: integer operands use the exact integer form,\n"
+             " * floating operands numpy's npy_remainder (see python_fmod). */\n"
+             "static inline int64_t __npb_mod_i(int64_t a, int64_t b) { return (a % b + b) % b; }\n"
              "/* Floating-point ``%``: numpy's floored modulo takes the sign of the\n"
              " * divisor, which integer ``python_mod`` cannot express on doubles.\n"
              " * Mirrors numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n"
@@ -1144,6 +1238,11 @@ _C_HEADER = ("#define _USE_MATH_DEFINES\n"
              "    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n"
              "    return m;\n"
              "}\n"
+             "#ifndef python_mod\n"
+             "#define python_mod(a, b) _Generic((a) + (b), \\\n"
+             "    float: python_fmod, double: python_fmod, long double: python_fmod, \\\n"
+             "    default: __npb_mod_i)((a), (b))\n"
+             "#endif\n"
              "/* Integer power for VLA shape bounds like ``R ** K``. */\n"
              "static inline int64_t __npb_int_pow(int64_t base, int64_t exp) {\n"
              "    int64_t result = 1;\n"
@@ -1157,6 +1256,7 @@ _C_HEADER = ("#define _USE_MATH_DEFINES\n"
 
 # C++ prelude uses constexpr, not consteval (called with runtime args); <complex.h> is dropped to avoid name clashes.
 _CPP_HEADER = ('#include <cstdint>\n#include <cmath>\n'
+               '#include <type_traits>\n'
                '#include <cstring>\n#include <cstdlib>\n'
                '// Math constants as typed constexpr values. ``<cmath>`` may\n'
                '// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n'
@@ -1242,16 +1342,43 @@ _CPP_HEADER = ('#include <cstdint>\n#include <cmath>\n'
                'inline double __npb_sign(double x) {\n'
                '    return x != x ? x : (double)((x > 0) - (x < 0));\n'
                '}\n'
-               '/* Python ``//`` floor-toward-neg-inf (C/C++ ``/`` truncates\n'
-               ' * toward zero); matches numpy ``//`` for mixed-sign inputs. */\n'
+               '/* Python ``//`` floors toward -inf; C++ ``/`` truncates toward zero.\n'
+               ' * C++ has no built-in floor-division, so it is always this helper. The\n'
+               ' * INTEGRAL/floating split is decided by the operand TYPE here rather than\n'
+               ' * inferred from the source AST -- guessing it wrong emitted a no-op floor\n'
+               ' * over an already-truncated integer quotient. */\n'
                'template <class A, class B>\n'
                'constexpr auto int_floor(A a, B b) {\n'
-               '    return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n'
+               '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
+               '        return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n'
+               '    } else {\n'
+               '        return std::floor(static_cast<double>(a) / static_cast<double>(b));\n'
+               '    }\n'
                '}\n'
-               '/* Python ``%`` returns the sign of the divisor; C/C++ the\n'
-               ' * dividend. ``python_mod`` bridges the gap. */\n'
+               '/* Ceil-division counterpart (toward +inf), exact for both signs -- unlike\n'
+               ' * the ``(a + b - 1) / b`` idiom, which holds only for a positive divisor\n'
+               ' * and overflows near the integer maximum. */\n'
                'template <class A, class B>\n'
-               'constexpr auto python_mod(A a, B b) { return (a % b + b) % b; }\n'
+               'constexpr auto int_ceil(A a, B b) {\n'
+               '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
+               '        return a / b + ((a % b != 0) && ((a < 0) == (b < 0)));\n'
+               '    } else {\n'
+               '        return std::ceil(static_cast<double>(a) / static_cast<double>(b));\n'
+               '    }\n'
+               '}\n'
+               '/* Python ``%`` returns the sign of the divisor; C/C++ the dividend.\n'
+               ' * Same type-dispatch as int_floor (floating operands need npy_remainder,\n'
+               ' * which the integer form cannot express on doubles). */\n'
+               'template <class A, class B>\n'
+               'constexpr auto python_mod(A a, B b) {\n'
+               '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
+               '        return (a % b + b) % b;\n'
+               '    } else {\n'
+               '        double m = std::fmod(static_cast<double>(a), static_cast<double>(b));\n'
+               '        if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += static_cast<double>(b);\n'
+               '        return m;\n'
+               '    }\n'
+               '}\n'
                '/* Floating-point ``%``: numpy floored modulo (sign of the divisor),\n'
                ' * which integer ``python_mod`` cannot express on doubles. Mirrors\n'
                ' * numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n'
@@ -1263,7 +1390,8 @@ _CPP_HEADER = ('#include <cstdint>\n#include <cmath>\n'
                'extern "C" {\n')
 _CPP_FOOTER = '} // extern "C"\n'
 
-# Timing is owned by the harness bracket externally (abi_contract.md §6); the kernel neither self-times nor takes a timer arg.
+# Timing is owned by the harness bracket externally (abi_contract.md Sec. 6); the kernel neither self-times nor
+# takes a timer arg.
 _C_PRELUDE = ""
 _C_EPILOGUE = ""
 _CPP_PRELUDE = ""

@@ -34,12 +34,12 @@ def test_gemm_canonical_order_and_constness():
     assert ptr_names == ["A", "B", "C"]
     assert ptr_names == sorted(ptr_names)
     assert scal_names == sorted(scal_names)
-    # All pointers precede all scalars (§4).
+    # All pointers precede all scalars (Sec. 4).
     kinds = [a.kind for a in b.args]
     assert kinds == sorted(kinds, key=lambda k: 0 if k == "ptr" else 1)
 
     by = {a.name: a for a in b.args}
-    # §5 const-ness: C is the output -> non-const; A, B inputs -> const.
+    # Sec. 5 const-ness: C is the output -> non-const; A, B inputs -> const.
     assert by["C"].is_const is False
     assert by["C"].role == "output"
     assert by["A"].is_const is True
@@ -57,7 +57,7 @@ def test_gemm_canonical_order_and_constness():
 def test_gemm_has_no_timer_arg():
     spec = _load("gemm")
     b = binding_from_spec(spec)
-    # timing is harness-owned externally (§6): no timer in the args or the JSON.
+    # timing is harness-owned externally (Sec. 6): no timer in the args or the JSON.
     assert all(a.name != "time_ns" for a in b.args)
     j = b.to_json()
     assert "time_ns" not in j
@@ -72,19 +72,19 @@ def test_gemm_stub_has_signature_and_todo_not_reference():
         stub = gen_call_stub(b, lang)
         assert b.symbols[lang] in stub, lang
         assert "TODO" in stub, lang
-        assert "time_ns" not in stub, lang  # timing is harness-owned externally (§6)
-        assert "workspace" in stub and "workspace_size" in stub, lang  # §11 always present
+        assert "time_ns" not in stub, lang  # timing is harness-owned externally (Sec. 6)
+        assert "workspace" in stub and "workspace_size" in stub, lang  # Sec. 11 always present
         # Never the reference solution.
         assert "alpha * A @ B" not in stub
         assert "A[i]" not in stub and "C[i * NJ" not in stub
 
     c_stub = gen_call_stub(b, "c")
-    # The canonical C signature shape (§7 / §9).
+    # The canonical C signature shape (Sec. 7 / Sec. 9).
     assert "const double *restrict A" in c_stub
     assert "double *restrict C" in c_stub  # output, non-const
     assert "const long" not in c_stub  # symbols are int64_t
     assert "const int64_t NI" in c_stub
-    # §11 reserved scratch pair, the trailing args.
+    # Sec. 11 reserved scratch pair, the trailing args.
     assert "uint8_t *restrict workspace" in c_stub
     assert "const int64_t workspace_size" in c_stub
     assert c_stub.index("beta") < c_stub.index("workspace")  # scratch pair is trailing
@@ -95,7 +95,7 @@ def test_gemm_host_glue_forwards_pure():
     b = binding_from_spec(spec)
     glue = gen_host_glue(b)
     assert "gemm_pure" in glue
-    assert "time_ns" not in glue  # timing is harness-owned externally (§6)
+    assert "time_ns" not in glue  # timing is harness-owned externally (Sec. 6)
     assert b.symbols["c"] in glue
 
 
@@ -106,7 +106,7 @@ def test_gemm_json_round_trip():
     assert j["kernel"] == "gemm"
     assert j["abi"] == "c-abi-v2"
     assert j["symbol"] == "gemm_fp64"
-    # §11 reserved scratch pair, the trailing pair, NULLable + never in args.
+    # Sec. 11 reserved scratch pair, the trailing pair, NULLable + never in args.
     assert j["workspace"]["name"] == "workspace" and j["workspace"]["dtype"] == "uint8"
     assert j["workspace"]["size_name"] == "workspace_size" and j["workspace"]["nullable"] is True
     assert set(j["symbols"]) == set(LANGS)
@@ -126,7 +126,7 @@ def test_spmv_packed_group_and_order():
         pytest.skip("spmv has no sparse configurations")
     b = binding_from_spec(spec, config="csr")
 
-    # §3: A is a packed group with ordered member buffers.
+    # Sec. 3: A is a packed group with ordered member buffers.
     assert len(b.packed) == 1
     g = b.packed[0]
     assert isinstance(g, PackedGroup)
@@ -136,7 +136,7 @@ def test_spmv_packed_group_and_order():
     assert list(g.members) == sorted(g.members)
     assert set(g.members) == {"A_data", "A_indices", "A_indptr"}
 
-    # The members appear in the flat pointer block as ordinary const pointers, alpha-sorted (§4).
+    # The members appear in the flat pointer block as ordinary const pointers, alpha-sorted (Sec. 4).
     ptr_names = [a.name for a in b.args if a.kind == "ptr"]
     assert ptr_names == sorted(ptr_names)
     assert {"A_data", "A_indices", "A_indptr", "x"} <= set(ptr_names)
@@ -149,7 +149,7 @@ def test_spmv_packed_group_and_order():
     assert by["A_indptr"].dtype == "int64"
     assert by["A_data"].dtype == "float64"
 
-    # JSON records the packed group (§8).
+    # JSON records the packed group (Sec. 8).
     j = b.to_json()
     assert j["packed"]["A"]["format"] == "csr"
     assert j["packed"]["A"]["members"] == sorted(g.members)
@@ -161,17 +161,17 @@ def test_spmv_host_glue_unpacks_handle():
         pytest.skip("spmv has no sparse configurations")
     b = binding_from_spec(spec, config="csr")
     glue = gen_host_glue(b)
-    # The wrapper documents the unpack of the logical handle into members (§3).
+    # The wrapper documents the unpack of the logical handle into members (Sec. 3).
     assert "packed handle A [csr]" in glue
     for m in b.packed[0].members:
         assert m in glue
 
 
-# --- Phantom-arg filter (§2) --- #
+# --- Phantom-arg filter (Sec. 2) --- #
 
 
 def test_phantom_np_arg_filtered():
-    # A synthetic spec carrying a captured np numpy module param: it must never reach the binding (§2).
+    # A synthetic spec carrying a captured np numpy module param: it must never reach the binding (Sec. 2).
     raw = {
         "short_name": "phantom",
         "name": "phantom",

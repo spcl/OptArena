@@ -4,12 +4,12 @@ This is the spec for hand-writing the per-benchmark TVM implementations
 (the "TVM track", analogous to the pluto track). Every canonical
 benchmark (`<dir>/<module>_numpy.py`) gets two files:
 
-* `<dir>/<module>_tvm_cpu.py` — llvm target, **numerically verified here**.
-* `<dir>/<module>_tvm.py` — cuda target, shares the CPU file's TIR builder
+* `<dir>/<module>_tvm_cpu.py` -- llvm target, **numerically verified here**.
+* `<dir>/<module>_tvm.py` -- cuda target, shares the CPU file's TIR builder
   (so identical numerics); only build-checked here (no GPU in the sandbox).
 
 Autotuning ("auto-opt track") is mandatory and already wired: every kernel
-goes through `meta_schedule.tune_tir` → `compile_tir` → `tvm.compile` via the
+goes through `meta_schedule.tune_tir` -> `compile_tir` -> `tvm.compile` via the
 shared helper. Do **not** hand-schedule.
 
 ## Environment
@@ -19,8 +19,8 @@ pip install --pre apache-tvm   # 0.25.0rc0 official wheel (--pre REQUIRED)
 pip install xgboost            # meta_schedule cost model
 ```
 API lives under `tvm.s_tir.meta_schedule` (NOT `tvm.meta_schedule`). `tvm.tir`
-is **not** importable as an attribute — use `te.*` helpers instead
-(`te.all`, `te.any`, `te.if_then_else`, `te.max`, `te.min`, `te.sum`, …).
+is **not** importable as an attribute -- use `te.*` helpers instead
+(`te.all`, `te.any`, `te.if_then_else`, `te.max`, `te.min`, `te.sum`, ...).
 Constants are plain Python floats.
 
 ## Prefer high-level ops (TOPI)
@@ -50,9 +50,9 @@ Hand-write `te.compute` only for the parts with no matching high-level op
 
 * **Never use `hasattr` or `getattr`.** Reference attributes directly; for a
   dynamic name use `vars(module)[name]` / `module.__dict__[name]`.
-* Absolute package imports only — no `sys.path` edits, no filesystem paths.
+* Absolute package imports only -- no `sys.path` edits, no filesystem paths.
 
-## The shared helper — `optarena/frameworks/tvm_build.py`
+## The shared helper -- `optarena/frameworks/tvm_build.py`
 
 ```python
 TvmKernel(name, build_primfunc, target_fn, device_fn)  # shape-keyed compile cache
@@ -74,8 +74,8 @@ in place. So: compute fresh output tensor(s) and **return them in
 validates the returned values against numpy's mutated outputs.
 
 Watch the output shape/contract:
-* An output array the reference only *partially* writes (e.g. `dot_out[0]=…`,
-  rest untouched) must have its untouched cells **preserved** — read the input
+* An output array the reference only *partially* writes (e.g. `dot_out[0]=...`,
+  rest untouched) must have its untouched cells **preserved** -- read the input
   placeholder and `te.if_then_else` the written region. (See `vdotr`.)
 * Boundary/last elements the loop skips must fall back to the input. (`s1244`.)
 * Index expressions that the select discards at the boundary still get
@@ -101,7 +101,7 @@ def vpv(a, b, LEN_1D):                 # name == bench_info func_name
     n = int(LEN_1D)
     exe = _K.get((n, str(a.dtype)))    # cache key: shapes + dtype
     out = _K.out((n,), a.dtype)
-    exe(a, b, out)                     # inputs…, then output buffer(s)
+    exe(a, b, out)                     # inputs..., then output buffer(s)
     return out                         # output_args order
 ```
 
@@ -125,15 +125,15 @@ def vpv(a, b, LEN_1D):                 # identical body, GPU _K
 ## Verifying
 
 ```
-# CPU — real harness numerical validation vs numpy (preset S, fp64 strict):
+# CPU -- real harness numerical validation vs numpy (preset S, fp64 strict):
 # verify_tvm.py is a local-only helper (gitignored; restore locally if absent)
-OPTARENA_TVM_METASCHEDULE_TRIALS=4 python scripts/verify_tvm.py <name> [<name> …]
-# GPU — structural build check (no GPU needed):
+OPTARENA_TVM_METASCHEDULE_TRIALS=4 python scripts/verify_tvm.py <name> [<name> ...]
+# GPU -- structural build check (no GPU needed):
 python scripts/verify_tvm.py <name> --fw tvm --build-only
 ```
 A kernel is "done" only when its CPU verify prints `PASS` and its GPU
-build-check prints `PASS`. Keep `OPTARENA_TVM_METASCHEDULE_TRIALS` small (4–8)
-while iterating — correctness doesn't need a full tune; the env var also
+build-check prints `PASS`. Keep `OPTARENA_TVM_METASCHEDULE_TRIALS` small (4-8)
+while iterating -- correctness doesn't need a full tune; the env var also
 gates the real harness (`small`=64 / `full`=1024).
 
 ## Reference patterns (all verified)
@@ -141,7 +141,7 @@ gates the real harness (`small`=64 / `full`=1024).
 | shape | example | TIR |
 |-------|---------|-----|
 | elementwise | `va`, `vpv`, `vif` | single `te.compute`, `te.if_then_else` for branches |
-| full reduction → `(1,)` | `vsumr` | `te.reduce_axis` + `te.sum` |
+| full reduction -> `(1,)` | `vsumr` | `te.reduce_axis` + `te.sum` |
 | partial-write reduction | `vdotr` | scalar reduce stage + select preserving the tail |
 | multi-output anti-dep | `s1244` | new-value stage + old (`a_in`) reads, clamped |
 | strided / masked | `s111` | `te.if_then_else(te.all(...))` over full range |

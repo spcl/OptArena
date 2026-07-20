@@ -275,6 +275,43 @@ def test_var_float_input_preserves_dtype_in_desugar():
 
 
 # --------------------------------------------------------------------------- #
+# Fix 6b: AXIS sum/prod accumulate in int64 for a bool / narrow-int input      #
+# --------------------------------------------------------------------------- #
+
+
+def test_axis_sum_prod_integer_input_allocates_int64():
+    # The axis-reduction TEMP used to be allocated at the INPUT width (``s.dtype``), so an
+    # int32 column sum wrapped past 2^31. numpy upcasts an integer accumulator to int64.
+    for op in ("sum", "prod"):
+        assert "np.int64" in _src(_reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="int"))
+        assert "np.int64" in _src(_reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="bool"))
+
+
+def test_axis_sum_float_and_elementwise_ops_keep_input_dtype():
+    # float sums stay at the input width (float32 must not become int64/float64), and
+    # min/max pick an ELEMENT, so they keep the input dtype even for an integer input.
+    assert "s.dtype" in _src(_reduce_axis_stmts("t", "s", "sum", [0], 2, 0, elem_kind="float"))
+    for op in ("max", "min"):
+        assert "s.dtype" in _src(_reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="int"))
+
+
+def test_axis_sum_int32_overflow_all_backends():
+    # each column sums to 4 * 2**30 = 2**32, which does NOT fit int32.
+    x = np.full((4, 3), 2**30, dtype=np.int32)
+    assert np.sum(x, axis=0).dtype == np.int64  # numpy anchor
+    res = run_op("import numpy as np\ndef f(x, out):\n    out[:] = np.sum(x, axis=0)\n",
+                 "f", {"x": x}, {"out": (3, )}, {"N": 4},
+                 shapes={
+                     "x": "(4,3)",
+                     "out": "(3,)"
+                 },
+                 dtypes={"x": "int32"},
+                 backends=_ALL)
+    ok, _ = _ok(res)
+    assert ok, res
+
+
+# --------------------------------------------------------------------------- #
 # Fix 7: concatenate accepts a negative-literal axis (axis=-1)                #
 # --------------------------------------------------------------------------- #
 

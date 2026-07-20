@@ -1,4 +1,4 @@
-### `baseline` — the time to beat
+### `baseline` -- the time to beat
 ```sh
 curl -s {{ judge_url }}/baseline/{{ kernel }}?language={{ language }}
 # -> {"baselines": {"{{ baseline }}": <nanoseconds>, ...}}

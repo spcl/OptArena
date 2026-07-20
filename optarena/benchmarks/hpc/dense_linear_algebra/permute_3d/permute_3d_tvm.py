@@ -1,7 +1,7 @@
 """CPU TVM permute_3d (``B[i,j,k] = A[k,j,i]``) on meta_schedule autotuning.
 
 A layout permutation (transpose), so there is no high-level TOPI op to lean
-on — a single ``te.compute`` is the right primitive. Uses the shared
+on -- a single ``te.compute`` is the right primitive. Uses the shared
 ``tvm_build`` helper + ``build_primfunc`` convention so the GPU sibling reuses
 the exact TIR.
 """

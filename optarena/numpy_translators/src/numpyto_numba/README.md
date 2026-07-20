@@ -1,6 +1,6 @@
 # NumpyToNumba
 
-Python (numpy) → Python (numba-compiled) emitter. Numba supports a
+Python (numpy) -> Python (numba-compiled) emitter. Numba supports a
 large subset of numpy and pure-Python loops; the translation is:
 
 1. Wrap the kernel function with `@numba.njit` (`@numba.njit(parallel=True)`

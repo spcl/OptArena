@@ -77,6 +77,9 @@ class IterationResult:
     timed: bool = False  # a TIMED large-shape cell vs a correctness-only cell
     peak_bytes: int = 0  # candidate kernel-attributable peak RSS increment at this cell (bytes; MU input)
     baseline_peak_bytes: int = 0  # baseline (C) peak RSS increment at this cell (bytes; NMU denominator)
+    graded: bool = True  # an oracle was available and the output was actually compared. False = INCONCLUSIVE
+    # (e.g. the C timed-oracle could not be evaluated at the large shape), NOT a mismatch -- ``solved``
+    # already skips these, so a reader that treats ``correct=False`` as "wrong" would misreport them.
 
 
 @dataclass(frozen=True)
@@ -240,7 +243,8 @@ def _as_iteration(idx: int, cs) -> IterationResult:
                            label=cs.label,
                            timed=cs.timed,
                            peak_bytes=cs.peak_bytes,
-                           baseline_peak_bytes=cs.baseline_peak_bytes)
+                           baseline_peak_bytes=cs.baseline_peak_bytes,
+                           graded=cs.graded)
 
 
 def _score_task_distributed(submission: Submission,
@@ -249,8 +253,8 @@ def _score_task_distributed(submission: Submission,
                             verify: bool,
                             datatype: str,
                             repeat: int,
-                            rtol: float,
-                            atol: float,
+                            rtol: Optional[float],
+                            atol: Optional[float],
                             c_max: float,
                             single_node_anchor: Optional[Submission] = None) -> TaskScore:
     """Score a distributed (MPI) submission via the XL-on-1-node scaling protocol, not the shapes sweep."""
@@ -328,10 +332,18 @@ def score_task_fuzzed(submission: Submission,
                       oracle: str = "numpy",
                       baseline: str = _DEFAULT_BASELINE,
                       perf_mode: Optional[str] = None,
-                      rtol: float = 1.0e-6,
-                      atol: float = 1.0e-9,
+                      rtol: Optional[float] = None,
+                      atol: Optional[float] = None,
                       single_node_anchor: Optional[Submission] = None) -> TaskScore:
-    """Score one submission on one kernel to a single S_i via the two-stage gate-broadly/time-narrowly protocol."""
+    """Score one submission on one kernel to a single S_i via the two-stage gate-broadly/time-narrowly protocol.
+
+    ``rtol``/``atol`` stay ``None`` so :func:`optarena.harness.scoring._resolve_tolerances`
+    fills them from the datatype's precision band (the single TOLERANCE_MATRIX source that
+    ``prompts.py`` already quotes to the agent). Passing a number here is an explicit
+    per-call override that silently opts the whole grade out of that band -- it should be
+    rare, and never a default: these two defaulted to 1e-6/1e-9, so every graded fp32/fp16
+    run was held to a near-fp64 band while fp64 itself graded looser than its own.
+    """
     if task.residency == "distributed":
         return _score_task_distributed(submission,
                                        task,

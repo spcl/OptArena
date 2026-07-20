@@ -357,7 +357,7 @@ def _repo_makefile(kt: KernelTask, language: str) -> str:
 
 
 def _mpi_binding(kt: KernelTask):
-    """``(spec, binding)`` for one distributed kernel -- the source of its §12 ``kernel_mpi``
+    """``(spec, binding)`` for one distributed kernel -- the source of its Sec. 12 ``kernel_mpi``
     signature, symbol, and default distribution. Loaded at generation time (offline) via the
     registry KEY (``row.kernel`` is the short_name, which is not loadable for short != stem)."""
     spec = BenchSpec.load(kt.key)
@@ -373,7 +373,7 @@ def _mpi_distribution_json(kt: KernelTask, ranks: int) -> str:
 
 
 def _mpi_instruction_md(task_id: str, kt: KernelTask, language: str, ranks: int, mode: str) -> str:
-    """The leak-free distributed (MPI) prompt: point at the on-disk NumPy reference + the §12
+    """The leak-free distributed (MPI) prompt: point at the on-disk NumPy reference + the Sec. 12
     ``kernel_mpi`` stub the agent fills, and tell it to declare its data layout in
     ``distribution.json``. The harness owns ``MPI_Init``/scatter/gather/timing; the agent
     implements ONE SPMD kernel and all of its own communication. The on-disk-reference analog of
@@ -395,7 +395,7 @@ def _mpi_instruction_md(task_id: str, kt: KernelTask, language: str, ranks: int,
     body = f"""## `{row.name}` (`{row.id}`)
 
 - Reference semantics (NumPy, whole-domain): `{kt.reference_path()}`
-- Implement the exported symbol `{sym}`. Its exact §12 signature is the stub already written to
+- Implement the exported symbol `{sym}`. Its exact Sec. 12 signature is the stub already written to
   your submission file: local pointer tiles (alphabetical), then local size symbols (alphabetical),
   then the Cartesian `comm`, then the reserved `workspace`/`workspace_size` pair -- and NO timer
   argument (the harness times).
@@ -608,7 +608,7 @@ def write_task(task_id: str,
     """Write one Harbor task directory (one or more kernels) under ``out_dir``. The
     verifier timeout scales by kernel count when ``timeout_sec`` is not given.
 
-    A ``distributed`` task (always one kernel) ships the §12 ``kernel_mpi`` stub as the
+    A ``distributed`` task (always one kernel) ships the Sec. 12 ``kernel_mpi`` stub as the
     submission starter and a ``distribution.json`` starter (the default 1-D block layout), and
     its prompt carries the distributed contract.
 
@@ -654,7 +654,7 @@ def write_task(task_id: str,
         (env_kdir / "reference.py").write_text(ref_text)
         (env_kdir / "signature.json").write_text(sig_text)
         if distributed:
-            # The starter is the §12 kernel_mpi signature to fill (never a solution) + a valid
+            # The starter is the Sec. 12 kernel_mpi signature to fill (never a solution) + a valid
             # default 1-D block distribution the agent may keep or replace.
             _spec, binding = _mpi_binding(kt)
             (env_kdir / f"submission.{_ext(language)}").write_text(gen_kernel_mpi_stub(binding))

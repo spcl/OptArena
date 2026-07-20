@@ -1,4 +1,4 @@
-"""CPU TVM trmm — meta_schedule autotuned. B = alpha*(B + L^T-style masked accumulate over k>i)."""
+"""CPU TVM trmm -- meta_schedule autotuned. B = alpha*(B + L^T-style masked accumulate over k>i)."""
 import tvm
 from tvm import te
 

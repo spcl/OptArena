@@ -4,8 +4,8 @@ This is a Thomas-algorithm tridiagonal solve done twice per timestep (a
 column sweep then a row sweep). Each sweep has a forward elimination and a
 backward substitution that are *sequential in j* but fully *parallel over the
 batch index m* (the ``1:N-1`` slice). We therefore compile four small
-PrimFuncs — the per-``j`` forward (p,q) update and the per-``j`` backward
-substitution, for each of the two sweeps — and drive the sequential ``j``
+PrimFuncs -- the per-``j`` forward (p,q) update and the per-``j`` backward
+substitution, for each of the two sweeps -- and drive the sequential ``j``
 loops in Python (mirroring the numpy reference's ``for j`` loops), with the
 parallel-over-``m`` arithmetic in the compiled kernels.
 

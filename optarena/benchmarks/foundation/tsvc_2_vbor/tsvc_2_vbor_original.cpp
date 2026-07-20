@@ -8,7 +8,7 @@
 extern "C" {
 
 // ============================================================
-// vbor_d — 59 flops kernel
+// vbor_d -- 59 flops kernel
 // ============================================================
 
 void vbor_d(const double *__restrict__ a, const double *__restrict__ b, const double *__restrict__ c,

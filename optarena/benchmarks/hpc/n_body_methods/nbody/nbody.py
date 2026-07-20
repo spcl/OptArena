@@ -11,4 +11,6 @@ def initialize(N, tEnd, dt, datatype=np.float32):
     pos = rng.random((N, 3), dtype=datatype)  # randomly selected positions and velocities
     vel = rng.random((N, 3), dtype=datatype)
     Nt = int(np.ceil(tEnd / dt))
-    return mass, pos, vel, Nt
+    KE = np.zeros(Nt + 1, dtype=mass.dtype)
+    PE = np.zeros(Nt + 1, dtype=mass.dtype)
+    return mass, pos, vel, Nt, KE, PE

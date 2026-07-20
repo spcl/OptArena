@@ -364,7 +364,7 @@ def _env_subdir(kernel: str) -> str:
 
 @pytest.mark.parametrize("kernel", _MPI_STENCILS)
 def test_generates_distributed_task_layout(kernel, tmp_path):
-    """A distributed task ships the §12 kernel_mpi stub plus a valid default distribution.json."""
+    """A distributed task ships the Sec. 12 kernel_mpi stub plus a valid default distribution.json."""
     from optarena.harness.envelope import Submission
     from optarena.support.bindings import binding_from_spec
     from optarena.support.bindings.mpi_driver import mpi_symbol
@@ -377,7 +377,7 @@ def test_generates_distributed_task_layout(kernel, tmp_path):
                 f"environment/{sub}/distribution.json"):
         assert (td / rel).is_file(), f"missing {rel}"
     assert os.stat(td / "tests" / "test.sh").st_mode & 0o111  # executable
-    # submission starter = the §12 kernel_mpi stub (exports <base>_mpi, empty TODO body)
+    # submission starter = the Sec. 12 kernel_mpi stub (exports <base>_mpi, empty TODO body)
     stub = (td / f"environment/{sub}/submission.c").read_text()
     assert mpi_symbol(binding_from_spec(BenchSpec.load(kernel))) in stub and "TODO" in stub
     # distribution.json starter is a structurally valid layout (the envelope validates it)
@@ -406,7 +406,7 @@ def test_distributed_instruction_references_files_and_mpi_contract(tmp_path):
     assert "distributed MPI" in instr and "SPMD" in instr
     assert "/app/jacobi2d/reference.py" in instr and "/app/jacobi2d/submission.c" in instr
     assert "/app/jacobi2d/distribution.json" in instr
-    assert mpi_symbol(binding_from_spec(spec)) in instr  # the §12 symbol to implement
+    assert mpi_symbol(binding_from_spec(spec)) in instr  # the Sec. 12 symbol to implement
     assert row.numpy_reference and row.numpy_reference not in instr  # leak-free (not inlined)
 
 

@@ -8,16 +8,16 @@ the `optarena/NumpyToC/` translator (and its C++/Fortran siblings).
 ## 1. Motivation
 
 The NumpyToC translator turns `*_numpy.py` kernels into C/C++/Fortran. Historically
-it chased *arbitrary* NumPy idioms — chained subscripts, rank-changing reshapes,
-fancy indexing, whole-array reassignment — through roughly two dozen interacting
+it chased *arbitrary* NumPy idioms -- chained subscripts, rank-changing reshapes,
+fancy indexing, whole-array reassignment -- through roughly two dozen interacting
 AST rewriter passes in `lowering.py`. Those passes share a fragile, mutable
 `shape_table`, and when one pass rewrites a statement in a way another pass did not
 anticipate, the shape table goes stale and emission produces wrong or
 non-compiling code. **Canonical NumPy Form (CNF) inverts the contract.** Instead of
 the translator bending to fit any kernel, we define a single, small NumPy subset
 that is *provably* lowerable, and we rewrite kernels into it. The payoff is a
-translator that can *delete* its riskiest passes (§5), plus benchmark authors who
-get a mechanical rulebook (§4) and a CI gate (§6).
+translator that can *delete* its riskiest passes (Sec. 5), plus benchmark authors who
+get a mechanical rulebook (Sec. 4) and a CI gate (Sec. 6).
 
 CNF rests on **three invariants**, explained below with canonical-vs-non-canonical
 pairs from real kernels and a rewrite cookbook.
@@ -26,14 +26,14 @@ pairs from real kernels and a rewrite cookbook.
 
 ## 2. The Three Invariants
 
-### Invariant 1 — Static shape, known at declaration
+### Invariant 1 -- Static shape, known at declaration
 
-Every array — input *or* temporary — has a shape fully determined by the kernel's
+Every array -- input *or* temporary -- has a shape fully determined by the kernel's
 integer parameters at the point it first appears. No later statement changes an
 array's rank or shape. If you need a different shape, declare a **new named
 buffer**.
 
-**Non-canonical** — `lenet_numpy.py` reassigns `x` with a different shape on nearly
+**Non-canonical** -- `lenet_numpy.py` reassigns `x` with a different shape on nearly
 every line:
 
 ```python
@@ -51,7 +51,7 @@ The shape table entry for `x` is rewritten five times; the rank-2 reshape on lin
 silently invalidates everything the slice/transpose passes recorded about the
 4-D `x`.
 
-**Canonical** — one named buffer per distinct shape:
+**Canonical** -- one named buffer per distinct shape:
 
 ```python
 def lenet5(input, conv1, ..., N, C_before_fc1):
@@ -71,13 +71,13 @@ def lenet5(input, conv1, ..., N, C_before_fc1):
 Each buffer has exactly one shape for its whole lifetime; the table never goes
 stale.
 
-### Invariant 2 — Explicit indexing (no chained or fancy subscripts in compute)
+### Invariant 2 -- Explicit indexing (no chained or fancy subscripts in compute)
 
 Index arrays with **scalars or slices over their declared axes**. A row of a 3-D
 array is taken with a *full* index, never a chained/partial one. No fancy indexing
-(`a[index_array]`) in compute — that routes only through the sparse layout system.
+(`a[index_array]`) in compute -- that routes only through the sparse layout system.
 
-**Non-canonical** — `contour_integral_numpy.py`, line 13. `Ham` is 3-D, but `Ham[n]`
+**Non-canonical** -- `contour_integral_numpy.py`, line 13. `Ham` is 3-D, but `Ham[n]`
 takes a 2-D slab with a chained (rank-reducing) subscript that then participates in
 an array add:
 
@@ -92,7 +92,7 @@ for n in range(slab_per_bc + 1):
 it; the "chained `[][]` fallback" exists exactly for this and is a known source of
 wrong indices.
 
-**Canonical** — index every axis explicitly in a loop nest:
+**Canonical** -- index every axis explicitly in a loop nest:
 
 ```python
 Tz = np.zeros((NR, NR), dtype=np.complex128)
@@ -103,7 +103,7 @@ for n in range(slab_per_bc + 1):
             Tz[i, j] += zz * Ham[n, i, j]   # every axis named
 ```
 
-(Or, if you keep array-level ops: `Tz[:, :] += zz * Ham[n, :, :]` — the point is the
+(Or, if you keep array-level ops: `Tz[:, :] += zz * Ham[n, :, :]` -- the point is the
 `n` axis is written, not chained.)
 
 Contrast with the *already-canonical* `gemm_numpy.py`, which slices every axis it
@@ -114,14 +114,14 @@ def kernel(alpha, beta, C, A, B):
     C[:] = alpha * A @ B + beta * C    # whole-array slice assign, no chaining
 ```
 
-### Invariant 3 — Declare-then-fill, never grow
+### Invariant 3 -- Declare-then-fill, never grow
 
 Temporaries are created at first use with a static shape via
 `np.zeros / np.empty / np.ones((static_shape), dtype=)`, then written by index or
 `[:]` slice assignment. No `append` / `concatenate` of varying length, no Python
 `list` / `dict` / `set`, no dynamic growth.
 
-**Non-canonical** (illustrative — the pattern CNF forbids):
+**Non-canonical** (illustrative -- the pattern CNF forbids):
 
 ```python
 rows = []
@@ -130,7 +130,7 @@ for i in range(M):
 out = np.array(rows)                 # shape only known after the loop
 ```
 
-**Canonical** — pre-declare the worst-case buffer, then fill by index:
+**Canonical** -- pre-declare the worst-case buffer, then fill by index:
 
 ```python
 out = np.empty((M, K), dtype=np.float64)   # shape known up front
@@ -139,7 +139,7 @@ for i in range(M):
 ```
 
 The already-canonical `jacobi_2d_numpy.py` is the model: every buffer is an input or
-declared, and updates are pure slice assignments —
+declared, and updates are pure slice assignments --
 
 ```python
 for t in range(1, TSTEPS):
@@ -152,7 +152,7 @@ for t in range(1, TSTEPS):
 
 ## 3. The Canonical Compute Vocabulary
 
-Everything a CNF kernel may do. If it is not here, rewrite it (see §4) or it is out.
+Everything a CNF kernel may do. If it is not here, rewrite it (see Sec. 4) or it is out.
 
 | Category | Allowed (IN) | Not allowed (OUT) |
 | --- | --- | --- |
@@ -165,13 +165,13 @@ Everything a CNF kernel may do. If it is not here, rewrite it (see §4) or it is
 | Reductions | `np.sum`, `np.max`, `np.min`, `np.mean`, `np.prod` with explicit `axis=` writing a declared buffer | reductions whose output shape feeds a *reassigned* variable |
 | Linear algebra | `@` / `np.matmul`, `np.dot` | `np.linalg.inv` / `solve` etc. (out unless backed by a lib node) |
 | Conditional select | `np.where(mask, a, b)`, scalar `if` | boolean-mask *indexing* `a[a > 0]` (use `np.where`) |
-| Constants/scalars | `np.pi`, complex literals (`2.0j`), scalar math | — |
+| Constants/scalars | `np.pi`, complex literals (`2.0j`), scalar math | -- |
 | Sparse layout | the CSR/COO gather forms recognised by `sparse_emit.py` / `validate_sparse.py` | ad-hoc fancy gather `vals @ x[cols]` outside that system |
 | Transpose/reshape | only when feeding a **fresh declared buffer** of the target shape | in-place rank change of a live array (Inv. 1) |
 
 `np.newaxis`, `np.mgrid`, `np.repeat`, `np.concatenate`, `np.append`, `.T` *inside an
 expression*, list/dict/set literals, and `np.array([...])` of Python lists are all
-**OUT** — each has a mechanical rewrite below.
+**OUT** -- each has a mechanical rewrite below.
 
 ---
 
@@ -179,7 +179,7 @@ expression*, list/dict/set literals, and `np.array([...])` of Python lists are a
 
 Mechanical Before/After transforms. Apply these to bring a failing kernel into CNF.
 
-### 4.1 Chained subscript `A[n]` (rank>1) → full index
+### 4.1 Chained subscript `A[n]` (rank>1) -> full index
 
 **Why:** a partial index leaves the translator to infer the dropped axes; spelling
 them removes the guess.
@@ -195,11 +195,11 @@ for i in range(NR):
         Tz[i, j] += zz * Ham[n, i, j]
 ```
 
-### 4.2 Reshape with rank change → declared copy with explicit index arithmetic
+### 4.2 Reshape with rank change -> declared copy with explicit index arithmetic
 
 **Why:** rank-changing reshape invalidates the shape table; a fresh buffer plus
 explicit flat-index math keeps shapes stable. (`stockham_fft` is the canonical
-offender — `np.reshape(y, (R**i, R, ...))`, `np.reshape(D, (N,))`, etc.)
+offender -- `np.reshape(y, (R**i, R, ...))`, `np.reshape(D, (N,))`, etc.)
 
 ```python
 # Before  (stockham_fft, twiddle build)
@@ -208,7 +208,7 @@ D[:] = np.repeat(np.reshape(tmp, (R, R**i, 1)), R**(K - i - 1), axis=2)
 tmp_twid = np.reshape(tmp_perm, (N,)) * np.reshape(D, (N,))
 ```
 ```python
-# After  — keep D 3-D, write a separate flat buffer with index arithmetic
+# After  -- keep D 3-D, write a separate flat buffer with index arithmetic
 D = np.empty((R, R**i, R**(K - i - 1)), dtype=np.complex128)
 for a in range(R):
     for b in range(R**i):
@@ -227,7 +227,7 @@ The general rule: a rank-changing reshape becomes *(1)* a declared buffer of the
 target shape and *(2)* a loop that copies with the explicit C-order flat-index
 formula `((i0)*n1 + i1)*n2 + i2 ...`.
 
-### 4.3 `np.mgrid` → explicit index fill
+### 4.3 `np.mgrid` -> explicit index fill
 
 **Why:** `mgrid` materialises coordinate arrays implicitly; CNF wants the loop that
 consumes them.
@@ -245,7 +245,7 @@ for i in range(R):
         dft_mat[i, j] = np.exp(-2.0j * np.pi * i * j / R)
 ```
 
-### 4.4 Whole-array reassign with shape change → named buffers
+### 4.4 Whole-array reassign with shape change -> named buffers
 
 **Why:** see Invariant 1. One name = one shape.
 
@@ -262,7 +262,7 @@ p1[:] = maxpool2d(c1)
 flat[:] = np.reshape(p1, (N, C_before_fc1))   # reshape into a fresh buffer
 ```
 
-### 4.5 Fancy index `a[idx]` → explicit gather loop (or sparse layout)
+### 4.5 Fancy index `a[idx]` -> explicit gather loop (or sparse layout)
 
 **Why:** fancy/gather indexing has no general lowering; spell the gather, or route
 through the sparse system.
@@ -275,7 +275,7 @@ for i in range(A_row.size - 1):
     y[i] = vals @ x[cols]            # x[cols] is a fancy gather
 ```
 ```python
-# After — explicit gather loop (CSR walk)
+# After -- explicit gather loop (CSR walk)
 for i in range(A_row.size - 1):
     acc = 0.0
     for k in range(A_row[i], A_row[i + 1]):
@@ -286,7 +286,7 @@ for i in range(A_row.size - 1):
 This CSR form is exactly what `sparse_emit.py` recognises; SpMV-class kernels should
 be authored in this explicit-gather shape rather than `vals @ x[cols]`.
 
-### 4.6 `x.T` in an expression → transposed access or named buffer
+### 4.6 `x.T` in an expression -> transposed access or named buffer
 
 **Why:** an inline transpose forces the emitter to track a virtual axis swap; make
 it concrete.
@@ -296,7 +296,7 @@ it concrete.
 y = A @ B.T
 ```
 ```python
-# After (option A — index with axes swapped)
+# After (option A -- index with axes swapped)
 y = np.empty((A.shape[0], B.shape[0]), dtype=A.dtype)
 for i in range(A.shape[0]):
     for j in range(B.shape[0]):
@@ -306,7 +306,7 @@ for i in range(A.shape[0]):
         y[i, j] = s
 ```
 ```python
-# After (option B — materialise the transpose into a declared buffer first)
+# After (option B -- materialise the transpose into a declared buffer first)
 Bt = np.empty((B.shape[1], B.shape[0]), dtype=B.dtype)
 for i in range(B.shape[0]):
     for j in range(B.shape[1]):
@@ -314,7 +314,7 @@ for i in range(B.shape[0]):
 y = A @ Bt
 ```
 
-### 4.7 Tuple-of-arrays varying per iteration → N named tensors
+### 4.7 Tuple-of-arrays varying per iteration -> N named tensors
 
 **Why:** a Python tuple whose members change shape/identity per loop has no static
 layout; give each its own named buffer.
@@ -333,9 +333,9 @@ for t in range(T):
     step_into(s0, s1)          # writes both buffers in place by index
 ```
 
-### 4.8 `.append()` / dynamic growth → pre-declared worst-case buffer
+### 4.8 `.append()` / dynamic growth -> pre-declared worst-case buffer
 
-**Why:** see Invariant 3 — declare the maximum extent, fill by index, track a count
+**Why:** see Invariant 3 -- declare the maximum extent, fill by index, track a count
 if needed.
 
 ```python
@@ -357,19 +357,19 @@ for i in range(M):
 
 With CNF guaranteed, these `lowering.py` mechanisms can be retired:
 
-- **`_ssa_rename_reassigned`** (lowering.py:558) — invented fresh names for variables
+- **`_ssa_rename_reassigned`** (lowering.py:558) -- invented fresh names for variables
   reassigned with a new shape. Invariant 1 means a name never changes shape, so there
   is nothing to rename.
-- **`_LiftFreshArrayFromSlices`** (lowering.py:1774) — lifted a fresh array out of
+- **`_LiftFreshArrayFromSlices`** (lowering.py:1774) -- lifted a fresh array out of
   slice expressions when a buffer's shape didn't match its slice writes; its own
   comment notes it *"bails on the shape mismatch."* Declare-then-fill (Inv. 3)
   removes the mismatch.
 - **Chained-subscript heroics in `_emit_subscript`** (emit.py:364, the
-  *"Fall back to chained `[][]` if we have no shape info"* branch at emit.py:378) —
+  *"Fall back to chained `[][]` if we have no shape info"* branch at emit.py:378) --
   full-rank indexing (Inv. 2) means the emitter always has shape info and never needs
   the fallback.
 - **Rank-aware `expand_reshape` fallback** (lowering.py:2167+, the `x = np.reshape(x,
-  ...)` rewrite and the `x.shape = expr` pre-pass at lowering.py:2958) — reshape only
+  ...)` rewrite and the `x.shape = expr` pre-pass at lowering.py:2958) -- reshape only
   ever targets a fresh buffer of a declared shape (Inv. 1 / cookbook 4.2, 4.4), so the
   rank-changing in-place reshape path disappears.
 
@@ -391,7 +391,7 @@ the line and names the canonical fix (it is never auto-rewritten):
   whitelisted sparse-gather pattern.
 - **Inv. 3:** flag `list`/`dict`/`set` literals, `.append`/`.extend`, `np.concatenate`,
   `np.append`, and any array declared from a runtime-sized source.
-- **Vocabulary (§3):** flag `np.*` calls not in the allowed set (e.g. `np.mgrid`,
+- **Vocabulary (Sec. 3):** flag `np.*` calls not in the allowed set (e.g. `np.mgrid`,
   `np.repeat`, inline `.T`).
 
 Error messages should name the line, the violated invariant, and the cookbook entry:
@@ -406,21 +406,21 @@ stockham_fft_numpy.py:21: CNF Invariant 1 (static shape):
     Fix (cookbook 4.2/4.4): reshape into a freshly declared buffer.
 ```
 
-A non-grandfathered kernel that violates these is rewritten before it lands (§7).
+A non-grandfathered kernel that violates these is rewritten before it lands (Sec. 7).
 
 ---
 
 ## 7. Migration Policy
 
 - **Failing kernels are rewritten into CNF now.** A kernel that does not currently
-  lower gets fixed via the §4 cookbook.
+  lower gets fixed via the Sec. 4 cookbook.
 - **Passing kernels are grandfathered.** Kernels that already translate are left
   as-is and exempt from the validator for now; we do not churn working benchmarks.
-  (Many of them — `gemm`, `jacobi_2d`, `atax`, `doitgen` — are already CNF or close to
+  (Many of them -- `gemm`, `jacobi_2d`, `atax`, `doitgen` -- are already CNF or close to
   it and serve as positive examples.)
-- **New kernels are authored in CNF from the start.** Any new benchmark — HPC,
-  sparse, or foundation-model additions — must satisfy the CNF invariants (§6). Read
-  this document and write to the vocabulary in §3 before submitting.
+- **New kernels are authored in CNF from the start.** Any new benchmark -- HPC,
+  sparse, or foundation-model additions -- must satisfy the CNF invariants (Sec. 6). Read
+  this document and write to the vocabulary in Sec. 3 before submitting.
 
 When in doubt: one name = one shape (Inv. 1), index every axis (Inv. 2), declare then
 fill (Inv. 3).

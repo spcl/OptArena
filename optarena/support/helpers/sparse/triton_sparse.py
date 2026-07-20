@@ -2,7 +2,7 @@
 
 One Triton program per row gathers the row's ``[indptr[i], indptr[i+1])``
 entries (a power-of-two ``MAX_NNZ`` lane block with a row-length mask),
-multiplies by the gathered ``x[col]`` and reduces — the same gather-reduction
+multiplies by the gathered ``x[col]`` and reduces -- the same gather-reduction
 the (verified) TVM SpMV uses. The dense Krylov vector arithmetic stays in
 torch on the GPU.
 

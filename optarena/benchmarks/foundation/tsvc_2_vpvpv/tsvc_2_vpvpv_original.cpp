@@ -8,7 +8,7 @@
 extern "C" {
 
 // ============================================================
-// vpvpv_d — vector plus vector plus vector
+// vpvpv_d -- vector plus vector plus vector
 // ============================================================
 
 void vpvpv_d(double *__restrict__ a, const double *__restrict__ b, const double *__restrict__ c, int iterations,

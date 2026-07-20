@@ -16,7 +16,7 @@ The outer loop over columns ``k`` is sequential (each step reads the
 residual ``A`` left by the previous one). Within step ``k`` everything for
 columns ``j > k`` is independent: the column-k norm and ``Q[:, k]`` are
 formed, then each later column j gets ``R[k, j] = dot(Q[:, k], A[:, j])``
-and ``A[:, j] -= Q[:, k] * R[k, j]`` — all in one parallel ``te.compute``.
+and ``A[:, j] -= Q[:, k] * R[k, j]`` -- all in one parallel ``te.compute``.
 
 We compile ONE fixed full-size PrimFunc (3 inputs Q/R/A, 3 outputs, runtime
 column ``k``) and drive the ``k`` loop in Python, ping-ponging the Q/R/A

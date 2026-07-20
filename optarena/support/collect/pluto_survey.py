@@ -57,7 +57,7 @@ def bucket(status: str) -> str:
     """Coarse outcome bucket for a pluto status string (see run_kernel docstring)."""
     if status == "ok":
         return "ok"
-    if status == "FAIL:compile":
+    if status.startswith("FAIL:compile"):
         return "compile-failed"
     if "crash:SIG" in status:
         return "miscompile"  # crashed on a scop the detector deemed affine

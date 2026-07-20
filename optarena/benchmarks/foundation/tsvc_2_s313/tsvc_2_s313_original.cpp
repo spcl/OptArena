@@ -8,7 +8,7 @@
 extern "C" {
 
 // ------------------------------------------------------------
-// s313_d: dot product a·b
+// s313_d: dot product a*b
 // ------------------------------------------------------------
 void s313_d(const double *__restrict__ a, const double *__restrict__ b, double *__restrict__ dot, int iterations,
             int len_1d) {

@@ -224,8 +224,8 @@ def _compile_commands(language: str, source_filename: str, lib_name: str) -> lis
 
 
 def _call_stub(binding, language: str, residency: str) -> str:
-    """The single-node call stub (§7), best-effort: a language ``gen_call_stub`` does not emit
-    (e.g. ``python``, a distributed task whose real signature is the §12 ``kernel_mpi`` stub)
+    """The single-node call stub (Sec. 7), best-effort: a language ``gen_call_stub`` does not emit
+    (e.g. ``python``, a distributed task whose real signature is the Sec. 12 ``kernel_mpi`` stub)
     yields ``""`` rather than failing prompt assembly. The single-node sections that show it are
     skipped for the multi-node prompt, which shows ``mpi_stub`` instead."""
     try:
@@ -306,8 +306,10 @@ def perf_sampling(spec) -> dict:
         # The concrete sampled large shapes (size symbols only), for one config namespace.
         range_names = {r["name"] for r in ranges}
         out["shapes"] = [{
-            "sizes": {k: int(v)
-                      for k, v in sample.items() if k in range_names}
+            "sizes": {
+                k: int(v)
+                for k, v in sample.items() if k in range_names
+            }
         } for _, sample in fuzz.large_shapes(params, {}, mode="all_configs_3shapes", n=n)]
     return out
 
@@ -404,7 +406,7 @@ def build_context(task: Task,
         "source_mode": task.source_mode,
         "residency": task.residency,
         # Distributed (MPI) track knobs. node_mode/scaling select the multi-node contract
-        # (sections/mpi.j2) and its strong/weak framing; ranks + k_repeats + the §12 kernel_mpi
+        # (sections/mpi.j2) and its strong/weak framing; ranks + k_repeats + the Sec. 12 kernel_mpi
         # stub/symbol feed that section. On the single-node path these are inert (mpi.j2 unused).
         "node_mode": node_mode,
         "scaling": (config.get("mpi.mode", "strong") if is_mpi else ""),

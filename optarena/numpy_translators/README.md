@@ -1,13 +1,13 @@
 # NumpyToC
 
-A Python → C99 / C++ / Pluto-input emitter, deliberately narrow:
+A Python -> C99 / C++ / Pluto-input emitter, deliberately narrow:
 
 * **Input**: a Python function written in a numpy-numeric subset
   (plain loops with array indexing, optional `math.*` and `np.*`
   numeric primitives that already appear in the Foundation corpus,
   no slicing, no broadcasting, no objects).
 * **Output**: three sibling source files plus an auto-generated
-  ctypes binding. The emitted kernels carry no in-kernel timing —
+  ctypes binding. The emitted kernels carry no in-kernel timing --
   the harness times each call externally. The Pluto input wraps the
   loop nest in ``#pragma scop`` / ``#pragma endscop`` and survives
   ``polycc --pet --tile`` for the affine subset.
@@ -73,7 +73,7 @@ Supports only what the Foundation corpus actually exercises:
   Indirect access (``A[idx[i]]``) is supported but the Pluto output
   drops to "no-scop" mode for that kernel.
 * ``math.*`` numeric primitives observed in the corpus:
-  ``exp``, ``sqrt`` (extensible — see ``lowering.MATH_BUILTINS``).
+  ``exp``, ``sqrt`` (extensible -- see ``lowering.MATH_BUILTINS``).
 * ``np.*`` numeric primitives observed:
   ``np.zeros`` (lowered to a stack-allocated VLA temporary).
 * Future: ``np.dot``, ``np.sum``, ``A @ B``, ``np.maximum`` (rewrite
@@ -99,7 +99,7 @@ out/<short>/cpp_backend/
   <short>_binding.json         # ctypes signature for the wrapper
 ```
 
-The wrapper at ``<short>_cpp.py`` is unchanged — it consumes the
+The wrapper at ``<short>_cpp.py`` is unchanged -- it consumes the
 binding JSON to build the ctypes argtypes list.
 
 ## CLI
@@ -111,5 +111,5 @@ numpyto_c emit \
     --out optarena/benchmarks/foundation/s111/cpp_backend
 ```
 
-Single command; runs through every step (parse → IR → lower → emit
-× 3 targets → bindings). Idempotent.
+Single command; runs through every step (parse -> IR -> lower -> emit
+x 3 targets -> bindings). Idempotent.

@@ -32,10 +32,10 @@ from optarena.harness import mpi_call, mpi_sizing, timing
 from optarena.harness.mpi_descriptor import Descriptor
 from optarena.harness.native_call import _call_isolated
 from optarena.harness.grading import BASELINE_CHOICES  # noqa: F401 -- re-exported for harbor_grade
-from optarena.harness.grading import (ORACLE_CHOICES, ReferencePlan, _data_seeded, _grade,
-                                          _grade_against, _numpy_reference, _run_c_reference, _time_numpy,
-                                          _time_numpy_samples, _wants, baseline_compiled, baseline_uses_numpy,
-                                          build_reference_lib, reference_plan, resolve_baseline, run_compiled_reference)
+from optarena.harness.grading import (ORACLE_CHOICES, ReferencePlan, _data_seeded, _grade, _grade_against,
+                                      _numpy_reference, _run_c_reference, _time_numpy, _time_numpy_samples, _wants,
+                                      baseline_compiled, baseline_uses_numpy, build_reference_lib, reference_plan,
+                                      reference_submission, resolve_baseline, run_compiled_reference)
 from optarena.harness.envelope import Submission
 from optarena.harness.sandbox import Sandbox
 from optarena.harness.task import Task
@@ -246,9 +246,15 @@ def independent_verify(submission: Submission,
             built = sb.build(submission, mode=Mode.SINGLE_CORE)
             if not built.ok:
                 return VerifyResult(False, False, False, False, False, suspect, "harden: rebuild failed")
+
             def _run(d):
-                outs, _, _ = _call_isolated(built.lib, binding, d, submission.language, device=device,
-                                            timeout=timeout, memory_gb=memory_gb,
+                outs, _, _ = _call_isolated(built.lib,
+                                            binding,
+                                            d,
+                                            submission.language,
+                                            device=device,
+                                            timeout=timeout,
+                                            memory_gb=memory_gb,
                                             workspace_bytes=submission.workspace_bytes)
                 return outs
 
@@ -259,8 +265,16 @@ def independent_verify(submission: Submission,
                     c_pub, _, _, _ = _run_c_reference(spec, task, binding, data, [], repeat, timeout, memory_gb)
                 except RuntimeError:
                     c_pub = None  # C reference unavailable -> dual-oracle best-effort (recorded not-applied)
-            determinism_ok, reverify_ok, dual_oracle_ok, dual_oracle_applied = _verify_triad(
-                spec, o1, o2, np_public, ro, np_re, c_pub, rtol, atol, bitwise=True)
+            determinism_ok, reverify_ok, dual_oracle_ok, dual_oracle_applied = _verify_triad(spec,
+                                                                                             o1,
+                                                                                             o2,
+                                                                                             np_public,
+                                                                                             ro,
+                                                                                             np_re,
+                                                                                             c_pub,
+                                                                                             rtol,
+                                                                                             atol,
+                                                                                             bitwise=True)
     except RuntimeError as exc:  # native crash / timeout during re-verify
         return VerifyResult(False, determinism_ok, reverify_ok, dual_oracle_ok, dual_oracle_applied, suspect,
                             f"harden: {exc}")
@@ -697,8 +711,16 @@ def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, bin
             # bitwise=False: a cross-rank float reduction is not bit-reproducible, so
             # determinism uses the tolerant _grade (via _verify_triad); dual-oracle N/A
             # (the reference is already the whole-domain NumPy oracle).
-            determinism_ok, reverify_ok, _, _ = _verify_triad(spec, o1, o2, np_public, _run(redata), np_re, None, rtol,
-                                                              atol, bitwise=False)
+            determinism_ok, reverify_ok, _, _ = _verify_triad(spec,
+                                                              o1,
+                                                              o2,
+                                                              np_public,
+                                                              _run(redata),
+                                                              np_re,
+                                                              None,
+                                                              rtol,
+                                                              atol,
+                                                              bitwise=False)
     except (RuntimeError, ValueError) as exc:  # native crash / timeout, or a pack_infile dtype error
         return VerifyResult(False, False, False, True, False, suspect, f"harden: {exc}")
 
@@ -979,6 +1001,7 @@ def score_scaling(submission: Submission,
             t1: Optional[int] = None
             note: Optional[str] = None
             try:
+
                 def _anchor_once(_warming):
                     out, a_ns, _ = _call_isolated(abuilt.lib,
                                                   binding,
@@ -1134,15 +1157,22 @@ def score_cells(submission: Submission,
         # to the numpy baseline per cell -- never a hard error here.
         c_lib = None
         c_ctx = None
+        # Why the C reference is unavailable, if it is. Losing this made a silent baseline
+        # degradation (c -> numpy) and every timed cell going ungraded indistinguishable from a
+        # kernel that simply has no C reference -- with nothing anywhere naming the cause.
+        c_unavailable = ""
         if plan.need_seq_c:
             try:
                 ctask = replace(task, language="c", source_mode="restricted", residency="host")
                 c_ctx = Sandbox(binding)
                 csb = c_ctx.__enter__()
-                cbuilt = csb.build(reference_submission(task, "c"), mode=Mode.SINGLE_CORE)
+                cbuilt = csb.build(reference_submission(ctask, "c"), mode=Mode.SINGLE_CORE)
                 c_lib = cbuilt.lib if cbuilt.ok else None
-            except Exception:  # noqa: BLE001 -- C reference unavailable -> numpy fallback per cell
+                if c_lib is None:
+                    c_unavailable = f"C reference build failed: {str(cbuilt.log)[-400:]}"
+            except Exception as exc:  # noqa: BLE001 -- C reference unavailable -> numpy fallback per cell
                 c_lib = None
+                c_unavailable = f"C reference unavailable: {type(exc).__name__}: {exc}"
             if c_lib is None and c_ctx is not None:
                 c_ctx.__exit__(None, None, None)
                 c_ctx = None
@@ -1257,8 +1287,8 @@ def score_cells(submission: Submission,
                                   0.0,
                                   native_ns,
                                   0,
-                                  "numpy",
-                                  "no oracle reference available (C reference did not build)",
+                                  "numpy", ("no oracle reference available -- " +
+                                            (c_unavailable or "the C timed-oracle did not run at this shape")),
                                   graded=False))
                     continue
 
@@ -1273,7 +1303,12 @@ def score_cells(submission: Submission,
                         # Same determinism formula as independent_verify (via _determinism_check):
                         # reproduces AND grades vs the NumPy oracle for this cell (the oracle leg is
                         # skipped when numpy is not this cell's reference, e.g. oracle="c").
-                        determinism_ok = _determinism_check(spec, actual, again, expected.get("numpy"), rtol, atol,
+                        determinism_ok = _determinism_check(spec,
+                                                            actual,
+                                                            again,
+                                                            expected.get("numpy"),
+                                                            rtol,
+                                                            atol,
                                                             bitwise=True)
                     redata = _data_seeded(task.kernel,
                                           FUZZED_PRESET,

@@ -109,10 +109,43 @@ def test_score_task_fuzzed_noop_solves():
     ts = M.score_task_fuzzed(sub, task, k=2, repeat=1)
     assert ts.solved is True, [it.detail for it in ts.iterations]
     assert ts.s_i >= 1.0
-    assert all(it.correct and it.verified for it in ts.iterations)
+    # Only GRADED cells carry a verdict. A large TIMED cell grades against the C timed-oracle
+    # (metric.py: timed_oracle = "c" whenever the baseline is compiled); when that oracle cannot be
+    # evaluated at the shape, the cell is inconclusive (graded=False), NOT a mismatch -- which is
+    # exactly how the metric's own solved-fold reads it (`all(c.correct for c in timed if c.graded)`).
+    bad = [(it.label, it.correct, it.verified, it.detail) for it in ts.iterations
+           if it.graded and not (it.correct and it.verified)]
+    assert not bad, f"graded cells that did not pass: {bad}"
+    assert any(it.graded for it in ts.iterations), "every cell was inconclusive -- nothing was graded"
     # cost axis + baseline: tokens flow through; tsvc emits C, so speedup is vs the sequential C reference.
     assert ts.tokens == 4242
-    assert ts.baseline == "c"
+    assert ts.baseline == "c", ("baseline degraded to numpy -- the C reference was unavailable; per-cell detail: " +
+                                repr([(it.label, it.graded, it.detail) for it in ts.iterations]))
+
+
+def test_compiled_c_reference_is_actually_reachable():
+    """The C reference must BUILD inside score_cells, not silently degrade to the numpy baseline.
+
+    ``reference_submission`` was never imported into ``scoring.py``, so building the single-core C
+    reference raised ``NameError`` on every call -- swallowed by a broad ``except Exception`` into
+    "C reference unavailable". Nothing surfaced it: the compiled-C baseline was dead for every
+    kernel (speedups silently measured against numpy) and every large TIMED cell graded against the
+    C oracle went inconclusive, so large-shape correctness was never actually checked.
+
+    Guarding the SYMBOL alone would not catch it (the name resolves at call time, inside the
+    ``try``), so drive the real path and assert both that the C baseline was credited and that at
+    least one timed cell was really graded.
+    """
+    if not _emitter_and_gcc():
+        pytest.skip("NumpyToC emitter or gcc absent")
+    from optarena.harness.optimizers import NoOpOptimizer
+    task = Task(_FUZZ_KERNEL, "restricted", "c")
+    ts = M.score_task_fuzzed(NoOpOptimizer().solve(task), task, k=2, repeat=1)
+    unavailable = [it.detail for it in ts.iterations if "C reference unavailable" in it.detail]
+    assert not unavailable, f"the C reference did not build: {unavailable}"
+    assert ts.baseline == "c", f"speedup fell back to the {ts.baseline!r} baseline"
+    timed_graded = [it for it in ts.iterations if it.timed and it.graded]
+    assert timed_graded, "no TIMED cell was graded -- large-shape correctness went unchecked"
 
 
 def test_score_task_fuzzed_failure_floors_at_one():

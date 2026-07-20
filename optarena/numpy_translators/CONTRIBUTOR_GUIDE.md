@@ -1,6 +1,6 @@
-# NumpyToC — Kernel-author cheat sheet
+# NumpyToC -- Kernel-author cheat sheet
 
-> Audience: anyone writing numpy kernels (or PyTorch→numpy translators)
+> Audience: anyone writing numpy kernels (or PyTorch->numpy translators)
 > targeting NumpyToC / NumpyToFortran. Lists what the pipeline can
 > ingest today. Stick to this surface and the same kernel emits in C,
 > C++, and Fortran from one numpy source.
@@ -40,7 +40,7 @@
 
 ---
 
-## 2. Data structures — AVOID
+## 2. Data structures -- AVOID
 
 | Don't use | Reason |
 |---|---|
@@ -127,18 +127,18 @@ emit targets)
 
 ---
 
-## 4. Tips for translators (PyTorch → numpy → NumpyToC)
+## 4. Tips for translators (PyTorch -> numpy -> NumpyToC)
 
-* **Tensor reshape → `np.reshape`**. The `x.view(N, M)` PyTorch idiom
+* **Tensor reshape -> `np.reshape`**. The `x.view(N, M)` PyTorch idiom
   maps directly.
-* **Tensor transpose → `np.transpose` or `arr.T`**. The 2-D form is
+* **Tensor transpose -> `np.transpose` or `arr.T`**. The 2-D form is
   fully supported.
-* **Tensor permute (>2D) → write the loop**. NumpyToC supports
+* **Tensor permute (>2D) -> write the loop**. NumpyToC supports
   `np.transpose` with a permutation argument but for clarity write
   the explicit triple loop.
-* **PyTorch reduce ops → numpy equivalents** as listed above.
+* **PyTorch reduce ops -> numpy equivalents** as listed above.
   `axis=` / `dim=` argument naming matches.
-* **PyTorch in-place ops (`x.add_(y)`) → numpy `x += y`**.
+* **PyTorch in-place ops (`x.add_(y)`) -> numpy `x += y`**.
 * **No autograd, no requires_grad**, no `.detach()` etc. -- strip
   them in the converter.
 * **No `torch.cat`** -- preallocate the target buffer and write

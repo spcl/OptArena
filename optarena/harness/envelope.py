@@ -106,7 +106,7 @@ class Submission:
     source: Optional[str] = None  # restricted mode: the source text
     library: Optional[str] = None  # any mode: path to a prebuilt .so
     build: List[str] = field(default_factory=list)
-    #: Untimed scratch bytes wanted (ABI §11): an expression over size symbols or a bare int; None = no scratch.
+    #: Untimed scratch bytes wanted (ABI Sec. 11): an expression over size symbols or a bare int; None = no scratch.
     workspace_bytes: Optional[str] = None
     #: Cumulative tokens spent when this attempt was submitted; None until stamped.
     tokens: Optional[int] = None
@@ -122,7 +122,7 @@ class Submission:
             raise ValueError("python delivery is a source module, not a compiled 'library'")
         if self.distribution is not None:
             _validate_distribution(self.distribution)
-        # normalise the scratch request to a string here so every builder forwards it uniformly (ABI §11)
+        # normalise the scratch request to a string here so every builder forwards it uniformly (ABI Sec. 11)
         if self.workspace_bytes is not None and not isinstance(self.workspace_bytes, str):
             self.workspace_bytes = str(self.workspace_bytes)
 

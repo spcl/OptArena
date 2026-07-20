@@ -113,6 +113,69 @@ def written_arrays(body: ast.AST) -> set:
     return out
 
 
+def _load_names(node: ast.AST) -> set:
+    """Bare names READ (Load context) anywhere in ``node``."""
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+
+
+def _bare_store_names(node: ast.AST) -> set:
+    """Names bound by a bare-Name store (assignment / loop target) in ``node`` --
+    scalar variables, not subscript element stores."""
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+
+
+def _reads_before_write(stmts: list, scalars: set, defined: set) -> bool:
+    """True if some scalar in ``scalars`` is READ before it is WRITTEN, in execution
+    order over ``stmts`` (a loop-carried scalar: the read observes a prior iteration's
+    value). ``defined`` is the set already bound on entry. Conservative across control
+    flow: a definition inside one ``if`` branch or a (possibly zero-trip) loop body is
+    NOT treated as binding the outer scope."""
+    for stmt in stmts:
+        if isinstance(stmt, (ast.For, ast.While)):
+            head = stmt.iter if isinstance(stmt, ast.For) else stmt.test
+            if any(nm in scalars and nm not in defined for nm in _load_names(head)):
+                return True
+            inner = set(defined) | (_bare_store_names(stmt.target) if isinstance(stmt, ast.For) else set())
+            if _reads_before_write(stmt.body, scalars, inner) or _reads_before_write(stmt.orelse, scalars, set(defined)):
+                return True
+        elif isinstance(stmt, ast.If):
+            if any(nm in scalars and nm not in defined for nm in _load_names(stmt.test)):
+                return True
+            if _reads_before_write(stmt.body, scalars, set(defined)) or _reads_before_write(stmt.orelse, scalars,
+                                                                                            set(defined)):
+                return True
+        else:
+            if any(nm in scalars and nm not in defined for nm in _load_names(stmt)):
+                return True
+            defined |= _bare_store_names(stmt)
+    return False
+
+
+def has_carried_scalar(node: ast.For) -> bool:
+    """True if the loop body reads a body-assigned scalar before it writes it -- a
+    loop-carried scalar (a lag/shift like ``b[i] = s; s = a[i]``) that a parallel
+    schedule races on. The loop index is pre-bound (defined every iteration)."""
+    scalars = _bare_store_names(ast.Module(body=list(node.body), type_ignores=[]))
+    return _reads_before_write(node.body, scalars, {node.target.id})
+
+
+def _bare_axes(sub: ast.Subscript, idx: str) -> set:
+    """Axis positions where ``idx`` appears as a BARE index in ``sub``."""
+    return {k for k, e in enumerate(index_exprs(sub)) if isinstance(e, ast.Name) and e.id == idx}
+
+
+def written_partition_consistent(body: ast.AST, idx: str, written: set) -> bool:
+    """A parallel loop on ``idx`` partitions each written array along ONE axis. If
+    ``idx`` indexes a written array on two DIFFERENT axes across its accesses
+    (``A[i, j]`` written but ``A[j, i]`` read -- an in-place transpose), the
+    per-iteration regions overlap and the iterations are not independent."""
+    axes: dict = {}
+    for n in ast.walk(body):
+        if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
+            axes.setdefault(n.value.id, set()).update(_bare_axes(n, idx))
+    return all(len(seen) <= 1 for seen in axes.values())
+
+
 def loop_is_parallel_safe(node: ast.AST) -> bool:
     """Conservatively decide whether ``for idx in range(...)`` can run in parallel
     (independent iterations) without changing results. Errs toward serial: any
@@ -129,12 +192,14 @@ def loop_is_parallel_safe(node: ast.AST) -> bool:
                     return False  # self-referential carried scalar (``s = s + ...``).
         elif isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
             return False  # scalar reduction / accumulator (``s += ...``).
+    if has_carried_scalar(node):
+        return False  # a scalar read before write across iterations (``b[i] = s; s = a[i]``).
     written = written_arrays(body)
     for n in ast.walk(body):
         if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
             if not subscript_idx_safe(n, idx):
                 return False
-    return True
+    return written_partition_consistent(body, idx, written)
 
 
 #: Call-leaf names that are a max / min combiner (bare ``max`` or ``np.maximum`` / ``fmax`` ...).
@@ -217,11 +282,25 @@ def loop_reduction(node: ast.AST):
     if len(accs) != 1:
         return None  # 0 -> not a reduction; >1 -> too complex to clause soundly
     acc, op = next(iter(accs.items()))
+    # The accumulator's LIVE value must never be observed outside its own combine. If it is
+    # captured each iteration (``s = s + a[i]; out[i] = s`` -- a prefix scan) or otherwise read,
+    # a ``reduction(op:acc)`` clause hands out racy per-thread partials, not the running value.
+    combine_loads: set = set()
+    for n in ast.walk(body):
+        combines = (isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name) and n.target.id == acc) or (
+            isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == acc for t in n.targets))
+        if combines:
+            combine_loads |= {id(x) for x in ast.walk(n.value) if isinstance(x, ast.Name) and x.id == acc}
+    for n in ast.walk(body):
+        if isinstance(n, ast.Name) and n.id == acc and isinstance(n.ctx, ast.Load) and id(n) not in combine_loads:
+            return None  # acc read outside its own combine -- a scan/derived use, not a reduction.
     written = written_arrays(body)
     for n in ast.walk(body):
         if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
             if not subscript_idx_safe(n, idx):
                 return None
+    if not written_partition_consistent(body, idx, written):
+        return None  # a written array indexed by idx on two axes (in-place transpose) still races.
     return op, acc
 
 

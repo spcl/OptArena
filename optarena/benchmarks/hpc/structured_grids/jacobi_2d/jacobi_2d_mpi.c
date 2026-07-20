@@ -1,4 +1,4 @@
-/* Reference distributed kernel_mpi for jacobi_2d (abi_contract.md §12): a 1-D row-block
+/* Reference distributed kernel_mpi for jacobi_2d (abi_contract.md Sec. 12): a 1-D row-block
    decomposition of the global N x N grid with a one-row halo. This is the reference SOLUTION the
    no-op MPI optimizer submits, not the empty agent stub -- a correct decomposition (local compute
    plus halo exchange) is the agent's task.

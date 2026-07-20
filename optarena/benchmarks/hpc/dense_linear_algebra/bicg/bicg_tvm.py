@@ -1,4 +1,4 @@
-"""CPU TVM bicg — meta_schedule autotuned. return r@A, A@p (A is (N,M)). Two mat-vec reduction stages."""
+"""CPU TVM bicg -- meta_schedule autotuned. return r@A, A@p (A is (N,M)). Two mat-vec reduction stages."""
 import tvm
 from tvm import te
 

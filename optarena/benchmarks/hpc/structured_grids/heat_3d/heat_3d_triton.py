@@ -25,7 +25,7 @@ def _kernel(TSTEPS: tl.constexpr, src, dst, N: tl.constexpr, barrier, BLOCK_SIZE
     total_tiles = num_blocks_per_dim * num_blocks_per_dim * num_blocks_per_dim
 
     for i in range(TSTEPS - 1):
-        for j in range(2):  # Swap A↔B twice per timestep
+        for j in range(2):  # Swap A<->B twice per timestep
             # Persistent kernel design: distribute tiles across SMs
             for tile_id in range(sm_index, total_tiles, num_sms):
                 # Convert linear tile_id to 3D coordinates

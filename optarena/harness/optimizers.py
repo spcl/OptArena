@@ -180,7 +180,7 @@ class NoOpMPIOptimizer(Agent):
     """Identity optimizer for the distributed (MPI) track -- the multi-node analog of
     :class:`NoOpOptimizer`.
 
-    It submits the shipped reference ``kernel_mpi`` (abi_contract.md §12) plus a default 1-D block
+    It submits the shipped reference ``kernel_mpi`` (abi_contract.md Sec. 12) plus a default 1-D block
     distribution over the kernel's decomposed axis (from its ``mpi:`` manifest block), so the whole
     distributed path -- ``build_mpi`` -> scatter -> launch -> gather -> grade -- is exercised end
     to end and scores solved ~1x (reference == baseline). Both MPI deliveries plug in through the

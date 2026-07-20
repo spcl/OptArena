@@ -48,10 +48,10 @@ def my_speedup_abbr(x):
     if math.isnan(x):
         return ""
     if x < 1:
-        prefix = u"↑"
+        prefix = u"^"
         x = 1 / x
     elif x > 1:
-        prefix = u"↓"
+        prefix = u"v"
     if x > 100:
         x = int(x)
     if x > 1000:

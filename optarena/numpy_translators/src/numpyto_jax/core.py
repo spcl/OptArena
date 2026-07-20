@@ -255,7 +255,7 @@ class LoopKind:
 
 def _index_in_shape(node: ast.For, i: str) -> bool:
     """Does the loop index appear in a shape/count argument (``reshape(_, (R**i,
-    …))``, ``zeros((i, …))``) inside the body? Such uses need a concrete index."""
+    ...))``, ``zeros((i, ...))``) inside the body? Such uses need a concrete index."""
     for n in ast.walk(node):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in _SHAPE_FUNCS:
             scan = n.args[1:] if n.func.attr in _LEADING_DATA_FUNCS else n.args

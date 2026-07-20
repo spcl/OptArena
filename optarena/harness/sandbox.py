@@ -64,7 +64,7 @@ class BuildResult:
 #: dependency's include dir (``-I``) + library (``-l``/``-L``), but can never
 #: smuggle OPTIMIZATION flags (``-O3``, ``-march=...``) into the timed build --
 #: those come only from the flag matrix, so every submission is measured on the
-#: same ground (sandbox §1). Anything not matching a prefix below is dropped.
+#: same ground (sandbox Sec. 1). Anything not matching a prefix below is dropped.
 # Single-token forms only (``-I/path``, ``-Dname``, ``-lfoo``, ``-L/path``) so a
 # prefix match never strands a following space-separated argument.
 _COMPILE_PREFIXES = ("-I", "-D")
@@ -198,7 +198,7 @@ class Sandbox:
           a dlopen); a clear failure rather than a wrong build.
 
         Per-array residency comes from the ``descriptor`` (each array's ``location``, abi_contract.md
-        §10 over the distributed track): if ANY array is GPU-resident, the driver delivers that
+        Sec. 10 over the distributed track): if ANY array is GPU-resident, the driver delivers that
         tile as a device pointer (untimed H2D/D2H) and both the driver and the agent kernel are
         compiled by nvcc/hipcc, so the kernel_mpi language must be ``cuda``/``hip``. The wrapper's
         MPI include/link flags are fed to the GPU compiler via

@@ -60,7 +60,7 @@ always wins):
 
 | Derived field | Inferred from |
 |---|---|
-| `short_name` / `module_name` | the manifest's file stem (`scaled_add.yaml` → `scaled_add`, and `scaled_add_numpy.py`) |
+| `short_name` / `module_name` | the manifest's file stem (`scaled_add.yaml` -> `scaled_add`, and `scaled_add_numpy.py`) |
 | `name` | the `short_name` |
 | `func_name` | the entry `def` in `<module>_numpy.py` |
 | `relative_path` | the manifest's folder under `benchmarks/` |
@@ -84,7 +84,7 @@ name if one is undeclared.
 > **HPC kernels** also carry `dwarf` (one of the 13 Berkeley dwarfs, matching the
 > folder) and `scale` (`micro`/`proxy`) under `taxonomy`. **Sparse kernels** add a
 > `sparse_layouts` block and declare `array_args`/`output_args` explicitly (a logical
-> matrix `A` unpacks into `<logical>_<role>` buffers, csr → `A_indptr`/`A_indices`/
+> matrix `A` unpacks into `<logical>_<role>` buffers, csr -> `A_indptr`/`A_indices`/
 > `A_data`). Full rules: [`optarena/docs/sparse_abi.md`](../optarena/docs/sparse_abi.md).
 
 ### 3. Check it -- and watch the siblings get generated
@@ -109,10 +109,10 @@ now an *override* the regenerator never touches.
 
 **Common mistakes**
 - *the kernel `return`s its result* -- NumPy lets you, but OptArena kernels are
-  C-style: write into the output buffer in place (`y[:] = …`) so every language
+  C-style: write into the output buffer in place (`y[:] = ...`) so every language
   backend can reproduce it, and list that buffer in `output_args`.
-- *`input(s) [...] are undeclared`* -- every input needs a home: array → `init.arrays`,
-  scalar → `init.scalars`, size symbol → `parameters`.
+- *`input(s) [...] are undeclared`* -- every input needs a home: array -> `init.arrays`,
+  scalar -> `init.scalars`, size symbol -> `parameters`.
 - *shape mismatch at validation* -- an `init.arrays` expression doesn't match what the
   kernel writes; fix the shape.
 
@@ -182,7 +182,7 @@ containers/judge.def              Apptainer build recipe  (the judge image)
 
 The image is the full toolchain + HPC libraries + the Python deps in
 `requirements/<hw>.txt`. Build the OCI image once, then either `apptainer build`
-a SIF from it (`docker-archive:…`) or `podman run` it directly; the `cpu.def`
+a SIF from it (`docker-archive:...`) or `podman run` it directly; the `cpu.def`
 quickstart (`apptainer build optarena-cpu.sif containers/cpu.def`) stays a valid
 shortcut. Compiler keys resolve from `optarena/envs/compilers.yaml`. For the static
 distributed (multi-endpoint) launch, see [docs/LAUNCH.md](LAUNCH.md).
@@ -193,11 +193,11 @@ Two edits, no NumpyToX change -- the binding/stub generator and the cffi loader
 pick the language up automatically:
 
 ```
-optarena/envs/compilers.yaml   ← 1) a compiler block (install + compile/link templates)
-optarena/languages.py          ← 2) one LANG_EXT entry
+optarena/envs/compilers.yaml   <- 1) a compiler block (install + compile/link templates)
+optarena/languages.py          <- 2) one LANG_EXT entry
 ```
 
-Example -- adding **Rust** (`cdylib` → a plain C-ABI `.so`):
+Example -- adding **Rust** (`cdylib` -> a plain C-ABI `.so`):
 
 ```yaml
 # optarena/envs/compilers.yaml

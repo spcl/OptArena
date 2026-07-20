@@ -54,8 +54,9 @@ def pressure_poisson_periodic(nit, p, dx, dy, b):
 
 
 def channel_flow(nit, u, v, dt, dx, dy, p, rho, nu, F):
+    # In-place: u, v, p are pre-allocated output buffers (see initialize());
+    # every update below writes into them, nothing is returned.
     udiff = 1
-    stepcount = 0
 
     while udiff > .001:
         un = u.copy()
@@ -107,6 +108,3 @@ def channel_flow(nit, u, v, dt, dx, dy, p, rho, nu, F):
         v[-1, :] = 0.0
 
         udiff = (np.sum(u) - np.sum(un)) / np.sum(u)
-        stepcount += 1
-
-    return stepcount

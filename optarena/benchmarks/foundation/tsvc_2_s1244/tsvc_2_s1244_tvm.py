@@ -1,4 +1,4 @@
-"""CPU TVM impl of TSVC ``s1244`` — two outputs with an anti-dependence::"""
+"""CPU TVM impl of TSVC ``s1244`` -- two outputs with an anti-dependence::"""
 import tvm
 from tvm import te
 

@@ -548,7 +548,6 @@ def vexx_all_paths(psi,
             for ip in range(npol):
                 hpsi[ip * npwx:ip * npwx + n, im - 1] += \
                     big_result[ip * n:ip * n + n, im + istart - 1 - 1]
-    return hpsi
 
 
 def vexx(psi, hpsi, exxbuff, x_occupation, coulomb_fac, dfftt_nl, igk_exx, index_xk, index_xkq, xk, xkq_collect, g,

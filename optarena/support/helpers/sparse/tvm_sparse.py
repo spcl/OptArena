@@ -8,7 +8,7 @@ expressed in TIR as a fixed reduction over ``[0, max_nnz_per_row)`` with a
 row-length mask and indirect (gathered) indexing. The matrix's CSR buffers
 are uploaded once and the compiled kernel is reused (shape-keyed); the host
 solver loop calls it each iteration with the current dense ``x``. The dense
-vector arithmetic of the Krylov iteration stays on the host — only the sparse
+vector arithmetic of the Krylov iteration stays on the host -- only the sparse
 mat-vec, the part that actually fits TVM, is compiled.
 """
 import numpy as np
@@ -17,13 +17,13 @@ from tvm import te
 
 from optarena.frameworks.tvm_build import tune_compile, cpu_target
 
-# exe cache keyed by (n, nnz, max_nnz, dtype, target_kind) — the compiled
+# exe cache keyed by (n, nnz, max_nnz, dtype, target_kind) -- the compiled
 # SpMV depends only on shapes; the buffers are runtime inputs.
 _EXE_CACHE = {}
 
 
 def to_numpy(a):
-    """Dense arg → numpy (``x``/``b`` arrive as ``tvm.runtime.Tensor``)."""
+    """Dense arg -> numpy (``x``/``b`` arrive as ``tvm.runtime.Tensor``)."""
     return np.asarray(a) if isinstance(a, np.ndarray) else a.numpy()
 
 

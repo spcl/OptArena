@@ -126,8 +126,16 @@ def run_op(src: str, func: str, inputs: Dict[str, np.ndarray],
     if any(_np_dtype(n) is not np.complex128 for n in outputs):
         _si = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in inputs.items()}
         _sc = {n: np.zeros(sh, dtype=np.complex128) for n, sh in outputs.items()}
-        npfn(*[_si[n] for n in inputs], *[_sc[n] for n in outputs])
-        for n in outputs:
+        try:
+            npfn(*[_si[n] for n in inputs], *[_sc[n] for n in outputs])
+            _probed = True
+        except TypeError:
+            # The kernel does something undefined on complex (``out //= k`` / ``out %= k``:
+            # floor_divide and remainder have no complex loop). That is itself proof the
+            # output is not complex, so skip the probe rather than fail a CORRECT kernel --
+            # this used to force such kernels to route compound ops through scalar locals.
+            _probed = False
+        for n in (outputs if _probed else ()):
             if _np_dtype(n) is not np.complex128 and np.any(np.asarray(_sc[n]).imag != 0):
                 raise AssertionError(
                     f"run_op: output {n!r} has a nonzero imaginary part but was declared real -- pass "

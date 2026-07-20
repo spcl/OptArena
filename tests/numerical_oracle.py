@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -221,7 +221,29 @@ def _numpy_fn(info):
     return getattr(m, info["func_name"])
 
 
-def _emit(short, info, out: pathlib.Path, precision: str = "") -> bool:
+def _diag(proc, limit: int = 240) -> str:
+    """The shortest decisive line of a failed subprocess, as a ``": ..."`` status suffix.
+
+    A bare ``FAIL:compile`` names the phase but not the cause, so every investigation began by
+    monkeypatching subprocess.run to see the message the oracle had already been handed. The LAST
+    non-empty stderr line is the one that carries it (gfortran/gcc print the caret diagram first,
+    then the error; a python traceback ends on the exception). Falls back to stdout, then to the
+    exit code, so the suffix is never empty for a real failure.
+    """
+    return _diag_text(proc.returncode, proc.stdout, proc.stderr, limit)
+
+
+def _diag_text(returncode: int, out: Optional[str], err: Optional[str], limit: int = 240) -> str:
+    """:func:`_diag` for a caller that already has the streams as text (``_run_bounded``)."""
+    for stream in (err, out):
+        lines = [ln.strip() for ln in (stream or "").splitlines() if ln.strip()]
+        if lines:
+            return ": " + lines[-1][:limit]
+    return f": exit {returncode}"
+
+
+def _emit(short, info, out: pathlib.Path, precision: str = "") -> Tuple[bool, str]:
+    """``(ok, diagnostic)`` -- the diagnostic is a status suffix, empty when ok."""
     from optarena.emit_bridge import bench_info_tempfile
     npy = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
     # The legacy bench_info JSON the emitter reads is synthesized on the fly from the co-located YAML.
@@ -232,8 +254,8 @@ def _emit(short, info, out: pathlib.Path, precision: str = "") -> bool:
                 cmd += ["--precision", precision]
             r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO))
             if r.returncode:
-                return False
-    return True
+                return False, _diag(r)
+    return True, ""
 
 
 def run_kernel(short: str,
@@ -358,10 +380,11 @@ def run_kernel(short: str,
         # short-circuit the oracle since jax/py emit independently and may still validate the kernel.
         binding = None
         native_emit_error = None
-        if not _emit(short, info, tdp, precision=emit_prec):
+        emit_ok, emit_diag = _emit(short, info, tdp, precision=emit_prec)
+        if not emit_ok:
             # Algorithm out of static-translator scope (see OUT_OF_SCOPE) -> documented skip; any
             # other native-emit failure is a real gap and stays a FAIL.
-            native_emit_error = OUT_OF_SCOPE.get(short, "FAIL:emit")
+            native_emit_error = OUT_OF_SCOPE.get(short, "FAIL:emit" + emit_diag)
         else:
             # Glob by short name: binding["sources"] may use the normalized func_name instead.
             bindings = list(tdp.glob(f"*_{fptype}_binding.json"))
@@ -485,7 +508,7 @@ def run_kernel(short: str,
                 status[backend] = "FAIL:compile-timeout"
                 continue
             if c.returncode:
-                status[backend] = "FAIL:compile"
+                status[backend] = "FAIL:compile" + _diag(c)
                 continue
             try:
                 status[backend] = _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, atol)
@@ -639,8 +662,9 @@ def _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol,
             cmd += ["--fastmath"]
         if backend == "cupy":  # cupy CLI takes no bench-info
             cmd = [sys.executable, "-m", cli, "emit", "--kernel", str(npy), "--out", str(tdp)]
-        if subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO)).returncode:
-            return "FAIL:emit"
+        emit = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO))
+        if emit.returncode:
+            return "FAIL:emit" + _diag(emit)
         mods = sorted(tdp.glob(pattern))
         if not mods:
             return "FAIL:no-module"
@@ -927,7 +951,7 @@ def _run_pluto(tdp, short, fptype, binding, by, syms, expected, compare, rtol, a
     except subprocess.TimeoutExpired:
         return "skip:unsupported:compile-timeout"
     if rc:
-        result = "FAIL:compile"
+        result = "FAIL:compile" + _diag_text(rc, _out, _err)
     else:
         # The transformed function keeps the Pluto signature, so marshal via its own binding.
         pb = src.with_name(base + "_pluto_binding.json")

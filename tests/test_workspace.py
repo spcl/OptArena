@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scratch-workspace ABI (abi_contract.md §11).
+"""Scratch-workspace ABI (abi_contract.md Sec. 11).
 
 Covers the reserved ``workspace`` / ``workspace_size`` pair end to end:
 

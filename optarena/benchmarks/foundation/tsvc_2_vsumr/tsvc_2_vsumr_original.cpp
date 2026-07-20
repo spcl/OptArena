@@ -8,7 +8,7 @@
 extern "C" {
 
 // ============================================================
-// vsumr_d — sum reduction
+// vsumr_d -- sum reduction
 // ============================================================
 
 void vsumr_d(const double *__restrict__ a, double *__restrict__ sum_out, int iterations, int len_1d) {

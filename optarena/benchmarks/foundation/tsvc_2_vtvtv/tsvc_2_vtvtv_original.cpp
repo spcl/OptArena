@@ -8,7 +8,7 @@
 extern "C" {
 
 // ============================================================
-// vtvtv_d — vector times vector times vector
+// vtvtv_d -- vector times vector times vector
 // ============================================================
 
 void vtvtv_d(double *__restrict__ a, const double *__restrict__ b, const double *__restrict__ c, int iterations,

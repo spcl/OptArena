@@ -1,4 +1,4 @@
-/* Reference distributed kernel_mpi for heat_3d (abi_contract.md §12): a 1-D slab decomposition of
+/* Reference distributed kernel_mpi for heat_3d (abi_contract.md Sec. 12): a 1-D slab decomposition of
    the global N x N x N cube over the leading axis with a one-plane halo. The reference SOLUTION the
    no-op MPI optimizer submits.
 

@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The generated C MPI driver + kernel_mpi stub: pins the abi_contract.md §12 shape without a cluster."""
+"""The generated C MPI driver + kernel_mpi stub: pins the abi_contract.md Sec. 12 shape without a cluster."""
 import shutil
 import subprocess
 
@@ -39,14 +39,14 @@ def test_kernel_stub_has_section12_signature():
     stub = gen_kernel_mpi_stub(_yax())
     assert "#include <mpi.h>" in stub
     assert "jac2d_mpi" in stub and "TODO" in stub
-    assert "time_ns" not in stub  # timing is driver-owned (§6/§12)
+    assert "time_ns" not in stub  # timing is driver-owned (Sec. 6/Sec. 12)
     # local tiles: input const, output non-const; then scalars; then comm; then workspace pair.
     assert "const double *restrict x" in stub
     assert "double *restrict y" in stub  # output tile, non-const
     assert "const int64_t N" in stub and "const double a" in stub
     assert "MPI_Fint comm" in stub
     assert "uint8_t *restrict workspace" in stub and "const int64_t workspace_size" in stub
-    # comm precedes the reserved workspace pair (§12 order).
+    # comm precedes the reserved workspace pair (Sec. 12 order).
     assert stub.index("MPI_Fint comm") < stub.index("workspace")
     # never the reference body.
     assert "a * x" not in stub
@@ -68,7 +68,7 @@ def test_driver_owns_init_scatter_gather_timing():
     assert "time_ns" not in drv
     # reads the two file paths from argv; guards the magic/version.
     assert "argv[1]" in drv and "argv[2]" in drv and "MPI_WIRE_MAGIC" in drv
-    # calls the agent kernel with its §12 argument order.
+    # calls the agent kernel with its Sec. 12 argument order.
     assert "jac2d_mpi(" in drv
     assert "comm_f" in drv
 

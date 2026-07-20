@@ -197,14 +197,27 @@ def lavamd_kernel(
     qv: np.ndarray,
     fv: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Run the lavaMD CPU interaction kernel and return the force array."""
+    """Functional wrapper: allocates the force buffer and returns it. The
+    manifest entry point ``lavamd`` below does the actual traversal and writes
+    its buffer in place; this wrapper exists for standalone callers/tests that
+    want a return value rather than a pre-allocated buffer."""
+
+    if fv is None:
+        fv = np.zeros((rv.shape[0], 4), dtype=np.float64)
+
+    lavamd(alpha, box_offsets, neighbor_counts, neighbor_list, rv, qv, fv)
+
+    return fv
+
+
+def lavamd(alpha, box_offsets, neighbor_counts, neighbor_list, rv, qv, fv):
+    """Manifest-compatible lavaMD benchmark entry point. Runs the lavaMD CPU
+    interaction kernel and accumulates the pairwise force into the
+    pre-allocated ``fv`` buffer in place."""
 
     _validate_inputs(box_offsets, neighbor_counts, neighbor_list, rv, qv, fv)
 
     alpha = float(alpha)
-    if fv is None:
-        fv = np.zeros((rv.shape[0], 4), dtype=np.float64)
-
     n_boxes = box_offsets.shape[0]
     par_per_box = rv.shape[0] // n_boxes
     a2 = 2.0 * alpha * alpha
@@ -249,19 +262,3 @@ def lavamd_kernel(
                     fv[ai, 1] += qv[bj] * fs * dx
                     fv[ai, 2] += qv[bj] * fs * dy
                     fv[ai, 3] += qv[bj] * fs * dz
-
-    return fv
-
-
-def lavamd(alpha, box_offsets, neighbor_counts, neighbor_list, rv, qv, fv):
-    """Manifest-compatible lavaMD benchmark entry point."""
-
-    return lavamd_kernel(
-        alpha,
-        box_offsets,
-        neighbor_counts,
-        neighbor_list,
-        rv,
-        qv,
-        fv,
-    )

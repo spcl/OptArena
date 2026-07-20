@@ -272,6 +272,31 @@ def _round_even_helper(rk: str) -> str:
 """
 
 
+#: Integer element widths narrower than the int64 ABI integer. numpy wraps an elementwise op at
+#: these widths; Fortran computes wide after the promoting read, so each result is wrapped back.
+_NARROW_INT_DTYPES = frozenset({"int8", "int16", "int32", "uint8", "uint16", "uint32"})
+_NARROW_INT_BITS = {"int8": 8, "int16": 16, "int32": 32, "uint8": 8, "uint16": 16, "uint32": 32}
+
+
+def _int_wrap_helper(dt: str, sel: str) -> str:
+    """A contained pure wrap of an int64 value to dt's element width.
+
+    Fortran has no truncating cast, and the sign-extending form needs the operand three times --
+    unacceptable inline for a big sub-expression, so it goes in a procedure like npb_round_even.
+    """
+    bits = _NARROW_INT_BITS[dt]
+    mask, half, span = (1 << bits) - 1, 1 << (bits - 1), 1 << bits
+    resign = "" if dt.startswith("u") else f"\n        if (r >= {half}_{sel}) r = r - {span}_{sel}"
+    return f"""\
+
+    pure function npb_wrap_{dt}(x) result(r)
+        integer({sel}), intent(in) :: x
+        integer({sel}) :: r
+        r = iand(x, {mask}_{sel}){resign}
+    end function npb_wrap_{dt}
+"""
+
+
 def _double_kind() -> str:
     # ISO_C_BINDING kind token for a 64-bit real, pulled from the registry (never
     # hardcoded); forces the FloorDiv divide into double regardless of kernel kind.
@@ -451,6 +476,8 @@ class _FortranBodyEmitter(BaseEmitter):
         # npb_round_even helper (not inline) so a round of a big sub-expression
         # doesn't repeat the argument six times and blow the -O2 compile budget.
         self._used_round_even = False
+        # Narrow-int element dtypes whose per-op wrap helper the body calls (see _narrow_int_wrap).
+        self._used_int_wrap: Set[str] = set()
         # Whether the body references IEEE infinity/NaN, which Fortran expresses via
         # ieee_value -- gates a `use, intrinsic :: ieee_arithmetic` in the preamble.
         self._used_ieee = False
@@ -494,9 +521,14 @@ class _FortranBodyEmitter(BaseEmitter):
             self.parallel_active = False
         # Fortran do is inclusive on both ends: for a positive step the Python
         # range(lo, hi) last value is hi - 1; for a negative step it is hi + 1.
-        negative_step = step.startswith("-") or step.startswith("(-")
-        adj = "+ 1" if negative_step else "- 1"
-        upper = f"({hi}) {adj}"
+        # Fortran's DO already honours a runtime step sign, so only the bound
+        # adjustment has to be chosen at runtime when the sign is not decidable.
+        step_node = args[2] if len(args) == 3 else None
+        sign = self.static_step_sign(step_node)
+        if sign is None:
+            upper = f"({hi}) + merge(1, -1, ({step}) < 0)"
+        else:
+            upper = f"({hi}) {'+ 1' if sign < 0 else '- 1'}"
         if step == "1":
             return (f"{omp_prefix}{indent}do {var} = {lo}, {upper}\n"
                     f"{body}\n"
@@ -773,9 +805,59 @@ class _FortranBodyEmitter(BaseEmitter):
     def emit_expr(self, node: ast.AST) -> str:
         """Emit an expression, rounding a float BinOp result back to the fp8 grid when the kernel computes in fp8."""
         text = self._emit_expr_inner(node)
-        if isinstance(node, ast.BinOp):
-            return self._fp8_round(node, text)
+        if isinstance(node, (ast.BinOp, ast.UnaryOp)):
+            if isinstance(node, ast.BinOp):
+                text = self._fp8_round(node, text)
+            text = self._narrow_int_wrap(node, text)
         return text
+
+    def _narrow_int_wrap(self, node: ast.AST, text: str) -> str:
+        """Re-wrap a narrow-int (int8/16/32, uint8/16/32) result to its ELEMENT width.
+
+        numpy evaluates an elementwise integer op at the operand dtype and wraps there, but a
+        narrow read promotes to the int64 ABI integer here (see _is_narrow_int_array), so an
+        intermediate that overflows the element width never wrapped: for int8 ``a = b = 100``
+        numpy gives ``(a + b) // 2 == -28`` (the sum wraps to -56 first), the wide form 100.
+        Unary is included: ``-(-128)`` is -128 in int8, not 128.
+        """
+        # `not x` is a LOGICAL result, not an integer one -- wrapping it is a type error in
+        # Fortran and meaningless in C.
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return text
+        dt = self._narrow_int_dtype(node)
+        if dt is None:
+            return text
+        self._used_int_wrap.add(dt)
+        # The helper takes the int64 ABI integer, but not every read reaches it through the
+        # promoting scalar-load path (an index expression does not), so coerce at the call site.
+        return f"npb_wrap_{dt}(INT({text}, {self._int_kind_selector()}))"
+
+    def _narrow_int_dtype(self, node: ast.AST) -> Optional[str]:
+        """The single narrow-int element dtype this subtree computes in, else None.
+
+        Deliberately conservative -- a float/complex literal, an unresolved call, or a MIX of
+        element dtypes all yield None, because numpy promotes those and wrapping would introduce
+        the very divergence this fixes. Skipping a legitimate wrap only leaves prior behaviour.
+        """
+        seen = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                return None
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, (float, complex)):
+                return None
+            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
+                dt = self._name_dtype(sub.value.id)
+                if dt is None:
+                    return None  # unknown element type: assume it promotes rather than guess narrow
+                seen.add(dt)
+            elif isinstance(sub, ast.Name):
+                dt = self._name_dtype(sub.id)
+                if dt is not None and self._int_tag(dt) is None:
+                    return None  # a float/complex scalar or local promotes the whole op
+        if len(seen) != 1:
+            return None
+        dt = next(iter(seen))
+        return dt if dt in _NARROW_INT_DTYPES else None
 
     def _fp8_round(self, node: ast.BinOp, text: str) -> str:
         """Wrap a float BinOp result in the fp8 round-to-grid procedure (per-op rounding is load-bearing, not decorative)."""
@@ -2281,6 +2363,8 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
     # correction ONCE as a contained pure function (see _used_round_even).
     if body_emitter._used_round_even:
         contained += _round_even_helper(body_emitter._rk)
+    for dt in sorted(body_emitter._used_int_wrap):
+        contained += _int_wrap_helper(dt, body_emitter._int_kind_selector())
     return _format_subroutine(
         name=name,
         params=param_names,

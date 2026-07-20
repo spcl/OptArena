@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The mpi4py SPMD driver for a python-delivery MPI submission (abi_contract.md §12), the C driver's twin."""
+"""The mpi4py SPMD driver for a python-delivery MPI submission (abi_contract.md Sec. 12), the C driver's twin."""
 import importlib.util
 import math
 import sys
@@ -89,7 +89,7 @@ def run(infile: str,
     ws_bytes = cart.scatter(parsed.workspace_bytes if rank == 0 else None, root=0)
 
     kernel = _load_kernel(module_path, func_name)
-    # workspace is uninitialised scratch, matching the C driver's xmalloc (ABI §11: scratch, not zeroed)
+    # workspace is uninitialised scratch, matching the C driver's xmalloc (ABI Sec. 11: scratch, not zeroed)
     on_device = frozenset(i for i in device_mask if 0 <= int(i) < n_ptr)
     compute, workspace = _stage(tiles, ws_bytes, on_device)
     pristine = [t.copy() for t in compute]

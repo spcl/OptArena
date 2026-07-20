@@ -15,7 +15,7 @@ def build_primfunc(n, npt, dtype, rmax):
     one = te.const(1.0, dtype)
     p = te.reduce_axis((0, n), name="p")
 
-    # Single paired reducer — tuple te.compute needs matching reducers; two te.sum calls won't do.
+    # Single paired reducer -- tuple te.compute needs matching reducers; two te.sum calls won't do.
     pair_add = te.comm_reducer(
         lambda x, y: (x[0] + y[0], x[1] + y[1]),
         lambda t0, t1: (te.const(0.0, dtype), te.const(0.0, dtype)),

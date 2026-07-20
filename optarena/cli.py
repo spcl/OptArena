@@ -219,7 +219,7 @@ def _csv_or_none(value: str):
 def _residencies(value: str):
     """Parse + validate ``--residency`` (host / device / 'host,device').
 
-    The only two options are all-host and all-device (abi_contract §10); reject
+    The only two options are all-host and all-device (abi_contract Sec. 10); reject
     anything else so a typo is a hard error rather than a silently-empty sweep.
     """
     from optarena.harness.task import RESIDENCIES

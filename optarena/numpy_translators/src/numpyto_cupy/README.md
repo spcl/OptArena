@@ -1,7 +1,7 @@
 # NumpyToCuPy
 
-Python (numpy) → Python (cupy) emitter. The kernel body is almost
-unchanged — cupy is a drop-in for numpy on GPU — so the translation
+Python (numpy) -> Python (cupy) emitter. The kernel body is almost
+unchanged -- cupy is a drop-in for numpy on GPU -- so the translation
 is two steps:
 
 1. Substitute `np.` references with `cp.` and `import numpy as np`

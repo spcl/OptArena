@@ -1461,6 +1461,22 @@ def _resolve_arr_shape_subscript(node: ast.AST,
     return src[node.slice.value]
 
 
+def _read_in(name: str, blocks: "Tuple[List[ast.stmt], ...]") -> bool:
+    """True when ``name`` is READ anywhere in ``blocks`` (the code that runs after a nested block).
+
+    Liveness is what decides whether a shape re-binding inside an if/loop body is ambiguous. A name
+    that is written and fully consumed inside the block is unambiguous no matter how many sibling
+    blocks re-bind it to other shapes -- that is the ordinary "two independent temporaries in two
+    loop nests" shape, and refusing it would reject working kernels.
+    """
+    for block in blocks:
+        for stmt in block:
+            for sub in ast.walk(stmt):
+                if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load):
+                    return True
+    return False
+
+
 def _ssa_rename_reassigned(tree: ast.AST,
                             arrays_shapes: Dict[str, List[str]]) -> None:
     """SSA-style rename for Names reassigned with different broadcast
@@ -1532,14 +1548,17 @@ def _ssa_rename_reassigned(tree: ast.AST,
     def _walk(stmts: List[ast.stmt],
               rename_map: Dict[str, str],
               last_shape: Dict[str, Tuple[str, ...]],
-              version: Dict[str, int]) -> None:
+              version: Dict[str, int],
+              nested: bool = False,
+              live_after: Tuple[List[ast.stmt], ...] = (),
+              loop_body: bool = False) -> None:
         # Single function-scope rename_map / shape map -- Python does
         # not have block scope for assignments, so a ``bcol = ...``
         # inside sibling for-loops at function scope is the SAME local
         # being reassigned. Sharing the state across nested scopes lets
         # the pre-pass mint a fresh version for each shape change even
         # when the assignments live in different loop bodies.
-        for stmt in stmts:
+        for i, stmt in enumerate(stmts):
             # Rewrite Load-context Names on the RHS / iter / test BEFORE
             # the version-mint decision (the assignment's RHS reads the
             # old version's storage).
@@ -1590,6 +1609,22 @@ def _ssa_rename_reassigned(tree: ast.AST,
                             # First occurrence -- keep the original name.
                             name_for_shape = orig
                         else:
+                            # Minting a SECOND buffer for this name inside an if/loop body means
+                            # Minting a second buffer inside an if/loop body is only a problem
+                            # when the name is LIVE AFTER that body: the rename cannot survive the
+                            # block, so a later read would bind to a buffer the untaken path never
+                            # wrote -- SIGSEGV in C/C++, silently wrong values in Fortran. A name
+                            # that is fully consumed inside the block (the common case: two
+                            # independent temporaries in sibling loop nests) is unambiguous.
+                            # Inside a loop body the statements BEFORE this one also run after it,
+                            # on the next iteration, so a read there sees the previous binding.
+                            after = live_after + ((stmts[:i], ) if loop_body else ())
+                            if nested and _read_in(orig, after):
+                                raise NotImplementedError(
+                                    f"{orig!r} is re-bound to a different shape inside conditional "
+                                    f"control flow and read again afterwards; which buffer that read "
+                                    f"sees is not decidable statically. Hoist the re-binding to "
+                                    f"function scope, or give the two shapes separate names.")
                             n = len(version[orig])
                             name_for_shape = f"{orig}__v{n}"
                         version[orig][shape_toks] = name_for_shape
@@ -1604,15 +1639,16 @@ def _ssa_rename_reassigned(tree: ast.AST,
             # inner reassignments don't leak the rename outward. Use
             # the outer ``shapes`` so the inner scope sees the current
             # extent table.
-            if isinstance(stmt, ast.For):
-                _walk(stmt.body, rename_map, last_shape, version)
-                _walk(stmt.orelse, rename_map, last_shape, version)
-            elif isinstance(stmt, ast.If):
-                _walk(stmt.body, rename_map, last_shape, version)
-                _walk(stmt.orelse, rename_map, last_shape, version)
-            elif isinstance(stmt, ast.While):
-                _walk(stmt.body, rename_map, last_shape, version)
-                _walk(stmt.orelse, rename_map, last_shape, version)
+            if isinstance(stmt, (ast.For, ast.If, ast.While)):
+                # Copy the maps: a rename minted inside the body must not stay active after the
+                # body closes (the comment above always claimed this; the code passed the SAME
+                # dicts, so it leaked). What executes after the body is everything later in this
+                # block plus whatever follows the enclosing blocks; a loop also re-enters its own
+                # body, so a read at the top sees the previous iteration's binding.
+                inner_after = (stmts[i + 1:], ) + live_after
+                is_loop = isinstance(stmt, (ast.For, ast.While))
+                for branch, in_loop in ((stmt.body, is_loop), (stmt.orelse, False)):
+                    _walk(branch, dict(rename_map), dict(last_shape), version, True, inner_after, in_loop)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef):

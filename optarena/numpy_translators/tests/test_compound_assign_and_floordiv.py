@@ -22,18 +22,16 @@ def _assert_native_ok(res):
 def test_compound_int_floordiv_and_mod_match_numpy():
     # //= and %= over the full sign matrix: numpy // floors toward -inf and % takes the
     # divisor's sign, unlike C/Fortran's native truncate/dividend-sign forms.
-    # compound ops on integer scalar locals (qi/ri), stored to the buffers after -- keeps the
-    # AugAssign //=/%= on the tested path while dodging run_op's complex-scratch output probe
-    # (// is undefined on complex, so a complex output buffer cannot host the compound op).
+    # The compound ops run DIRECTLY on the output buffers -- the shape a real kernel writes.
+    # (This used to be routed through scalar locals to dodge run_op's complex-scratch probe,
+    # which raised TypeError on `//=` over complex; the probe now skips itself instead.)
     src = ("import numpy as np\n"
            "def f(a, b, q, r):\n"
            "    for i in range(a.shape[0]):\n"
-           "        qi = a[i]\n"
-           "        qi //= b[i]\n"
-           "        q[i] = qi\n"
-           "        ri = a[i]\n"
-           "        ri %= b[i]\n"
-           "        r[i] = ri\n")
+           "        q[i] = a[i]\n"
+           "        q[i] //= b[i]\n"
+           "        r[i] = a[i]\n"
+           "        r[i] %= b[i]\n")
     a = np.array([-7, 7, -8, 8], dtype=np.int64)
     b = np.array([2, -2, 3, -3], dtype=np.int64)
     res = run_op(src,
@@ -88,6 +86,36 @@ def test_floordiv_float_matches_numpy_over_overflow_range():
                      "a": "(N,)",
                      "b": "(N,)",
                      "out": "(N,)"
+                 },
+                 backends=_NATIVE)
+    _assert_native_ok(res)
+
+
+def test_int_cast_floordiv_and_mod_floor_like_numpy():
+    # int(a[i]) is an INTEGER however float a is, so ``int(a[i]) // 2`` must take the
+    # integer floor-div branch. The float-operand test used to walk into the cast, see
+    # float ``a`` and pick the float path ``floor((x) / (y))`` -- but both emitted operands
+    # are already int64 there, so C truncated toward zero and the floor was a no-op:
+    # int(-7.5) // 2 gave -3 instead of numpy's -4 (same for the divisor-sign %).
+    src = ("import numpy as np\n"
+           "def f(a, q, r):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        q[i] = int(a[i]) // 2\n"
+           "        r[i] = int(a[i]) % 3\n")
+    a = np.array([-7.5, -1.5, 3.5, 7.5], dtype=np.float64)
+    res = run_op(src,
+                 "f", {"a": a}, {
+                     "q": (4, ),
+                     "r": (4, )
+                 }, {"N": 4},
+                 shapes={
+                     "a": "(N,)",
+                     "q": "(N,)",
+                     "r": "(N,)"
+                 },
+                 dtypes={
+                     "q": "int64",
+                     "r": "int64"
                  },
                  backends=_NATIVE)
     _assert_native_ok(res)

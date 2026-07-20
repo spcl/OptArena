@@ -8,7 +8,7 @@
 extern "C" {
 
 // ======================
-// %3.4 – Packing
+// %3.4 - Packing
 // ======================
 
 // s341_d: pack positive values from b into a

@@ -11,19 +11,19 @@ The numpy reference factorizes row by row::
 
 For a row ``i``:
 
-* the lower entries (``j < i``) are sequential in ``j`` — ``A[i, j]`` reads
+* the lower entries (``j < i``) are sequential in ``j`` -- ``A[i, j]`` reads
   ``A[i, :j]`` (lower entries of the SAME row, just computed) and ``A[:j, j]``
   (finalized rows). This is a forward substitution, not parallelizable.
-* the upper entries (``j >= i``) are mutually independent — each reads only
-  the now-finished lower part of row ``i`` and finalized rows ``< i`` — so a
+* the upper entries (``j >= i``) are mutually independent -- each reads only
+  the now-finished lower part of row ``i`` and finalized rows ``< i`` -- so a
   whole row's upper part is one parallel ``te.compute``.
 
 We keep the reference's exact summation order (ascending ``k``) so the fp64
 result is bit-for-bit identical, rather than switching to a right-looking
 rank-1 update. Two fixed full-size PrimFuncs, each compiled once:
 
-* lower step, runtime ``(i, j)`` — writes the single cell ``A[i, j]``;
-* upper step, runtime ``i`` — writes the whole row segment ``A[i, i:]``.
+* lower step, runtime ``(i, j)`` -- writes the single cell ``A[i, j]``;
+* upper step, runtime ``i`` -- writes the whole row segment ``A[i, i:]``.
 
 The ``(i, j)`` lower loop and the per-row upper step are driven in Python.
 """

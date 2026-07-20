@@ -62,7 +62,7 @@ def test_infile_no_workspace_is_zero_per_rank():
     b, desc = _yax_binding(), _block0(2, ("x", "y"))
     raw = pack_infile(b, desc, {"x": np.arange(6.0), "y": np.zeros(6)}, {"N": 6, "a": 1.0}, k_repeats=1)
     p = unpack_infile(raw)
-    assert p.workspace_bytes == [0, 0]  # no request -> 0 bytes everywhere (ABI §11)
+    assert p.workspace_bytes == [0, 0]  # no request -> 0 bytes everywhere (ABI Sec. 11)
 
 
 def test_infile_replicated_array_full_copy_each_rank():

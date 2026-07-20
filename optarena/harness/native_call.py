@@ -3,7 +3,7 @@
 """Native (C-ABI) invocation of a built submission: the FFI + process-isolation
 layer of the scorer.
 
-Extracted from scoring.py so the cffi call, the workspace (ABI §11) allocation, and
+Extracted from scoring.py so the cffi call, the workspace (ABI Sec. 11) allocation, and
 the child-process sandboxing -- which turns an agent kernel that segfaults, hangs, or
 over-allocates into a SCORED failure rather than a death of the runner -- live apart
 from the grading + orchestration logic. The scorer uses only :func:`_call_isolated`;
@@ -28,7 +28,7 @@ from optarena.dtypes import c_type
 from optarena.fuzz import _safe_eval
 from optarena.frameworks.forked import run_forked
 
-#: Scratch-workspace buffers are aligned to this many bytes (ABI §11) so a kernel
+#: Scratch-workspace buffers are aligned to this many bytes (ABI Sec. 11) so a kernel
 #: may assume an aligned base for vector loads/stores.
 WORKSPACE_ALIGN = 256
 
@@ -64,13 +64,13 @@ def _ptr_cdecl(dtype) -> str:
     return f"{c_type(np.dtype(dtype).name)} *"
 
 
-#: cffi pointer type for the reserved scratch buffer (§11) -- a fixed constant,
+#: cffi pointer type for the reserved scratch buffer (Sec. 11) -- a fixed constant,
 #: computed once and reused by both the host and device call paths.
 WORKSPACE_PTYPE = _ptr_cdecl(WORKSPACE_DTYPE)
 
 
 def _workspace_bytes(expr: Optional[str], binding: Binding, data: Dict) -> int:
-    """Resolve the submission's scratch request (ABI §11) to a concrete byte count
+    """Resolve the submission's scratch request (ABI Sec. 11) to a concrete byte count
     for THIS call's sizes.
 
     ``expr`` is an arithmetic expression over the kernel's scalar / size-symbol
@@ -121,22 +121,14 @@ def _alloc_workspace(nbytes: int, xp=np):
 
 
 def _arg_residence(binding: Binding, residency: str) -> Dict[str, str]:
-    """Storage location (``"host"``/``"device"``) of each ABI arg (abi_contract §10):
+    """Storage location (``"host"``/``"device"``) of each ABI arg (abi_contract Sec. 10):
     pointer references all share the task residency (all host XOR all device); every
     scalar/size-symbol is always host (passed by value)."""
     return {a.name: (residency if a.kind == "ptr" else "host") for a in binding.args}
 
 
-def _call_native_impl(lib_path,
-                      binding: Binding,
-                      data: Dict,
-                      lang: str,
-                      workspace_bytes: Optional[str],
-                      *,
-                      xp,
-                      to_host,
-                      timed_call,
-                      residency: str) -> Tuple[Dict[str, np.ndarray], int]:
+def _call_native_impl(lib_path, binding: Binding, data: Dict, lang: str, workspace_bytes: Optional[str], *, xp, to_host,
+                      timed_call, residency: str) -> Tuple[Dict[str, np.ndarray], int]:
     """Shared FFI body for the host and device native calls: marshal ``data`` to the
     canonical symbol of ``lib_path`` and time exactly ONE call.
 
@@ -144,7 +136,7 @@ def _call_native_impl(lib_path,
     ``cupy``), how a result crosses back to host (``to_host`` -- identity / ``cp.asnumpy``),
     the timer (``timed_call(fn, c_args)`` -- a host monotonic bracket / GPU events), and the
     pointer args' ``residency`` (``"host"`` / ``"device"``); everything else -- the fresh
-    contiguous input copies, the scalar-by-value marshalling, the §11 workspace pair, and
+    contiguous input copies, the scalar-by-value marshalling, the Sec. 11 workspace pair, and
     the cdef/dlopen/addressof -- is identical, so it lives here once.
 
     ``timed_call`` is handed ``fn`` and ``c_args`` and MUST bracket ONLY ``fn(*c_args)``:
@@ -190,7 +182,7 @@ def _call_native_impl(lib_path,
             params.append("double")
             c_args.append(float(data[a.name]))
 
-    # §11 reserved scratch pair, the trailing args, allocated HERE (untimed) through the
+    # Sec. 11 reserved scratch pair, the trailing args, allocated HERE (untimed) through the
     # SAME aligned/NULL helper for host and device (over-allocate + slice to a
     # WORKSPACE_ALIGN base) so the 256-byte alignment the ABI promises holds regardless of
     # the allocator: NULL/0 unless the submission requested workspace. ``ws`` (and its
@@ -221,7 +213,7 @@ def _call_native(lib_path,
 
     Pointers are passed as fresh contiguous copies so the in-place outputs do
     not clobber ``data`` (the NumPy reference reads from the same inputs).
-    ``workspace_bytes`` (ABI §11) is the submission's scratch request; the buffer
+    ``workspace_bytes`` (ABI Sec. 11) is the submission's scratch request; the buffer
     is allocated (in :func:`_call_native_impl`) before the timed bracket, so allocation
     never counts toward ``native_ns`` -- NULL/0 when unrequested. Returns
     ``(outputs_by_name, native_ns)``.
@@ -399,7 +391,7 @@ def _native_call_worker(device,
     harness baseline: ``RLIMIT_AS`` is set to ``current_vmsize + memory_bytes``,
     so the Python/numpy footprint does not eat the budget and a runaway kernel
     allocation fails inside the child (a scored error) instead of exhausting the
-    machine. ``workspace_bytes`` is the submission's ABI §11 scratch request.
+    machine. ``workspace_bytes`` is the submission's ABI Sec. 11 scratch request.
 
     Peak resident memory is captured around the run: ``ru_maxrss`` at child entry
     (the inherited Python+harness high-water mark) and again after the kernel returns,

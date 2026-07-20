@@ -1,6 +1,6 @@
-"""CPU TVM jacobi_2d — 5-point stencil, meta_schedule autotuned.
+"""CPU TVM jacobi_2d -- 5-point stencil, meta_schedule autotuned.
 
-Both half-steps (A→B and B→A) are the *same* stencil PrimFunc: interior
+Both half-steps (A->B and B->A) are the *same* stencil PrimFunc: interior
 cells get the 0.2-weighted 5-point average of the source ``X``, boundary
 cells copy ``Y_in``. Passing the same tensor as ``Y_in`` and ``Y_out`` in the
 call gives the numpy reference's in-place, interior-only update. We compile

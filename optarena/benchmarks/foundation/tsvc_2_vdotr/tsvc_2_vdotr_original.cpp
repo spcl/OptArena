@@ -8,7 +8,7 @@
 extern "C" {
 
 // ============================================================
-// vdotr_d — vector dot product
+// vdotr_d -- vector dot product
 // ============================================================
 
 void vdotr_d(const double *__restrict__ a, const double *__restrict__ b, double *__restrict__ dot_out, int iterations,

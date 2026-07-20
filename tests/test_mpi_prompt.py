@@ -4,7 +4,7 @@
 ``residency="distributed"`` task.
 
 ``node_mode`` (single | multi, derived from residency) and ``scaling`` (strong | weak, from the
-mpi config) are first-class prompt knobs: a multi-node task renders ``sections/mpi.j2`` (the §12
+mpi config) are first-class prompt knobs: a multi-node task renders ``sections/mpi.j2`` (the Sec. 12
 ``kernel_mpi`` signature, the you-choose-it data distribution, the executable/mpi4py delivery, and
 the MPI timing + strong/weak sizing) INSTEAD of the single-node api/delivery/timing/fuzzing
 sections. The single-node prompt must be byte-unchanged (no MPI leak). Pure: no MPI launch.
@@ -29,7 +29,7 @@ def test_build_context_sets_node_mode_and_mpi_fields():
     assert ctx["scaling"] in ("strong", "weak")
     assert ctx["ranks"] >= 1 and ctx["k_repeats"] >= 1
     assert ctx["mpi_symbol"] == mpi_symbol(binding) == "jacobi2d_mpi"
-    assert ctx["mpi_stub"] == gen_kernel_mpi_stub(binding)  # the §12 stub, not the single-node one
+    assert ctx["mpi_stub"] == gen_kernel_mpi_stub(binding)  # the Sec. 12 stub, not the single-node one
     assert ctx["mpi_residency"] in ("host", "device")  # the pointer residency the scorer delivers
 
 
@@ -59,7 +59,7 @@ def test_multi_prompt_shows_the_distributed_contract():
     p = build_prompt(DIST)
     ranks = int(config.get("mpi.ranks", 4))
     assert "## Distributed (multi-node MPI) contract" in p
-    assert "jacobi2d_mpi" in p  # the §12 symbol
+    assert "jacobi2d_mpi" in p  # the Sec. 12 symbol
     assert "MPI_Comm_f2c(comm)" in p and "MPI_Cart_shift" in p  # the comm is the topology source
     assert f'"grid": [{ranks}]' in p  # the distribution example, ranks interpolated
     assert "no prebuilt" in p  # no `.so` delivery on this track

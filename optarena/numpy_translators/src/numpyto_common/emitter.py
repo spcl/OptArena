@@ -14,7 +14,7 @@ through a leaky hook surface. A subclass is free to override ``emit_stmt``
 wholesale if a target ever needs a different dispatch.
 """
 import ast
-from typing import List
+from typing import List, Optional
 
 
 class BaseEmitter:
@@ -28,6 +28,25 @@ class BaseEmitter:
     #: ``break`` / ``continue`` rendered for the target.
     _KW_BREAK: str = "break"
     _KW_CONTINUE: str = "continue"
+
+    @staticmethod
+    def static_step_sign(step_node: Optional[ast.AST]) -> Optional[int]:
+        """+1 / -1 when a range step's sign is decidable from the AST, else None.
+
+        None means the sign is a RUNTIME fact and the loop direction cannot be baked in. Both
+        backends used to fall back to a textual ``startswith("-")`` on the emitted step, which is
+        only ever right for a literal: with ``s = -1`` held in a variable the text is ``s``, so C
+        emitted a forward loop that ran zero times and Fortran adjusted the inclusive bound the
+        wrong way and overran it. Neither failed loudly.
+        """
+        if step_node is None:
+            return 1
+        if isinstance(step_node, ast.UnaryOp) and isinstance(step_node.op, ast.USub):
+            inner = BaseEmitter.static_step_sign(step_node.operand)
+            return None if inner is None else -inner
+        if isinstance(step_node, ast.Constant) and isinstance(step_node.value, (int, float)):
+            return -1 if step_node.value < 0 else 1
+        return None
 
     def emit_block(self, stmts: List[ast.stmt], indent: str) -> str:
         out = [self.emit_stmt(s, indent) for s in stmts]

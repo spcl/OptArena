@@ -1,4 +1,4 @@
-# hidden_tests — HOST-SIDE ONLY
+# hidden_tests -- HOST-SIDE ONLY
 
 These are the held-out correctness tests used to score agent submissions.
 

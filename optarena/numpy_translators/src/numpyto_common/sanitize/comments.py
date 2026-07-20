@@ -235,7 +235,9 @@ def _strip_c_family(src: str, *, slashes: bool = True, hashes: bool = False, for
 # REQUIRE the notice to survive redistribution, so stripping it from a ported
 # kernel (a microapp adapted from a real, licensed code) would violate the
 # license. Synthetic microkernels carry no such header, so nothing is kept.
-_ATTRIBUTION_RE = re.compile(r"licen[sc]e|attribution|copyright|spdx|creative commons|\(c\)|©", re.IGNORECASE)
+# The last alternative is the copyright SIGN, spelled as an escape so this source stays ASCII --
+# it is the only branch that catches a bare glyph, which "copyright" and "\(c\)" both miss.
+_ATTRIBUTION_RE = re.compile("licen[sc]e|attribution|copyright|spdx|creative commons|\\(c\\)|\\u00a9", re.IGNORECASE)
 
 # The leading COMMENT-line marker per language. Deliberately language-specific: '#' is a
 # comment in python/shell but a PREPROCESSOR directive in C, and '*' is a pointer in C --

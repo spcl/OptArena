@@ -394,7 +394,7 @@ def expand_matmul_sell_c_sigma_dense_vec(
     n_slices_sym: str,
     slice_height_sym: str,   # C parameter
 ) -> List[ast.stmt]:
-    """``y = A @ x`` for SELL-C-σ-A and dense-x -> dense-y::
+    """``y = A @ x`` for SELL-C-sigma-A and dense-x -> dense-y::
 
         for s in range(nslices):
             sl_start = slice_ptr[s]
@@ -410,7 +410,7 @@ def expand_matmul_sell_c_sigma_dense_vec(
                         acc += val[e] * x[col_idx[e]]
                 y[perm[global_r]] = acc
 
-    SELL-C-σ stores each slice column-major so SIMD lanes (width C) load
+    SELL-C-sigma stores each slice column-major so SIMD lanes (width C) load
     contiguously. ``row_len`` skips padded zeros; ``perm`` unscatters the
     sorted-y back to original row order.
 

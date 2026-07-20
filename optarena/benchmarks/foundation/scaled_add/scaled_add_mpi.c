@@ -1,4 +1,4 @@
-/* Reference distributed kernel_mpi for scaled_add (abi_contract.md §12) -- the identity
+/* Reference distributed kernel_mpi for scaled_add (abi_contract.md Sec. 12) -- the identity
    solution NoOpMPIOptimizer submits, and the fixture the distributed scoring/verify tests
    grade as solved ~1x (reference == baseline).
 

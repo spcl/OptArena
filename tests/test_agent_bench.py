@@ -151,7 +151,7 @@ def test_gen_stub_cuda_hip_host_entry():
         assert f'extern "C" void {sym}(' in stub  # canonical host symbol
         assert "const double *restrict A" in stub  # HOST pointers, canonical order
         assert "time_ns" not in stub  # no timer arg -- the harness times externally
-        assert "workspace" in stub  # trailing reserved scratch pair (§11)
+        assert "workspace" in stub  # trailing reserved scratch pair (Sec. 11)
         assert "TODO" in stub  # body is a stub, not a solution
 
 
@@ -246,8 +246,17 @@ def test_submission_distribution_structural_validation():
     ok = {
         "grid": [2, 2],
         "arrays": {
-            "A": {"axes": [{"grid_dim": 0, "scheme": "block"}, {"grid_dim": None}]},
-            "b": {"replicated": True},
+            "A": {
+                "axes": [{
+                    "grid_dim": 0,
+                    "scheme": "block"
+                }, {
+                    "grid_dim": None
+                }]
+            },
+            "b": {
+                "replicated": True
+            },
         },
     }
     s = Submission(language="c", source="void k(){}", distribution=ok)
@@ -257,12 +266,34 @@ def test_submission_distribution_structural_validation():
     with pytest.raises(ValueError, match="grid"):
         Submission(language="c", source="x", distribution={"grid": [], "arrays": {"A": {"replicated": True}}})
     with pytest.raises(ValueError, match="scheme"):
-        Submission(language="c", source="x",
-                   distribution={"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "bogus"}]}}})
+        Submission(language="c",
+                   source="x",
+                   distribution={
+                       "grid": [2],
+                       "arrays": {
+                           "A": {
+                               "axes": [{
+                                   "grid_dim": 0,
+                                   "scheme": "bogus"
+                               }]
+                           }
+                       }
+                   })
     # 'replicated' is structural (grid_dim: null or replicated: true), not a per-axis scheme.
     with pytest.raises(ValueError, match="scheme"):
-        Submission(language="c", source="x",
-                   distribution={"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "replicated"}]}}})
+        Submission(language="c",
+                   source="x",
+                   distribution={
+                       "grid": [2],
+                       "arrays": {
+                           "A": {
+                               "axes": [{
+                                   "grid_dim": 0,
+                                   "scheme": "replicated"
+                               }]
+                           }
+                       }
+                   })
     with pytest.raises(ValueError, match="arrays"):
         Submission(language="c", source="x", distribution={"grid": [2]})
 
@@ -589,7 +620,7 @@ def test_cli_tasks_residency_sweep(capsys):
 
 
 def test_residency_invariant_all_or_nothing_scalars_host():
-    """abi_contract §10: pointers share residency uniformly; scalars ALWAYS host."""
+    """abi_contract Sec. 10: pointers share residency uniformly; scalars ALWAYS host."""
     from optarena.harness.native_call import _arg_residence
     from optarena.support.bindings import binding_from_spec
     from optarena.spec import BenchSpec

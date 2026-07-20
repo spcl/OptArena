@@ -1,4 +1,4 @@
-"""CPU TVM atax — meta_schedule autotuned. return (A@x)@A. Two mat-vec reduction stages."""
+"""CPU TVM atax -- meta_schedule autotuned. return (A@x)@A. Two mat-vec reduction stages."""
 import tvm
 from tvm import te
 

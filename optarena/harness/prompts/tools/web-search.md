@@ -1,4 +1,4 @@
-### `web-search` — look up techniques and APIs
+### `web-search` -- look up techniques and APIs
 This is not a judge endpoint. You MAY use your own web-search capability to research
 optimization techniques (blocking, vectorization, the right cache-oblivious layout)
 or the exact API of a library available on the host (e.g. an OpenBLAS / FFTW / MKL

@@ -29,7 +29,7 @@ class Precision(enum.Enum):
 
     @classmethod
     def from_str(cls, name: str) -> "Precision":
-        """Look up by string value (e.g. ``"fp32"`` → :attr:`FP32`)."""
+        """Look up by string value (e.g. ``"fp32"`` -> :attr:`FP32`)."""
         for p in cls:
             if p.value == name:
                 return p

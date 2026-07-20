@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict
 
 from optarena.precision import Precision
 
-#: Distribution name → generator callable.
+#: Distribution name -> generator callable.
 DISTRIBUTIONS: Dict[str, Callable] = {}
 
 

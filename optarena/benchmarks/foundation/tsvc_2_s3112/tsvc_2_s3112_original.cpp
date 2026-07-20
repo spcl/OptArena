@@ -10,7 +10,7 @@ extern "C" {
 // ------------- Helpers -------------
 
 // ======================
-// %3.1 – Reductions
+// %3.1 - Reductions
 // ======================
 
 // s3112_d: running sum, stored into b

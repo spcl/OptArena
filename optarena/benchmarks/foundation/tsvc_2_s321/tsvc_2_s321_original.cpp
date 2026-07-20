@@ -8,7 +8,7 @@
 extern "C" {
 
 // ======================
-// %3.2 – Recurrences
+// %3.2 - Recurrences
 // ======================
 
 // s321_d: first-order linear recurrence

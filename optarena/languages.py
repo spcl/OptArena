@@ -40,7 +40,7 @@ COMPILERS_YAML: pathlib.Path = paths.ROOT / "optarena" / "envs" / "compilers.yam
 
 #: Language token -> source-file extension (no leading dot). The fourth edit
 #: when adding a language. Mirrors the per-language rendering in
-#: ``abi_contract.md`` §7.
+#: ``abi_contract.md`` Sec. 7.
 LANG_EXT: Dict[str, str] = {
     "c": "c",
     "cpp": "cpp",

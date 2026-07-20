@@ -1,0 +1,131 @@
+"""Narrow-int arithmetic wraps at the ELEMENT width, per op, like numpy.
+
+C, C++ and Fortran all promote narrow reads (int8/16/32, uint8/16/32) to int64 and compute wide, so an
+INTERMEDIATE that overflows the element width never wrapped. numpy evaluates the op at the operand
+dtype and wraps there, so results diverged whenever an intermediate overflowed before a non-linear
+step: for int8 ``a = b = 100``, numpy's ``a + b`` wraps to -56 and ``// 2`` gives -28, while the
+wide form computes 200 // 2 = 100.
+
+Each result is now wrapped back to the element type -- a cast in C/C++, a contained ``npb_wrap_*``
+procedure in Fortran, which has no truncating cast. The negative half of the suite is the important one: mixed or wider dtypes must NOT be
+wrapped, because numpy promotes those and wrapping would introduce the very divergence this fixes.
+"""
+import numpy as np
+from _op_oracle import run_op
+
+_NATIVE = ("c", "cpp", "fortran")
+
+
+def _assert_ok(res):
+    for backend, status in res.items():
+        assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"
+    assert any(status == "ok" for status in res.values()), f"all skipped (vacuous): {res}"
+
+
+def _run(src, ins, outs, dtypes, n):
+    shapes = {name: "(N,)" for name in list(ins) + list(outs)}
+    return run_op(src, "f", ins, {name: (n, ) for name in outs}, {"N": n}, shapes=shapes, dtypes=dtypes,
+                  backends=_NATIVE)
+
+
+def test_int8_intermediate_overflow_wraps():
+    # a + b overflows int8 (200 -> -56) BEFORE the floor-div, so the wrap changes the result.
+    src = ("import numpy as np\n"
+           "def f(a, b, out):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        out[i] = (a[i] + b[i]) // 2\n")
+    a = np.array([100, 60, -100, 127], dtype=np.int8)
+    b = np.array([100, 60, -100, 1], dtype=np.int8)
+    assert np.array_equal((a + b) // 2, np.array([-28, 120 // 2, 28, -64], dtype=np.int8))  # numpy anchor
+    _assert_ok(_run(src, {"a": a, "b": b}, ["out"], {"a": "int8", "b": "int8", "out": "int8"}, 4))
+
+
+def test_int16_multiply_wraps():
+    src = ("import numpy as np\n"
+           "def f(x, out):\n"
+           "    for i in range(x.shape[0]):\n"
+           "        out[i] = x[i] * x[i]\n")
+    x = np.array([30000, -30000, 181, 0], dtype=np.int16)
+    _assert_ok(_run(src, {"x": x}, ["out"], {"x": "int16", "out": "int16"}, 4))
+
+
+def test_unary_negation_of_int8_min_wraps():
+    # -(-128) is -128 in int8, not 128 -- the unary op needs the same wrap as the binary ones.
+    src = ("import numpy as np\n"
+           "def f(m, out):\n"
+           "    for i in range(m.shape[0]):\n"
+           "        out[i] = -m[i]\n")
+    m = np.array([-128, -1, 127], dtype=np.int8)
+    _assert_ok(_run(src, {"m": m}, ["out"], {"m": "int8", "out": "int8"}, 3))
+
+
+def test_uint8_subtraction_wraps_modulo():
+    src = ("import numpy as np\n"
+           "def f(a, b, out):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        out[i] = a[i] - b[i]\n")
+    a = np.array([0, 5, 255], dtype=np.uint8)
+    b = np.array([1, 10, 255], dtype=np.uint8)
+    assert np.array_equal(a - b, np.array([255, 251, 0], dtype=np.uint8))  # numpy anchor
+    _assert_ok(_run(src, {"a": a, "b": b}, ["out"], {"a": "uint8", "b": "uint8", "out": "uint8"}, 3))
+
+
+def test_int32_accumulator_wraps():
+    src = ("import numpy as np\n"
+           "def f(x, out):\n"
+           "    for i in range(x.shape[0]):\n"
+           "        out[i] = x[i] * x[i] + x[i]\n")
+    x = np.array([2**15, 2**16, -(2**16), 3], dtype=np.int32)
+    _assert_ok(_run(src, {"x": x}, ["out"], {"x": "int32", "out": "int32"}, 4))
+
+
+# --- the wrap must NOT fire where numpy promotes -------------------------------------------------
+def test_int64_operands_are_not_wrapped():
+    # int64 IS the compute width; a wrap here would be a no-op at best and must not truncate.
+    src = ("import numpy as np\n"
+           "def f(x, out):\n"
+           "    for i in range(x.shape[0]):\n"
+           "        out[i] = x[i] * x[i]\n")
+    x = np.array([2**20, 2**31, -(2**20)], dtype=np.int64)
+    _assert_ok(_run(src, {"x": x}, ["out"], {"x": "int64", "out": "int64"}, 3))
+
+
+def test_mixed_narrow_and_wide_promotes_and_is_not_wrapped():
+    # numpy promotes int8 + int64 to int64, so the sum must NOT be truncated back to int8.
+    src = ("import numpy as np\n"
+           "def f(a, w, out):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        out[i] = a[i] + w[i]\n")
+    a = np.array([100, 100], dtype=np.int8)
+    w = np.array([100, 10**6], dtype=np.int64)
+    assert np.array_equal(a + w, np.array([200, 1000100], dtype=np.int64))  # promotes, no wrap
+    _assert_ok(_run(src, {"a": a, "w": w}, ["out"], {"a": "int8", "w": "int64", "out": "int64"}, 2))
+
+
+def test_logical_negation_is_not_wrapped():
+    # `not x` yields a LOGICAL, not an integer. Wrapping it is a hard type error in Fortran
+    # ("'a' argument of 'int' intrinsic must have a numeric type") and meaningless in C -- this is
+    # what broke cloudsc, whose masks are narrow-int-backed booleans.
+    src = ("import numpy as np\n"
+           "def f(flag, x, out):\n"
+           "    for i in range(x.shape[0]):\n"
+           "        if not flag[i]:\n"
+           "            out[i] = x[i]\n"
+           "        else:\n"
+           "            out[i] = 0\n")
+    flag = np.array([0, 1, 0, 1], dtype=np.int32)
+    x = np.array([5, 6, 7, 8], dtype=np.int32)
+    res = run_op(src, "f", {"flag": flag, "x": x}, {"out": (4, )}, {"N": 4},
+                 shapes={"flag": "(N,)", "x": "(N,)", "out": "(N,)"},
+                 dtypes={"flag": "int32", "x": "int32", "out": "int32"}, backends=_NATIVE)
+    _assert_ok(res)
+
+
+def test_float_operand_disables_the_int_wrap():
+    # An int8 array combined with a float must compute (and stay) in floating point.
+    src = ("import numpy as np\n"
+           "def f(a, out):\n"
+           "    for i in range(a.shape[0]):\n"
+           "        out[i] = a[i] * 3.5\n")
+    a = np.array([100, 120], dtype=np.int8)
+    _assert_ok(_run(src, {"a": a}, ["out"], {"a": "int8", "out": "float64"}, 2))

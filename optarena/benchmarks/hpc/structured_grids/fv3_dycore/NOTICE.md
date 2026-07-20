@@ -1,4 +1,4 @@
-# Provenance notice — FV3 dycore transport benchmark
+# Provenance notice -- FV3 dycore transport benchmark
 
 The numpy port in this directory is **derived from** NOAA-GFDL/PyFV3, the
 GT4Py/GTScript implementation of the GFDL FV3 dynamical core.
@@ -35,7 +35,7 @@ Ported and validated (per-stencil, bit-exact vs GT4Py):
 | `stencils/fvtp2d.py` `q_i_stencil` | `q_i_stencil` | Y |
 | `stencils/fvtp2d.py` `q_j_stencil` | `q_j_stencil` | Y |
 | `stencils/fvtp2d.py` `final_fluxes` | `final_fluxes` | Y |
-| `stencils/fvtp2d.py` `FiniteVolumeTransport.__call__` (no del-n, grid_type≥3) | `finite_volume_transport` | Y (composition, deep interior) |
+| `stencils/fvtp2d.py` `FiniteVolumeTransport.__call__` (no del-n, grid_type>=3) | `finite_volume_transport` | Y (composition, deep interior) |
 | `stencils/copy_corners.py` `_blind_copy_corners_x/_y` | `copy_corners_x/_y` | Y (identity transcription) |
 | `stencils/delnflux.py` `fx_calculation` / `fy_calculation` | `fx_calc` / `fy_calc` | Y |
 | `stencils/delnflux.py` `d2_damp_interval` (nord==0) | `d2_damp` | Y |

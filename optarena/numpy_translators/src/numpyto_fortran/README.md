@@ -1,6 +1,6 @@
 # NumpyToFortran
 
-Python (numpy-numeric subset) → Fortran 2008 emitter. Reuses
+Python (numpy-numeric subset) -> Fortran 2008 emitter. Reuses
 NumpyToC's IR + frontend + lowering passes; only the body walker
 differs.
 

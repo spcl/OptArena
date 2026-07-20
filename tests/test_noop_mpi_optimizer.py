@@ -54,7 +54,7 @@ def test_declared_distribution_resolves_and_round_trips():
 
 
 def test_c_reference_signature_matches_generated_stub():
-    """The hand-authored reference signature must equal the generated §12 stub's, or the driver would
+    """The hand-authored reference signature must equal the generated Sec. 12 stub's, or the driver would
     pass arguments the kernel reads in the wrong slots -- a silent miscompute the compiler can't catch."""
     binding = binding_from_spec(BenchSpec.load("scaled_add"))
     assert mpi_symbol(binding) == "scaled_add_mpi"

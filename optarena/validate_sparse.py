@@ -1,4 +1,4 @@
-"""Sparse-layout validator — the structural rules for a sparse benchmark.
+"""Sparse-layout validator -- the structural rules for a sparse benchmark.
 
 Loads a sparse-layout block (typically the ``sparse_layouts`` /
 ``configurations`` / ``distributions`` triple on a :class:`BenchSpec`)

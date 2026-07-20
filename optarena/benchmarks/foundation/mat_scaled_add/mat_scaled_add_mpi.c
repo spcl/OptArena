@@ -1,4 +1,4 @@
-/* Reference distributed kernel_mpi for mat_scaled_add (abi_contract.md §12) -- the identity
+/* Reference distributed kernel_mpi for mat_scaled_add (abi_contract.md Sec. 12) -- the identity
    solution NoOpMPIOptimizer submits for the MPI track's 2-D BLOCK-CYCLIC demonstrator.
 
    mat_scaled_add is a pure elementwise map (B += alpha*A) with no cross-rank dependence, so each

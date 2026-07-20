@@ -53,10 +53,10 @@ def _exec_desugared(src: str, scope: dict) -> dict:
 
 def test_eigvalsh_lowers_to_eigenvalues_only_nest():
     """``w = np.linalg.eigvalsh(A)`` rewrites to the shared cyclic-Jacobi sweep
-    bound to a single Name -- no ``L⁻ᴴ`` back-transform, no eigenvector output."""
+    bound to a single Name -- no ``L^-H`` back-transform, no eigenvector output."""
     txt = ast.unparse(ast.Module(body=_desugar_body(_EIGVALSH_SRC), type_ignores=[]))
     assert "np.hypot" in txt                        # the Jacobi sweep is emitted
-    assert "_X" not in txt                          # no back-transform x = L⁻ᴴ y
+    assert "_X" not in txt                          # no back-transform x = L^-H y
     assert txt.rstrip().endswith("w = __eigh0_wa")  # binds ONLY the eigenvalue vector
 
 

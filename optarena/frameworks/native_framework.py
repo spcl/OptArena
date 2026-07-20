@@ -80,7 +80,7 @@ class NativeFramework(Framework):
         return perf_reports.objdump(so)
 
     def _abi_order(self, bench: Benchmark) -> Optional[List[str]]:
-        """The C-ABI argument names in canonical order (§4: sorted pointers, then sorted scalars),
+        """The C-ABI argument names in canonical order (Sec. 4: sorted pointers, then sorted scalars),
         derived from the manifest via :func:`binding_from_spec`; ``None`` if unresolvable (legacy wrapper
         -> fall back to input_args order)."""
         key = bench.bname

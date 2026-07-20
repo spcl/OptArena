@@ -13,11 +13,11 @@ harness supplies), so anything here is linkable as `-l<name>`. The base image is
 
 Scope: CPU numeric libraries for the 13 Berkeley dwarfs (dense/sparse linear algebra,
 spectral, structured/unstructured grids, N-body, tensor). GPU math libraries (cuBLAS,
-cuTENSOR, rocBLAS, …) ship with the CUDA/ROCm toolkits in the `HW=nvidia` / `HW=amd`
+cuTENSOR, rocBLAS, ...) ship with the CUDA/ROCm toolkits in the `HW=nvidia` / `HW=amd`
 build of `optarena.Dockerfile` and are tracked separately in `optarena/envs/toolset.yaml`.
 
-Legend: **[have]** already installed · **[add-apt]** apt, add to the images ·
-**[add-src]** build from source (not packaged) · **[opt]** optional/heavy, listed not
+Legend: **[have]** already installed . **[add-apt]** apt, add to the images .
+**[add-src]** build from source (not packaged) . **[opt]** optional/heavy, listed not
 installed by default.
 
 ---
@@ -53,13 +53,13 @@ installed by default.
 | TBLIS | github.com/devinamatthews/tblis | BLAS-free tensor contraction | **[opt] [add-src]** |
 
 HPTT is built **scalar** (the portable, non-AVX target) so the library runs on any CPU
-the agent or judge lands on. Installed to `/usr/local` → `-lhptt`, `#include <hptt.h>`.
+the agent or judge lands on. Installed to `/usr/local` -> `-lhptt`, `#include <hptt.h>`.
 
 ## SIMD / vectorization helpers
 
 | Library | apt package | Provides | Status |
 |---|---|---|---|
-| SLEEF | `libsleef-dev` | vectorized libm (sin/exp/… as SIMD) | **[add-apt]** |
+| SLEEF | `libsleef-dev` | vectorized libm (sin/exp/... as SIMD) | **[add-apt]** |
 | xsimd | `libxsimd-dev` | header-only C++ SIMD wrapper | **[add-apt]** |
 | Highway | `libhwy-dev` | Google Highway portable SIMD | **[add-apt]** |
 
@@ -78,7 +78,7 @@ the agent or judge lands on. Installed to `/usr/local` → `-lhptt`, `#include <
 
 | Library | apt package | Status |
 |---|---|---|
-| SuiteSparse (UMFPACK/CHOLMOD/…) | `libsuitesparse-dev` | **[have]** |
+| SuiteSparse (UMFPACK/CHOLMOD/...) | `libsuitesparse-dev` | **[have]** |
 | SuperLU | `libsuperlu-dev` | **[have]** |
 | MUMPS (serial) | `libmumps-seq-dev` | **[have]** |
 | HYPRE | `libhypre-dev` | **[have]** |

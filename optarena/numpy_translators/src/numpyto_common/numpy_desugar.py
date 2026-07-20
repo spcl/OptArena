@@ -931,7 +931,8 @@ def _reduce_axis_stmts(tname: str,
                        ctr: int,
                        keepdims: bool = False,
                        elem_is_float: bool = False,
-                       ddof: int = 0) -> List[ast.stmt]:
+                       ddof: int = 0,
+                       elem_kind: Optional[str] = None) -> List[ast.stmt]:
     """Source statements reducing ``sname`` over ``axes`` (a sorted list of one or
     more axis indices) into a freshly allocated ``tname`` via an explicit loop nest
     -- the numba/pythran-compatible form of ``np.sum/prod/mean/min/max/argmin/
@@ -952,8 +953,13 @@ def _reduce_axis_stmts(tname: str,
     # rule). ``{sname}.dtype`` resolves the concrete width at compile time and is
     # numba/pythran-safe (already used by the sum/prod/min/max branch).
     float_res = f"{sname}.dtype" if elem_is_float else "np.float64"
+    # ``sum``/``prod`` over a bool or NARROW integer input accumulate in int64 -- numpy
+    # upcasts an integer accumulator to the platform int, so keeping the input width here
+    # wraps instead: int32 columns summing past 2^31 came back negative on numba.
+    # min/max/argmin/argmax pick an ELEMENT, so they keep the input dtype.
+    acc_res = "np.int64" if (op in ("sum", "prod") and elem_kind in ("int", "bool")) else f"{sname}.dtype"
     dtype = ("np.int64" if is_arg else
-             "np.bool_" if op in ("any", "all") else float_res if op in ("mean", "std", "var") else f"{sname}.dtype")
+             "np.bool_" if op in ("any", "all") else float_res if op in ("mean", "std", "var") else acc_res)
     shape_dims = [(d[i] if i in out_axes else "1") for i in range(rank)] if keepdims else [d[i] for i in out_axes]
     lines.append(f"{tname} = np.empty(({''.join(s + ', ' for s in shape_dims)}), {dtype})")
     o = {i: f"{p}_k{i}" for i in out_axes}
@@ -1086,8 +1092,9 @@ class _ReduceAxisHoister(ast.NodeTransformer):
             elif dkw is not None:
                 return node  # non-constant ddof: cannot fold the divisor, leave verbatim
         temp = f"__rdo{self.ctr}"
-        elem_is_float = _dtype_kind(arg, self.dtypes) == "float"
-        self.pre.extend(_reduce_axis_stmts(temp, sname, op, axes, rank, self.ctr, keepdims, elem_is_float, ddof))
+        elem_kind = _dtype_kind(arg, self.dtypes)
+        self.pre.extend(
+            _reduce_axis_stmts(temp, sname, op, axes, rank, self.ctr, keepdims, elem_kind == "float", ddof, elem_kind))
         self.ctr += 1
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
@@ -2793,7 +2800,7 @@ def _cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) 
 
     ``hermitian`` (complex-Hermitian positive-definite ``a``, e.g. the metric
     ``b`` in a generalized eigenproblem) conjugates the second factor of every
-    inner product (``a = L Lᴴ``) and takes the real part before ``sqrt``
+    inner product (``a = L L^H``) and takes the real part before ``sqrt``
     (Hermitian diagonals are real up to roundoff); a real ``a`` reduces to the
     plain form."""
     cj = "np.conj({0})" if hermitian else "{0}"
@@ -2982,13 +2989,13 @@ def _eigh_jacobi_lines(w: str, y: str, c: str, n: str, p: str) -> List[str]:
     complex Jacobi into eigenvalues ``w`` (ascending real, shape ``(n,)``) and
     eigenvectors ``y`` (unitary columns). Each sweep rotates every off-diagonal
     pair ``(pp, qq)`` to zero with a unitary ``J`` (phase ``apq/|apq|`` then a
-    real symmetric Jacobi angle); the two-sided update ``A = Jᴴ A J`` runs as
+    real symmetric Jacobi angle); the two-sided update ``A = J^H A J`` runs as
     explicit column/row loops. Selection-sort ascending at the end (matches
     numpy.linalg.eigh's order). ``n`` is explicit (not ``c.shape[0]``) so
     C/Fortran see the resolved dimension symbol, not a temp's ``.shape``.
     Validated against numpy to ~5e-15."""
     # Diagonalise ``c`` IN PLACE -- the caller always passes a fresh, disposable
-    # matrix (the reduced ``L⁻¹ a L⁻ᴴ`` or an ``ascontiguousarray`` copy), so no
+    # matrix (the reduced ``L^-1 a L^-H`` or an ``ascontiguousarray`` copy), so no
     # extra working copy is needed (and the C/Fortran backends need not infer a
     # copy-temp's complex dtype).
     a, v = c, f"{p}_jv"
@@ -3026,7 +3033,7 @@ def _eigh_jacobi_lines(w: str, y: str, c: str, n: str, p: str) -> List[str]:
         f"                {p}_akq = {a}[{p}_k, {p}_qq]",
         f"                {a}[{p}_k, {p}_pp] = {p}_c * {p}_akp - {p}_s * np.conj({p}_ephi) * {p}_akq",
         f"                {a}[{p}_k, {p}_qq] = {p}_s * {p}_ephi * {p}_akp + {p}_c * {p}_akq",
-        f"            for {p}_k in range({n}):",  # Jᴴ @ A : rows pp, qq
+        f"            for {p}_k in range({n}):",  # J^H @ A : rows pp, qq
         f"                {p}_apk = {a}[{p}_pp, {p}_k]",
         f"                {p}_aqk = {a}[{p}_qq, {p}_k]",
         f"                {a}[{p}_pp, {p}_k] = {p}_c * {p}_apk - {p}_s * {p}_ephi * {p}_aqk",
@@ -3067,9 +3074,9 @@ def _eigh_stmts(w: str,
     """Source lines for ``w, v = eigh(a[, b])[subset lo:hi]`` (ascending).
 
     The generalized Hermitian problem ``a x = w b x`` reduces to standard form
-    via the Cholesky factor of ``b`` (``b = L Lᴴ``): ``C = L⁻¹ a L⁻ᴴ`` is
+    via the Cholesky factor of ``b`` (``b = L L^H``): ``C = L^-1 a L^-H`` is
     Hermitian with the same eigenvalues, and its eigenvectors back-transform
-    as ``x = L⁻ᴴ y``. ``cholesky``/``inv``/``@`` stay ``np.linalg``/matmul for
+    as ``x = L^-H y``. ``cholesky``/``inv``/``@`` stay ``np.linalg``/matmul for
     native backends (numba/dace) and are lowered by :class:`_LinalgInline` for
     pythran. The standard eigh is the self-contained Jacobi above, unless
     ``native_std`` (backends whose ``np.linalg.eigh`` handles standard
@@ -3108,15 +3115,15 @@ def _eigh_c_stmts(w: str,
                   eigenvalues_only: bool = False) -> List[str]:
     """Fully self-contained loop lowering of standard/generalized complex-
     Hermitian ``eigh`` for the C/Fortran backends, which have no ``np.linalg``
-    and no matmul lowering for the ``L⁻ᴴ`` conjugate-transpose operand. Emits
-    explicit loops only: complex-Hermitian Cholesky ``b = L Lᴴ``, the lower-
-    triangular inverse ``L⁻¹`` by forward substitution, the two matmuls
-    ``C = L⁻¹ a L⁻ᴴ``, the cyclic complex Jacobi, and the back-transform
-    ``x = L⁻ᴴ y``. Matmul outputs are pre-zeroed and ``+=``-accumulated; a
+    and no matmul lowering for the ``L^-H`` conjugate-transpose operand. Emits
+    explicit loops only: complex-Hermitian Cholesky ``b = L L^H``, the lower-
+    triangular inverse ``L^-1`` by forward substitution, the two matmuls
+    ``C = L^-1 a L^-H``, the cyclic complex Jacobi, and the back-transform
+    ``x = L^-H y``. Matmul outputs are pre-zeroed and ``+=``-accumulated; a
     complex zero is ``z - z``. Validated vs scipy ~1e-15.
 
     ``eigenvalues_only`` (``np.linalg.eigvalsh``) binds only the ascending
-    eigenvalue vector ``w``: the same Jacobi sweep runs, but the ``L⁻ᴴ``
+    eigenvalue vector ``w``: the same Jacobi sweep runs, but the ``L^-H``
     back-transform and eigenvector output ``v`` are dropped (``v`` is
     ``None``). numpy has no generalized eigvalsh, so this path always has
     ``b`` None."""

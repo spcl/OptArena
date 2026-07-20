@@ -43,7 +43,7 @@ def _grade(spec: BenchSpec, expected: Dict, actual: Dict, rtol: float, atol: flo
     max_err = 0.0
     detail = ""
     for name in spec.output_args:
-        # complex-aware, NaN/±Inf-aware; shared with the judge
+        # complex-aware, NaN/+-Inf-aware; shared with the judge
         good, err, det = compare_arrays(expected[name], actual[name], rtol=rtol, atol=atol)
         max_err = max(max_err, err)
         if not good:

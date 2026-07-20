@@ -8,7 +8,7 @@
 extern "C" {
 
 // ======================
-// %3.3 – Search loops
+// %3.3 - Search loops
 // ======================
 
 // s331_d: last index with a[i] < 0

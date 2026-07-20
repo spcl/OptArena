@@ -23,7 +23,7 @@ _REF_GLOB = {"c": "*_fp64.c", "cpp": "*_fp64.cpp", "fortran": "*_fp64.f90"}
 #: agent language -> numpy_translators --target.
 _LANG_TARGET = {"c": "c", "cpp": "c", "fortran": "fortran"}
 
-#: agent language -> shipped reference kernel_mpi filename suffix (hand-authored, abi_contract.md §12).
+#: agent language -> shipped reference kernel_mpi filename suffix (hand-authored, abi_contract.md Sec. 12).
 _MPI_REF_SUFFIX = {"c": "_mpi.c", "cpp": "_mpi.c", "python": "_mpi.py"}
 
 
@@ -82,7 +82,7 @@ def reference_source(task: Task) -> str:
 
 
 def reference_mpi_source(task: Task) -> str:
-    """Read the shipped hand-authored reference kernel_mpi for task's kernel + language (abi_contract.md §12)."""
+    """Read the shipped hand-authored reference kernel_mpi for task's kernel + language (abi_contract.md Sec. 12)."""
     suffix = _MPI_REF_SUFFIX.get(task.language)
     if suffix is None:
         raise NotImplementedError(f"no MPI reference for language {task.language!r}")

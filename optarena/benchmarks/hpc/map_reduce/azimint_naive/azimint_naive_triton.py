@@ -70,7 +70,7 @@ def _accumulate_bins_kernel(data_ptr, radius_ptr, sums_ptr, counts_ptr, N, n_bin
 
     counter = tl.sum((in_bin & mask), axis=0)
 
-    # TODO(triton): fp32 fails ~1.9e-4 — atomic-add order across blocks is nondeterministic.
+    # TODO(triton): fp32 fails ~1.9e-4 -- atomic-add order across blocks is nondeterministic.
     tl.atomic_add(sums_ptr + bin_idx, value)
     tl.atomic_add(counts_ptr + bin_idx, counter)
 

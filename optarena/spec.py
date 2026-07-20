@@ -232,7 +232,7 @@ SUPPORTED_SPARSE_FORMATS = frozenset({
     "bcoo",  # Block COO -- COO with R x C dense value blocks.
     "ell",
     "packed_banded",
-    # v2 additions per session decision (JDS + SELL-C-σ only):
+    # v2 additions per session decision (JDS + SELL-C-sigma only):
     "jds",
     "sell_c_sigma",
 })
@@ -735,7 +735,7 @@ class BenchSpec:
         output_args = tuple(bench["output_args"])
 
         # Reserved ABI names (workspace / workspace_size) belong to the
-        # harness (abi_contract.md §11). Reject a manifest that uses one at INGEST so
+        # harness (abi_contract.md Sec. 11). Reject a manifest that uses one at INGEST so
         # the error is clear here, not deep in binding assembly. Deferred import
         # avoids a cycle (contract imports from spec).
         from optarena.support.bindings.contract import RESERVED_ARG_NAMES

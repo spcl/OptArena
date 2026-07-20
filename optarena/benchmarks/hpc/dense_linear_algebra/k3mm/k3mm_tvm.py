@@ -1,4 +1,4 @@
-"""CPU TVM k3mm — meta_schedule autotuned. return A@B@C@D: three topi.matmul stages."""
+"""CPU TVM k3mm -- meta_schedule autotuned. return A@B@C@D: three topi.matmul stages."""
 import tvm
 from tvm import te
 import tvm.topi as topi
