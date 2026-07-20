@@ -105,6 +105,55 @@ def test_sibling_loop_nests_may_reuse_a_name_at_different_shapes():
     _assert_ok(_run(src))
 
 
+def test_two_shapes_per_loop_iteration_are_not_refused():
+    """daubechies_dwt2d's shape: a name re-bound to a second extent inside a loop body, where the
+    re-entry read is preceded by a re-binding at the TOP of the body.
+
+    The rows pass binds ``e`` to one extent, the columns pass re-binds it to another, and the next
+    iteration re-assigns ``e`` before reading it -- so the read never sees the columns binding and
+    there is nothing ambiguous. A liveness check that scanned the whole re-entry prefix without
+    stopping at that kill refused this, breaking daubechies_dwt2d and ls3df_scf on all three native
+    backends. Both had always emitted correct code.
+    """
+    src = ("import numpy as np\n"
+           "def f(a, out):\n"
+           "    n = a.shape[0]\n"
+           "    for lvl in range(2):\n"
+           "        e = np.zeros(n)\n"
+           "        for j in range(n):\n"
+           "            e[j] = a[j] + lvl\n"
+           "        s = 0.0\n"
+           "        for j in range(n):\n"
+           "            s = s + e[j]\n"
+           "        e = np.zeros(2 * n)\n"
+           "        for j in range(2 * n):\n"
+           "            e[j] = s\n"
+           "        out[lvl] = e[0]\n")
+    _assert_ok(_run(src))
+
+
+def test_reentry_read_before_any_rebinding_is_still_refused():
+    """The kill is what makes the loop case safe, so a body with NO kill before the read must still
+    be refused -- otherwise this change would have traded a false positive for a false negative.
+
+    Here ``x`` is bound before the loop and re-bound at a second extent inside it, with the re-entry
+    read at the top of the body reaching that second binding. Which extent that read sees depends on
+    the iteration, so no static buffer choice is right.
+    """
+    src = ("import numpy as np\n"
+           "def f(a, out):\n"
+           "    n = a.shape[0]\n"
+           "    x = np.zeros(n)\n"
+           "    for i in range(n):\n"
+           "        out[i] = x[0]\n"
+           "        x = np.zeros(2 * n)\n"
+           "        for j in range(2 * n):\n"
+           "            x[j] = a[i]\n")
+    for backend, status in _run(src).items():
+        assert status.startswith("FAIL:emit:NotImplementedError"), f"{backend}: {status}"
+        assert "conditional control flow" in status, f"{backend}: {status}"
+
+
 def test_rebinding_confined_to_a_loop_body_does_not_escape():
     # x is re-bound and fully consumed inside the loop body; nothing after the loop reads it, so
     # there is no ambiguity to refuse and the kernel must still translate.

@@ -1477,6 +1477,49 @@ def _read_in(name: str, blocks: "Tuple[List[ast.stmt], ...]") -> bool:
     return False
 
 
+def _rebinds(stmt: ast.stmt, name: str) -> bool:
+    """True when ``stmt`` unconditionally re-binds ``name`` at its own statement level.
+
+    Only forms that ALWAYS execute when the statement is reached count, so a
+    re-binding buried in an ``if`` does not qualify -- it does not dominate what
+    follows. ``AugAssign`` is a read plus a write of the SAME buffer, so it never
+    kills a binding.
+    """
+    if isinstance(stmt, ast.Assign):
+        for tgt in stmt.targets:
+            if isinstance(tgt, ast.Name) and tgt.id == name:
+                return True
+            # Tuple unpacking (``X, Y = Y, Z``) re-binds every element it names.
+            if isinstance(tgt, ast.Tuple):
+                if any(isinstance(e, ast.Name) and e.id == name for e in tgt.elts):
+                    return True
+    if isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
+        return stmt.target.id == name
+    return False
+
+
+def _live_on_loop_reentry(stmts: List[ast.stmt], i: int,
+                          name: str) -> "Tuple[List[ast.stmt], ...]":
+    """The loop-body prefix whose reads of ``name`` can see the binding made at
+    ``stmts[i]``.
+
+    Re-entering a loop body runs ``stmts[:i]`` again AFTER ``stmts[i]``, so those
+    reads are part of the liveness question -- but only up to the first statement
+    that re-binds ``name``. Past that point the read sees the fresh binding, not
+    the one minted at ``stmts[i]``.
+
+    Ignoring the kill is what made the refusal reject working kernels:
+    daubechies_dwt2d assigns ``e`` twice per level (rows then columns) and
+    ls3df_scf re-binds ``X`` twice per SCF iteration, both re-assigning at the top
+    of the next iteration before any read. Both had always emitted correct code.
+    """
+    prefix = stmts[:i]
+    for j, stmt in enumerate(prefix):
+        if _rebinds(stmt, name):
+            return (prefix[:j], )
+    return (prefix, )
+
+
 def _ssa_rename_reassigned(tree: ast.AST,
                             arrays_shapes: Dict[str, List[str]]) -> None:
     """SSA-style rename for Names reassigned with different broadcast
@@ -1618,13 +1661,15 @@ def _ssa_rename_reassigned(tree: ast.AST,
                             # independent temporaries in sibling loop nests) is unambiguous.
                             # Inside a loop body the statements BEFORE this one also run after it,
                             # on the next iteration, so a read there sees the previous binding.
-                            after = live_after + ((stmts[:i], ) if loop_body else ())
+                            after = live_after + (
+                                _live_on_loop_reentry(stmts, i, orig) if loop_body else ())
                             if nested and _read_in(orig, after):
                                 raise NotImplementedError(
-                                    f"{orig!r} is re-bound to a different shape inside conditional "
-                                    f"control flow and read again afterwards; which buffer that read "
-                                    f"sees is not decidable statically. Hoist the re-binding to "
-                                    f"function scope, or give the two shapes separate names.")
+                                    f"{orig!r} (line {stmt.lineno}) is re-bound to a different shape "
+                                    f"inside conditional control flow and read again afterwards; "
+                                    f"which buffer that read sees is not decidable statically. Hoist "
+                                    f"the re-binding to function scope, or give the two shapes "
+                                    f"separate names.")
                             n = len(version[orig])
                             name_for_shape = f"{orig}__v{n}"
                         version[orig][shape_toks] = name_for_shape
