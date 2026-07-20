@@ -1648,9 +1648,8 @@ def _ssa_rename_reassigned(tree: ast.AST, arrays_shapes: Dict[str, List[str]]) -
                             # First occurrence -- keep the original name.
                             name_for_shape = orig
                         else:
-                            # Minting a SECOND buffer for this name inside an if/loop body means
-                            # Minting a second buffer inside an if/loop body is only a problem
-                            # when the name is LIVE AFTER that body: the rename cannot survive the
+                            # Minting a second buffer for this name inside an if/loop body is only a
+                            # problem when the name is LIVE AFTER that body: the rename cannot survive the
                             # block, so a later read would bind to a buffer the untaken path never
                             # wrote -- SIGSEGV in C/C++, silently wrong values in Fortran. A name
                             # that is fully consumed inside the block (the common case: two
