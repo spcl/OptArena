@@ -53,6 +53,33 @@ def build_cpp_reference():
     return CPP_LIBRARY
 
 
+def run_argtypes():
+    """ABI of srad_run_ref / srad_ref: six f64 grids, seven ints, lambda, apply_exp.
+
+    Shared because ``CDLL.__getitem__`` hands back a FRESH, unconfigured function pointer on every
+    lookup (unlike attribute access, which caches the configured one on the instance), so a
+    by-name resolution has to re-declare the signature or ctypes cannot convert the array args.
+    """
+    f64 = ndpointer(np.float64, flags="C_CONTIGUOUS")
+    return [
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_double,
+        ctypes.c_int,
+    ]
+
+
 def load_cpp_reference():
     lib = ctypes.CDLL(str(build_cpp_reference()))
     f64 = ndpointer(np.float64, flags="C_CONTIGUOUS")
@@ -117,26 +144,9 @@ def load_cpp_reference():
     ]
     lib.srad_update_image_ref.restype = ctypes.c_int
 
-    run_args = [
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_double,
-        ctypes.c_int,
-    ]
-    lib.srad_run_ref.argtypes = run_args
+    lib.srad_run_ref.argtypes = run_argtypes()
     lib.srad_run_ref.restype = ctypes.c_int
-    lib.srad_ref.argtypes = run_args
+    lib.srad_ref.argtypes = run_argtypes()
     lib.srad_ref.restype = ctypes.c_int
     return lib
 
@@ -387,7 +397,9 @@ def cpp_run(lib, inputs, symbol="srad_run_ref", from_raw=False):
     dW = np.zeros_like(inputs[1])
     dE = np.zeros_like(inputs[1])
     c = np.zeros_like(inputs[1])
-    fn = lib[symbol]  # ctypes resolves a symbol by name via __getitem__ (no getattr)
+    fn = lib[symbol]  # by-name lookup returns an unconfigured pointer -- declare the ABI on it
+    fn.argtypes = run_argtypes()
+    fn.restype = ctypes.c_int
     status = fn(
         J,
         dN,
