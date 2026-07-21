@@ -226,7 +226,7 @@ jobs:
         # --timeout=900.
         if: ${{ !cancelled() }}
         run: |
-          python -m pytest -q -p no:cacheprovider -rf -n auto --timeout=900 \
+          python -m pytest -q -p no:cacheprovider -rfsxX -n auto --timeout=900 \
             optarena/numpy_translators/tests/
 
       - name: Phase 2b -- port fidelity (numpy port vs original C/C++/Fortran reference)

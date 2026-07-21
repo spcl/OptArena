@@ -11,15 +11,11 @@ is the plain form exercised here.
 The first two tests exec the desugared loop nest as numpy and compare against
 ``numpy.linalg.eigvalsh`` -- the same exec-the-desugar validation the existing
 eigh tests use (``test_translator_feature_fixes.test_eigh_generalized_subset_matches_scipy``).
-The third (xfail) drives the full C/Fortran compile+run oracle; it is blocked by a
-PRE-EXISTING emitter type-inference gap (documented on the marker) that breaks the
-baseline ``eigh`` identically, and lives in ``numpyto_common/lowering.py`` -- not in
-the desugar. It flips to XPASS once that emitter gap is fixed.
+The third drives the full C/Fortran compile+run oracle.
 """
 import ast
 
 import numpy as np
-import pytest
 
 from _op_oracle import run_op
 from numpyto_common.numpy_desugar import _EighLoopRewriter, _eigh_alias_names
@@ -71,13 +67,6 @@ def test_eigvalsh_desugar_matches_numpy():
     assert np.all(np.diff(w) >= -1e-9)  # ascending, like numpy
 
 
-@pytest.mark.xfail(
-    reason="PRE-EXISTING emitter gap (not the desugar): the C/Fortran type inference in "
-    "numpyto_common/lowering.py declares the Jacobi's real scalar temps derived from "
-    "`.real`/`.imag` (e.g. tau, app, aqq) as complex, so `tau >= 0.0` / `conjg(real)` "
-    "fail to compile. Breaks baseline `eigh` identically; XPASSes once that is fixed.",
-    strict=False,
-)
 def test_eigvalsh_native_c_fortran_matches_numpy():
     """Full C + Fortran compile+run of ``w[:] = np.linalg.eigvalsh(A)`` vs numpy."""
     n = 5
