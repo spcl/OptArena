@@ -408,7 +408,7 @@ class _FortranBodyEmitter(BaseEmitter):
     def _emit_return(self, node: ast.Return, indent: str) -> str:
         # In a HELPER subroutine the returned value is written to the out-param
         # return_mode (Fortran has no by-value return in this scheme), then a bare return.
-        mode = getattr(self, "return_mode", None)
+        mode = vars(self).get("return_mode")
         if mode is not None and node.value is not None:
             return f"{indent}{mode} = {self.emit_expr(node.value)}\n{indent}return"
         return f"{indent}return"
@@ -679,7 +679,7 @@ class _FortranBodyEmitter(BaseEmitter):
             # For locals whose shape uses a loop iter, emit an ALLOCATE here (the
             # loop iter is now in scope); caller pre-populates inline_alloc_locals.
             if isinstance(target, ast.Name):
-                inline = getattr(self, "inline_alloc_locals", {})
+                inline = vars(self).get("inline_alloc_locals", {})
                 if target.id in inline:
                     rev_shape, _ftype = inline[target.id]
                     dims = ", ".join(rev_shape)
@@ -1089,7 +1089,7 @@ class _FortranBodyEmitter(BaseEmitter):
                     f"{self.emit_expr(node.test)})")
         # A bare z.real/z.imag never reaches emit: native_desugar rewrites it to
         # np.real(z)/np.imag(z) at parse time, handled by that canonical call form.
-        raise NotImplementedError(f"expression {type(node).__name__} (line {getattr(node, 'lineno', '?')})")
+        raise NotImplementedError(f"expression {type(node).__name__} (line {vars(node).get('lineno', '?')})")
 
     def _emit_merge_branch(self, branch: ast.AST, partner: ast.AST) -> str:
         """Emit one merge branch, suffixing an integer literal with its integer partner's KIND."""
@@ -1137,7 +1137,7 @@ class _FortranBodyEmitter(BaseEmitter):
                     return self._int_tag(decl.dtype) is None and decl.dtype != "bool"
             # Fresh local arrays carry their resolved element dtype in the emit-time
             # local-dtype map, not in kir.arrays.
-            dt = getattr(self, "_local_elem_dtypes", {}).get(base.id)
+            dt = vars(self).get("_local_elem_dtypes", {}).get(base.id)
             if dt is not None:
                 return self._int_tag(dt) is None and dt not in ("bool", "bool_")
             return False
@@ -1179,7 +1179,7 @@ class _FortranBodyEmitter(BaseEmitter):
         # Boolean-mask indexing arr[mask] -> Fortran PACK(arr, mask). Detect by
         # looking at the slice slot for a Name resolving to a known-logical local.
         if (isinstance(node.value, ast.Name) and isinstance(node.slice, ast.Name)):
-            logical_locals = getattr(self, "_logical_array_locals", set())
+            logical_locals = vars(self).get("_logical_array_locals", set())
             if node.slice.id in logical_locals:
                 return f"PACK({node.value.id}, {node.slice.id})"
         # Tuple subscripted by a constant integer: resolve at emit time (a
@@ -1626,7 +1626,7 @@ class _FortranBodyEmitter(BaseEmitter):
             if s.name == name and self._int_tag(s.dtype):
                 return self._int_tag(s.dtype)
         # Implicit-local types set via the emit-time int_kinds map (bitwise-int64 propagation).
-        int_kinds = getattr(self, "_int_kinds", {})
+        int_kinds = vars(self).get("_int_kinds", {})
         dt = int_kinds.get(name)
         if dt in self._INT_KIND_SUFFIX:
             return dt
@@ -1637,7 +1637,7 @@ class _FortranBodyEmitter(BaseEmitter):
             return dt
         # Fresh local arrays carry their resolved element dtype in the emit-time
         # local-dtype map -- return its int tag so it's kinded like a declared one.
-        dt = getattr(self, "_local_elem_dtypes", {}).get(name)
+        dt = vars(self).get("_local_elem_dtypes", {}).get(name)
         if dt is not None:
             return self._int_tag(dt)
         return None

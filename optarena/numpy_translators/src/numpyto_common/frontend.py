@@ -108,10 +108,10 @@ def _has_loop_control(body: List[ast.stmt]) -> bool:
             if isinstance(s, (ast.For, ast.While, ast.FunctionDef)):
                 continue  # a nested loop captures its own break/continue
             for f in ("body", "orelse", "finalbody"):
-                sub = getattr(s, f, None)
+                sub = vars(s).get(f)
                 if isinstance(sub, list) and _walk(sub):
                     return True
-            for h in getattr(s, "handlers", []) or []:
+            for h in vars(s).get("handlers") or []:
                 if _walk(h.body):
                     return True
         return False

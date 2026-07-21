@@ -31,8 +31,9 @@ class JaxFramework(Framework):
     def optimize(self, program: Any, bench: "Benchmark", bdata: Dict[str, Any]) -> Any:
         """AoT-compile the JAX kernel once before the timed bracket (``jax.jit(fn).lower(*args).compile()``),
         so the timed run invokes a ready executable with no first-call compilation. Only a jitted kernel
-        (exposing ``.lower``) is compiled; an eager or un-lowerable kernel falls back unchanged."""
-        if not hasattr(program, "lower"):
+        (``jax.stages.Wrapped``) is compiled; an eager one falls back unchanged. pmap is lowerable but
+        not ``Wrapped``, so it would take the fallback -- no kernel uses pmap, and the cost is perf only."""
+        if not isinstance(program, jax.stages.Wrapped):
             return program
         input_args = bench.info["input_args"]
         array_args = set(bench.info["array_args"])

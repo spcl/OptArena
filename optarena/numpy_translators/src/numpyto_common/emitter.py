@@ -89,7 +89,7 @@ class BaseEmitter:
         if isinstance(node, ast.Return):
             return self._emit_return(node, indent)
         raise NotImplementedError(f"unsupported statement: {type(node).__name__} "
-                                  f"(line {getattr(node, 'lineno', '?')})")
+                                  f"(line {vars(node).get('lineno', '?')})")
 
     def _emit_return(self, node: ast.Return, indent: str) -> str:
         """OptArena kernels are void -- outputs are written through array

@@ -219,7 +219,7 @@ def _numpy_fn(info):
     spec = importlib.util.spec_from_file_location(info["module_name"], p)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
-    return getattr(m, info["func_name"])
+    return vars(m)[info["func_name"]]
 
 
 def _diag(proc, limit: int = 240) -> str:
@@ -1022,7 +1022,7 @@ def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, at
 
 def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol) -> str:
     lib = ctypes.CDLL(str(so))
-    fn = getattr(lib, binding["symbols"][backend])
+    fn = lib[binding["symbols"][backend]]
     call = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in by.items()}
     cargs: List[Any] = []
     keep: List[np.ndarray] = []

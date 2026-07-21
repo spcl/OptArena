@@ -491,7 +491,7 @@ class _CBodyEmitter(BaseEmitter):
                     f"{self.emit_expr(node.orelse)})")
         # A bare z.real/z.imag never reaches emit: native_desugar rewrites it to np.real(z)/np.imag(z) at parse time.
         raise NotImplementedError(f"expression {type(node).__name__} "
-                                  f"(line {getattr(node, 'lineno', '?')}): {ast.unparse(node)[:120]}")
+                                  f"(line {vars(node).get('lineno', '?')}): {ast.unparse(node)[:120]}")
 
     def _unchain_subscript(self, node: ast.Subscript) -> Tuple[ast.AST, List[str]]:
         """Collapse a subscript chain a[i][j]... into (base_node, [i, j, ...]) for row-major flattening."""
@@ -731,7 +731,7 @@ class _CBodyEmitter(BaseEmitter):
 
     def _all_int_locals(self) -> Set[str]:
         """Cached set of all locals known to be int: int kernel scalars + tuple-unpack int_locals + needs_int promotions."""
-        cached = getattr(self, "_int_locals_cache", None)
+        cached = vars(self).get("_int_locals_cache")
         if cached is not None:
             return cached
         out: Set[str] = set()

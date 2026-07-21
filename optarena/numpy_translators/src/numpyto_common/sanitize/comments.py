@@ -51,7 +51,9 @@ def tree_sitter_available() -> bool:
 # offsets are utf-8 byte indices in every variant, so span math is unaffected.
 def _ts_attr(obj, name):
     """Read ``obj.name`` whether the binding exposes it as a property or a
-    nullary method (the two tree-sitter bindings disagree on which)."""
+    nullary method (the two tree-sitter bindings disagree on which).
+
+    Keep the getattr: these are C-extension objects with no ``__dict__``, so ``vars(obj)`` raises."""
     v = getattr(obj, name, None)
     return v() if callable(v) else v
 

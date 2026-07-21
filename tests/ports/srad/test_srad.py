@@ -54,12 +54,8 @@ def build_cpp_reference():
 
 
 def run_argtypes():
-    """ABI of srad_run_ref / srad_ref: six f64 grids, seven ints, lambda, apply_exp.
-
-    Shared because ``CDLL.__getitem__`` hands back a FRESH, unconfigured function pointer on every
-    lookup (unlike attribute access, which caches the configured one on the instance), so a
-    by-name resolution has to re-declare the signature or ctypes cannot convert the array args.
-    """
+    """ABI of srad_run_ref / srad_ref. Shared because ``CDLL.__getitem__`` returns a fresh,
+    unconfigured pointer every lookup, so a by-name resolution must re-declare the signature."""
     f64 = ndpointer(np.float64, flags="C_CONTIGUOUS")
     return [
         f64,

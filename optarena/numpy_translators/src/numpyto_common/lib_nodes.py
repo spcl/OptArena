@@ -4142,7 +4142,7 @@ def expand_reshape(target: ast.expr,
     # index and the source multi-index are computed in ``order``.
     order = "C"
     for kw in (kwargs or []):
-        if getattr(kw, "arg", None) == "order" and isinstance(kw.value, ast.Constant):
+        if vars(kw).get("arg") == "order" and isinstance(kw.value, ast.Constant):
             order = str(kw.value.value).upper()
     fortran = order == "F"
 
@@ -6619,7 +6619,7 @@ class _CallHoister(ast.NodeTransformer):
                             self.array_temps,
                             self.counter,
                             local_dtypes=self.local_dtypes,
-                            sparse=getattr(self, "sparse", None))
+                            sparse=vars(self).get("sparse"))
         node.args = [mm.visit(a) for a in node.args]
         self.pre_stmts.extend(mm.pre_stmts)
         # Hoist a non-Name first arg of an array reduction (sum/max/min/mean/
@@ -6983,7 +6983,7 @@ class _CallHoister(ast.NodeTransformer):
                 if src_shape:
                     # args doesn't carry keywords (those are on the parent
                     # call), so read the live axis/keepdims stash visit_Call set.
-                    kw_axes, kw_keep = getattr(self, '_cur_axis', None), getattr(self, '_cur_keepdims', False)
+                    kw_axes, kw_keep = vars(self).get('_cur_axis'), vars(self).get('_cur_keepdims', False)
                     if kw_axes is None:
                         return None  # scalar -- not array-shape
                     # ``_read_axis_keepdims`` returns a list or None; normalise

@@ -96,7 +96,7 @@ def test_wrap_kernel_matches_numpy(framework, dtype, fptype):
     sm = importlib.util.spec_from_file_location(KERNEL, numpy_py)
     mod = importlib.util.module_from_spec(sm)
     sm.loader.exec_module(mod)
-    ref = getattr(mod, spec.func_name)
+    ref = vars(mod)[spec.func_name]
 
     with tempfile.TemporaryDirectory() as d:
         cpp = pathlib.Path(d) / "cpp_backend"
@@ -143,7 +143,7 @@ def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype):
     sm = importlib.util.spec_from_file_location("spmv", numpy_py)
     mod = importlib.util.module_from_spec(sm)
     sm.loader.exec_module(mod)
-    ref = getattr(mod, spec.func_name)
+    ref = vars(mod)[spec.func_name]
 
     ensure_native("spmv")
     cpp = paths.BENCHMARKS / spec.relative_path / "cpp_backend"
@@ -342,5 +342,5 @@ def test_int32_array_promoted_on_read(framework, target, compiler, ext):
                 cargs.append(ctypes.c_int64(int(v)))
         t = np.zeros(1, dtype=np.int64)
         cargs.append(t.ctypes.data_as(ctypes.c_void_p))
-        getattr(ctypes.CDLL(str(so)), base)(*cargs)
+        ctypes.CDLL(str(so))[base](*cargs)
         assert np.array_equal(out_buf, expected), (framework, out_buf, expected)

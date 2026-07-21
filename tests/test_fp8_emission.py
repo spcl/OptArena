@@ -68,7 +68,7 @@ def test_registry_resolves_fp8_to_one_byte(cli, canon, mlname):
     assert dtypes.fortran_kind(cli) == "integer(c_int8_t)"
     # 1 byte on the marshalling side, matching the ml_dtypes itemsize.
     assert ctypes.sizeof(dtypes.ctype_for(cli)) == 1
-    assert np.dtype(getattr(ml_dtypes, mlname)).itemsize == 1
+    assert np.dtype(vars(ml_dtypes)[mlname]).itemsize == 1
     # Storage-only: arithmetic is done in float32, not in the byte.
     assert dtypes.is_storage_only(cli) is True
     assert dtypes.compute_dtype(cli) == "float32"
@@ -137,7 +137,7 @@ def test_fp8_prelude_only_when_used(tmp_path, cli, canon, mlname):
 def _run_scaled_add(so, symbol, x8, y8, alpha8):
     """Call the compiled fp8 scaled_add over raw 1-byte storage; return the mutated `y` bytes."""
     lib = ctypes.CDLL(str(so))
-    fn = getattr(lib, symbol)
+    fn = lib[symbol]
     fn.restype = None
     fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint8), ctypes.c_int64, ctypes.c_uint8]
     xb = np.ascontiguousarray(x8).view(np.uint8).copy()
@@ -153,7 +153,7 @@ def test_fp8_numeric_matches_numpy_oracle(tmp_path, cli, canon, mlname, backend)
     """The compiled fp8 kernel reproduces the numpy ml_dtypes reference EXACTLY (bit-equality, no tolerance)."""
     if shutil.which(_TOOL[backend]) is None:
         pytest.skip(f"{_TOOL[backend]} not installed")
-    f8 = getattr(ml_dtypes, mlname)
+    f8 = vars(ml_dtypes)[mlname]
     _emit_fp8(tmp_path, cli)
     src = _src(tmp_path, cli, backend)
     so = tmp_path / f"num_{backend}.so"
@@ -183,7 +183,7 @@ def test_fp8_conversions_cover_every_code(tmp_path, cli, canon, mlname):
     """Drive all 256 fp8 codes (subnormals, zeros, Inf, NaN) through promote/demote and match ml_dtypes."""
     if shutil.which("gcc") is None:
         pytest.skip("gcc not installed")
-    f8 = getattr(ml_dtypes, mlname)
+    f8 = vars(ml_dtypes)[mlname]
     _emit_fp8(tmp_path, cli)
     so = tmp_path / "rt.so"
     r = subprocess.run(no.COMPILE["c"] + [str(_src(tmp_path, cli, "c")), "-o", str(so)], capture_output=True, text=True)

@@ -344,7 +344,7 @@ def _matmul_pairs(node: ast.AST) -> List[ast.AST]:
     for n in ast.walk(node):
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.MatMult):
             out.append(n)
-        elif _np_attr(n) == "matmul" and len(getattr(n, "args", [])) == 2:
+        elif _np_attr(n) == "matmul" and len(vars(n).get("args") or []) == 2:
             out.append(n)
     return out
 
@@ -604,7 +604,7 @@ class _EinsumInline(ast.NodeTransformer):
         self._ctr = 0
 
     def _hoist(self, node):
-        if getattr(node, "value", None) is None:
+        if vars(node).get("value") is None:
             return node
         h = _EinsumHoister(self._ctr)
         node.value = h.visit(node.value)
@@ -861,7 +861,7 @@ class _FancyGatherInline(ast.NodeTransformer):
         self._ctr = 0
 
     def _hoist(self, node):
-        if getattr(node, "value", None) is None:
+        if vars(node).get("value") is None:
             return node
         h = _FancyGatherHoister(self.ranks, self._ctr)
         node.value = h.visit(node.value)
@@ -1264,7 +1264,7 @@ class _UfuncOuterInline(ast.NodeTransformer):
         self._ctr = 0
 
     def _hoist(self, node):
-        if getattr(node, "value", None) is None:
+        if vars(node).get("value") is None:
             return node
         h = _UfuncOuterHoister(self.ranks, self._ctr)
         node.value = h.visit(node.value)
@@ -1697,7 +1697,7 @@ class _HistogramInline(ast.NodeTransformer):
         self._ctr = 0
 
     def _hoist(self, node):
-        if getattr(node, "value", None) is None:
+        if vars(node).get("value") is None:
             return node
         h = _HistogramHoister(self._ctr)
         node.value = h.visit(node.value)
@@ -1808,7 +1808,7 @@ class _IntMatmulInline(ast.NodeTransformer):
         self._ctr = 0
 
     def _hoist(self, node):
-        if getattr(node, "value", None) is None:
+        if vars(node).get("value") is None:
             return node
         h = _IntMatmulHoister(self.ranks, self.dtypes, self._ctr)
         node.value = h.visit(node.value)
@@ -1941,7 +1941,7 @@ class _RepeatAxisInline(ast.NodeTransformer):
         self._ctr = 0
 
     def _hoist(self, node):
-        if getattr(node, "value", None) is None:
+        if vars(node).get("value") is None:
             return node
         h = _RepeatAxisHoister(self.ranks, self._ctr)
         node.value = h.visit(node.value)
@@ -2697,7 +2697,7 @@ def _as_matmul(node: ast.AST):
     """``a @ b`` / ``np.matmul(a, b)`` / ``np.dot(a, b)`` -> ``(a, b)`` else None."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
         return node.left, node.right
-    if _np_attr(node) in ("matmul", "dot") and len(getattr(node, "args", [])) == 2:
+    if _np_attr(node) in ("matmul", "dot") and len(vars(node).get("args") or []) == 2:
         return node.args[0], node.args[1]
     return None
 
@@ -3766,8 +3766,8 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
     eigh_aliases = _eigh_alias_names(tree)
     changed = False
     for fn in (all_funcs or [tree]):
-        is_kernel = getattr(fn, "name", None) == kir.kernel_name
-        seed = dict(param_ranks.get(getattr(fn, "name", None), {}))
+        is_kernel = vars(fn).get("name") == kir.kernel_name
+        seed = dict(param_ranks.get(vars(fn).get("name"), {}))
         if is_kernel:
             seed.update(kir_seed)
         ranks = _rank_table(fn, seed)

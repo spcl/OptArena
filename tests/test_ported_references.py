@@ -28,7 +28,7 @@ _BENCH = "optarena.benchmarks.hpc"
 def _load(dwarf, kernel):
     init = importlib.import_module(f"{_BENCH}.{dwarf}.{kernel}.{kernel}")
     ref = importlib.import_module(f"{_BENCH}.{dwarf}.{kernel}.{kernel}_numpy")
-    return init.initialize, getattr(ref, kernel)
+    return init.initialize, vars(ref)[kernel]
 
 
 # --------------------------------------------------------------------------- #

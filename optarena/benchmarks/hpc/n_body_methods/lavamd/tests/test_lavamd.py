@@ -388,7 +388,7 @@ def run_and_count(counters, category, name, inputs, production_invariants=False)
         counters.failed += 1
         raise
 
-    setattr(counters, category, getattr(counters, category) + 1)
+    vars(counters)[category] += 1
     counters.passed += 1
 
 

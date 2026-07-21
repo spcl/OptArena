@@ -262,7 +262,7 @@ def _load_numpy_fn(numpy_py: pathlib.Path, func_name: str) -> Callable:
     spec = importlib.util.spec_from_file_location(numpy_py.stem, numpy_py)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore
-    return getattr(mod, func_name)
+    return vars(mod)[func_name]
 
 
 def _emit_c(short: str, numpy_py: pathlib.Path, out: pathlib.Path, config_name: Optional[str] = None) -> None:
@@ -498,7 +498,7 @@ def run_kernel(k: SparseKernel,
         else:
             return OracleResult(k.short, False, float("nan"), f"unknown arg kind {kind!r}")
     cargs.append(timing.ctypes.data_as(ctypes.c_void_p))
-    getattr(lib, binding["symbols"]["c"])(*cargs)
+    lib[binding["symbols"]["c"]](*cargs)
 
     # 8. compare each output (binding-derived) element-wise.
     worst = 0.0

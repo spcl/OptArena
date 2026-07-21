@@ -754,7 +754,7 @@ class _ConditionalNoneAllocRewriter(ast.NodeTransformer):
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
         if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.IfExp)
-                and node.targets[0].id not in getattr(self, "_none_checked", set())):
+                and node.targets[0].id not in vars(self).get("_none_checked", set())):
             return node
         ifexp = node.value
         body_none = isinstance(ifexp.body, ast.Constant) and ifexp.body.value is None
@@ -3374,7 +3374,7 @@ class _ResolveArrShape(ast.NodeTransformer):
         node.body = self._visit_stmt_list(node.body)
         # After walking the body, write the resolver's updated
         # zeros_locals back to the tree-attribute the emitter reads.
-        if hasattr(node, "zeros_locals"):
+        if "zeros_locals" in vars(node):
             node.zeros_locals.update(self.zeros_locals)  # type: ignore[attr-defined]
         return node
 
@@ -4180,8 +4180,8 @@ class _BooleanMaskReductionRewriter(ast.NodeTransformer):
                             continue
             # Recurse into nested compound bodies.
             for attr in ("body", "orelse"):
-                if hasattr(stmt, attr) and isinstance(getattr(stmt, attr), list):
-                    setattr(stmt, attr, self._walk_body(getattr(stmt, attr)))
+                if isinstance(vars(stmt).get(attr), list):
+                    setattr(stmt, attr, self._walk_body(vars(stmt)[attr]))
             out.append(stmt)
             i += 1
         return out
@@ -6731,7 +6731,7 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
         # original ``dace.int32`` annotation). Only auto-promote arrays
         # still at a float default, so the heuristic stays a safety net
         # for undeclared kernels without overriding a declared width.
-        if str(getattr(a, "dtype", "") or "").startswith(("int", "uint")):
+        if str(vars(a).get("dtype") or "").startswith(("int", "uint")):
             continue
         a.dtype = "int64"  # type: ignore[misc]
 
@@ -6752,10 +6752,10 @@ def _promote_free_names_to_params(kir: KernelIR) -> None:
     # into physical buffer params by the frontend; their bare names must
     # never be promoted to scalar int params even if a residual
     # reference survives lowering. The matmul hoister consumes them.
-    declared.update(getattr(kir, "sparse", {}) or {})
+    declared.update(vars(kir).get("sparse") or {})
     # Non-inlinable helpers emitted as their own native functions: their names
     # appear as CALL funcs (``classify(x[i])``), never as scalar parameters.
-    declared.update(h.kernel_name for h in getattr(kir, "helpers", []) or [])
+    declared.update(h.kernel_name for h in vars(kir).get("helpers") or [])
     # A Name used as a call function is never a scalar parameter either.
     for node in ast.walk(kir.tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -6841,7 +6841,7 @@ def _fold_shape_aliases(kir: KernelIR) -> None:
     # carry the alias (``H: (M + 1, N + 1)``) -- scanning it would re-add ``M``
     # to scope and veto its own folding.
     for arr in kir.arrays:
-        if getattr(arr, "is_output", False):
+        if vars(arr).get("is_output", False):
             continue
         for tok in arr.shape:
             in_scope.update(_IDENT.findall(str(tok)))

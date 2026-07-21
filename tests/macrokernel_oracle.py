@@ -101,7 +101,7 @@ def call_emitted(cpp_path: str, so_path: str, kernel: str, *, buffers: Dict, sca
         args = _parse_args(text, fn)
         if state is not None:
             args = args[1:]  # the first arg is __state (the handle)
-        f = getattr(lib, fn)
+        f = lib[fn]
         f.restype = ret
         vals = [resolve(*a) for a in args]
         if state is not None:
@@ -112,7 +112,7 @@ def call_emitted(cpp_path: str, so_path: str, kernel: str, *, buffers: Dict, sca
 
     handle = invoke(f"__dace_init_{kernel}", ret=ctypes.c_void_p)
     invoke(f"__program_{kernel}", state=handle, ret=None)
-    ex = getattr(lib, f"__dace_exit_{kernel}")
+    ex = lib[f"__dace_exit_{kernel}"]
     ex.argtypes = [ctypes.c_void_p]
     ex.restype = ctypes.c_int
     ex(handle)

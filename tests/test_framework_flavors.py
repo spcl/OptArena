@@ -54,4 +54,4 @@ def test_arch_families_share_one_class():
 def test_appy_removed():
     assert "appy" not in FRAMEWORK_META
     import optarena.frameworks as infra
-    assert not hasattr(infra, "APPyFramework")
+    assert "APPyFramework" not in vars(infra)

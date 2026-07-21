@@ -4039,7 +4039,7 @@ def test_dyn_core_gt4_orchestration():
     npy = _load("fv3_dycore_numpy")
     st_a, g, nhalo, ni, nj, nk = _dyncore_state_and_grid()
     # deep-copy the state for the reference run
-    st_b = {k: (v.copy() if hasattr(v, "copy") else v) for k, v in st_a.items()}
+    st_b = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in st_a.items()}
     params = dict(dt_acoustic=1.0,
                   n_split=2,
                   ptop=100.0,
@@ -4600,7 +4600,7 @@ def test_fv_dynamics_gt4_orchestration():
         for kk, vv in s.items():
             if kk == "tracers":
                 out[kk] = [t.copy() for t in vv]
-            elif hasattr(vv, "copy"):
+            elif isinstance(vv, np.ndarray):
                 out[kk] = vv.copy()
             else:
                 out[kk] = vv

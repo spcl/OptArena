@@ -93,7 +93,7 @@ def test_fuzz_iteration_draws_distinct_sizes():
 
     def total_elems(d):
         import numpy as np
-        return sum(int(np.asarray(v).size) for v in d.values() if hasattr(v, "__len__") or hasattr(v, "size"))
+        return sum(int(v.size) for v in d.values() if isinstance(v, np.ndarray))
 
     assert total_elems(d0) != total_elems(d1), "fuzz_iteration did not change the data size"
 
