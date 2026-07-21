@@ -121,6 +121,17 @@ def _alloc_workspace(nbytes: int, xp=np):
     return backing[off:off + nbytes]
 
 
+def _arg_residence(binding: Binding, residency: str) -> Dict[str, str]:
+    """Storage location (``"host"``/``"device"``) of each ABI arg (abi_contract Sec. 10):
+    pointer references all share the task residency (all host XOR all device); every
+    scalar/size-symbol is always host (passed by value).
+
+    The call path encodes this structurally -- it marshals pointers per ``xp`` and scalars by
+    value -- so nothing here calls this. It states the rule in one readable place, and
+    ``tests/test_agent_bench`` checks the contract against it."""
+    return {a.name: (residency if a.kind == "ptr" else "host") for a in binding.args}
+
+
 def _call_native_impl(lib_path, binding: Binding, data: Dict, lang: str, workspace_bytes: Optional[str], *, xp, to_host,
                       timed_call, reps: int, warmup: int) -> Tuple[Dict[str, np.ndarray], List[int]]:
     """Shared FFI body for the host and device native calls: marshal ``data`` to the
