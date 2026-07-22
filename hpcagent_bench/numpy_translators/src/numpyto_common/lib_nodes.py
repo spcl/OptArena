@@ -2449,28 +2449,56 @@ def expand_linspace(target: ast.expr, args: List[ast.expr], shape_table: Dict[st
     ]
 
 
+def arange_count(args: List[ast.expr]) -> ast.expr:
+    """Element count of ``np.arange(*args)``: ``ceil(span / step)``, clamped at zero.
+
+    The obvious ``(span + step - 1) // step`` is a POSITIVE-STEP identity. Under a negative step
+    it over-counts -- ``np.arange(10, 0, -1)`` came out 12, so the iota loop wrote 12 elements
+    into an array sized ``stop - start`` = -10: a negative C VLA (which does not compile) and a
+    zero-length Fortran array the loop then ran off the end of, returning garbage that graded
+    green. ``-((-span) // step)`` is ceil for either sign, given floor division.
+
+    Constant arguments fold here, so the common literal ``arange`` keeps a plain integer extent
+    rather than an expression a Fortran declaration would have to be able to evaluate.
+
+    Shared with the shape inference in :meth:`_extent_to_shape_token` so the extent an array is
+    declared with and the trip count the loop runs cannot disagree -- disagreeing is what turned
+    a wrong count into an out-of-bounds write."""
+    if len(args) == 1:
+        span, step = args[0], _const(1)
+    elif len(args) == 2:
+        span, step = ast.BinOp(left=args[1], op=ast.Sub(), right=args[0]), _const(1)
+    elif len(args) == 3:
+        span, step = ast.BinOp(left=args[1], op=ast.Sub(), right=args[0]), args[2]
+    else:
+        raise NotImplementedError("np.arange needs 1-3 args")
+    literals = [_const_int(a) for a in args]  # accepts a negated literal: step=-1 is UnaryOp(USub, 1)
+    if all(v is not None for v in literals):
+        start, stop = (0, literals[0]) if len(args) == 1 else (literals[0], literals[1])
+        istep = literals[2] if len(args) == 3 else 1
+        if istep == 0:
+            raise NotImplementedError("np.arange step must be nonzero")
+        return _const(max(0, -((start - stop) // istep)))
+    # -((-span) // step): ceil for either sign, since // is emitted as the flooring int_floor.
+    return ast.UnaryOp(op=ast.USub(),
+                       operand=ast.BinOp(left=ast.UnaryOp(op=ast.USub(), operand=span), op=ast.FloorDiv(), right=step))
+
+
 def expand_arange(target: ast.expr, args: List[ast.expr], shape_table: Dict[str, Tuple[str, ...]]) -> List[ast.stmt]:
     """``out = np.arange(stop)`` -> ``for i in range(stop): out[i] = i``;
     ``np.arange(start, stop)`` -> ``out[i] = start + i``;
     ``np.arange(start, stop, step)`` -> ``out[i] = start + i*step`` over
-    ``range((stop - start + step - 1) // step)`` elements. The iota value casts
-    to ``out``'s declared dtype on assignment. Mirrors :func:`expand_linspace`."""
+    :func:`arange_count` elements. The iota value casts to ``out``'s declared dtype on
+    assignment. Mirrors :func:`expand_linspace`."""
     if len(args) == 1:
-        start, count, step = _const(0), args[0], None
+        start, step = _const(0), None
     elif len(args) == 2:
         start, step = args[0], None
-        count = ast.BinOp(left=args[1], op=ast.Sub(), right=args[0])
     elif len(args) == 3:
         start, step = args[0], args[2]
-        span = ast.BinOp(left=args[1], op=ast.Sub(), right=args[0])
-        # ceil(span / step) for a positive integer step.
-        count = ast.BinOp(left=ast.BinOp(left=span,
-                                         op=ast.Add(),
-                                         right=ast.BinOp(left=step, op=ast.Sub(), right=_const(1))),
-                          op=ast.FloorDiv(),
-                          right=step)
     else:
         raise NotImplementedError("np.arange needs 1-3 args")
+    count = arange_count(args)
     # value(i) = start + i*step  (step omitted -> +i)
     idx = _name("__i")
     scaled = idx if step is None else ast.BinOp(left=idx, op=ast.Mult(), right=step)
@@ -6812,14 +6840,18 @@ class _CallHoister(ast.NodeTransformer):
         # Allocator-style calls: shape from the constructor arg.
         if op in {"linspace", "arange"}:
             # linspace(start, stop, n) -> (n,); arange(stop) -> (stop,);
-            # arange(start, stop) -> (stop - start,).
+            # arange(start, stop[, step]) -> its element count. The 3-arg form must go through
+            # arange_count: `stop - start` ignores the step, which over-allocates for step > 1 and
+            # is NEGATIVE for a step < 0 (see arange_count).
             if op == "linspace" and len(args) >= 3:
                 return (self._extent_to_shape_token(args[2]), )
             if op == "arange":
                 if len(args) == 1:
                     return (self._extent_to_shape_token(args[0]), )
-                if len(args) >= 2:
+                if len(args) == 2:
                     return (ast.unparse(ast.BinOp(left=args[1], op=ast.Sub(), right=args[0])), )
+                if len(args) >= 3:
+                    return (ast.unparse(arange_count(list(args[:3]))), )
         # ``np.fromfunction(lambda..., (N, M))`` -> the SECOND arg is the shape.
         if op == "fromfunction" and len(args) >= 2:
             sh = args[1]
