@@ -11,7 +11,7 @@ Scope: by default the files changed versus ``--base`` (merge-base with
 job and a local run agree. ``--all`` checks every tracked source file.
 
 Kernel ports / generated references are NOT style-gated (they are faithful ports
-or machine-emitted): anything under ``optarena/benchmarks/`` or matching
+or machine-emitted): anything under ``hpcagent_bench/benchmarks/`` or matching
 ``*_generated.*`` is skipped (the ``.yapfignore`` policy). ``numpy_translators/``
 is also skipped -- it is a separate distribution with its own style policy.
 
@@ -36,7 +36,7 @@ FORT_EXT = {".f", ".f90", ".f03", ".f08", ".f95", ".for"}  # matched case-insens
 # matching the .yapfignore policy. A path is skipped when it sits under one of
 # these prefixes or its name marks it as generated.
 #
-# optarena/benchmarks stays skipped on purpose: those kernels are transcribed from
+# hpcagent_bench/benchmarks stays skipped on purpose: those kernels are transcribed from
 # upstream Fortran / C, and reformatting them breaks the line-level correspondence
 # with the source they were ported from. That is provenance, not a style backlog.
 #
@@ -44,7 +44,7 @@ FORT_EXT = {".f", ".f90", ".f03", ".f08", ".f95", ".for"}  # matched case-insens
 # happened, so the prefix is gone and the gate now holds those 122 files to the same
 # 120-column yapf style as the rest. Without this the reformat would decay on the
 # first translator edit.
-SKIP_PREFIXES = ("optarena/benchmarks/", )
+SKIP_PREFIXES = ("hpcagent_bench/benchmarks/", )
 SKIP_NAME_MARKERS = ("_generated.", )
 
 

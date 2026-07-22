@@ -51,5 +51,5 @@ jobs:
         # requirements/nvidia.txt installs triton + apache-tvm; with a real GPU
         # present the triton / tvm (cuda) framework tests run instead of skipping.
         env:
-          OPTARENA_TVM_NOTUNE: "1"
+          HPCAGENT_BENCH_TVM_NOTUNE: "1"
         run: python -m pytest tests/test_frameworks.py -v -rs

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The OpenBLAS reduction optimizer, verified + scored both submission ways.
 
@@ -11,10 +11,10 @@ submission's ``build`` tokens) and the *ABI* option (the optimizer prebuilds the
 """
 import pytest
 
-from optarena.harness import tools
-from optarena.harness.optimizers import BlasReductionOptimizer, have_openblas
-from optarena.harness.service import ServiceConfig
-from optarena.harness.task import Task
+from hpcagent_bench.harness import tools
+from hpcagent_bench.harness.optimizers import BlasReductionOptimizer, have_openblas
+from hpcagent_bench.harness.service import ServiceConfig
+from hpcagent_bench.harness.task import Task
 
 pytestmark = pytest.mark.skipif(not have_openblas(), reason="OpenBLAS not available")
 

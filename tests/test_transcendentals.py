@@ -22,7 +22,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from optarena import languages
+from hpcagent_bench import languages
 
 from numpyto_common.frontend import parse_kernel
 from numpyto_common.lowering import lower

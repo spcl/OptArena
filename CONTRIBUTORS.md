@@ -1,6 +1,6 @@
 # Contributors
 
-OptArena is developed by [SPCL @ ETH Zurich](https://spcl.inf.ethz.ch/), building
+HPCAgent-Bench is developed by [SPCL @ ETH Zurich](https://spcl.inf.ethz.ch/), building
 on the **NPBench** benchmarking suite ([Ziogas et al., ICS '21](https://doi.org/10.1145/3447818.3460360);
 BSD 3-Clause, Copyright 2021 SPCL -- notice retained in [NOTICE](NOTICE)).
 

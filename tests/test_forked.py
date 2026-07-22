@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """run_forked must SURFACE a child's failure (exception / segfault / timeout) as a
 structured result instead of eating it -- the native-collection contract."""
@@ -6,7 +6,7 @@ import os
 import signal
 import time
 
-from optarena.frameworks.forked import forked_failure_reason, run_forked
+from hpcagent_bench.frameworks.forked import forked_failure_reason, run_forked
 
 
 def _ok():

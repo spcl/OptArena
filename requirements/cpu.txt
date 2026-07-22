@@ -1,4 +1,4 @@
-# optarena dependency list (hand-maintained).
+# HPCAgent-Bench dependency list (hand-maintained).
 # The two framework baselines with platform-install friction (apache-tvm, mpi4py) live
 # in requirements/optional.txt so this file installs cleanly everywhere, incl. macOS
 # arm64. The container images install optional.txt on top (see containers/cpu.def).
@@ -11,7 +11,7 @@ pygount
 pyyaml
 jsonschema
 setuptools
-# Typed results-DB schema layer (optarena/frameworks/schema.py).
+# Typed results-DB schema layer (hpcagent_bench/frameworks/schema.py).
 sqlmodel
 jinja2
 cffi

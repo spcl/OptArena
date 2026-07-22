@@ -9,8 +9,8 @@ import tempfile
 import numpy as np
 import pytest
 
-from optarena import languages, paths
-from optarena.spec import BenchSpec
+from hpcagent_bench import languages, paths
+from hpcagent_bench.spec import BenchSpec
 
 KERNEL = "tsvc_2_s212"  # 1-D: a,b outputs; c,d inputs; LEN_1D symbol
 #: A kernel whose manifest ``short_name`` abbreviates its registry stem (``arc_distance`` -> ``adist``);
@@ -37,7 +37,7 @@ def test_native_base_follows_the_module_stem():
     spec = BenchSpec.load(ABBREVIATED)
     assert spec.native_base() == "arc_distance"
     assert spec.native_base("dense") == "arc_distance"
-    from optarena.autogen import _native_targets
+    from hpcagent_bench.autogen import _native_targets
     assert _native_targets(spec) == [(None, "arc_distance")]
 
 
@@ -45,7 +45,7 @@ def test_native_base_follows_the_module_stem():
 def test_emit_native_resolves_the_manifest_by_stem():
     """emit_native must emit for a kernel whose short_name != stem: manifests are registered under
     their stem, so resolving by short_name would KeyError on every native target."""
-    from optarena.autogen import emit_native
+    from hpcagent_bench.autogen import emit_native
     spec = BenchSpec.load(ABBREVIATED)
     cppdir = paths.BENCHMARKS / spec.relative_path / "cpp_backend"
     for stale in cppdir.glob("arc_distance_fp*.c"):
@@ -66,7 +66,7 @@ def test_emit_native_resolves_the_manifest_by_stem():
 @pytest.mark.skipif(not _emitter_present(), reason="translators absent")
 def test_emit_names_and_marker():
     """numpyto_c writes <short>_fp64/<short>_fp32 sources whose symbol == stem."""
-    from optarena.emit_bridge import emit_kernel
+    from hpcagent_bench.emit_bridge import emit_kernel
     spec = BenchSpec.load(KERNEL)
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     with tempfile.TemporaryDirectory() as d:
@@ -78,7 +78,7 @@ def test_emit_names_and_marker():
                 src = out / f"{KERNEL}_{fptype}.{ext}"
                 assert src.exists(), src.name
                 text = src.read_text()
-                assert text.splitlines()[0].lstrip("/ ").startswith("optarena-autogen")
+                assert text.splitlines()[0].lstrip("/ ").startswith("hpcagent_bench-autogen")
                 assert f"{KERNEL}_{fptype}(" in text  # symbol == file stem
                 assert "_auto" not in text  # no legacy suffix
 
@@ -88,8 +88,8 @@ def test_emit_names_and_marker():
 def test_wrap_kernel_matches_numpy(framework, dtype, fptype):
     if not _emitter_present() or not shutil.which(_COMPILER[framework]):
         pytest.skip(f"translators or {_COMPILER[framework]} absent")
-    from optarena.emit_bridge import emit_kernel
-    from optarena.benchmarks import cpp_runtime
+    from hpcagent_bench.emit_bridge import emit_kernel
+    from hpcagent_bench.benchmarks import cpp_runtime
 
     spec = BenchSpec.load(KERNEL)
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
@@ -130,8 +130,8 @@ def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype):
         pytest.skip(f"translators or {_COMPILER[framework]} absent")
     pytest.importorskip("scipy")
     import scipy.sparse as sp
-    from optarena.autogen import ensure_native, _native_targets
-    from optarena.benchmarks import cpp_runtime
+    from hpcagent_bench.autogen import ensure_native, _native_targets
+    from hpcagent_bench.benchmarks import cpp_runtime
 
     spec = BenchSpec.load("spmv")
     assert _native_targets(spec) == [("csr", "spmv_csr")]  # the layout = the sub-bench
@@ -173,7 +173,7 @@ def test_symbols_and_iterators_are_int64():
     """Every backend declares size symbols AND loop iterators at the int64 ABI width (abi_contract.md)."""
     if not _emitter_present():
         pytest.skip("translators absent")
-    from optarena.emit_bridge import emit_kernel
+    from hpcagent_bench.emit_bridge import emit_kernel
     spec = BenchSpec.load("gemm")
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     with tempfile.TemporaryDirectory() as d:
@@ -196,7 +196,7 @@ def test_pluto_emits_multidim_for_rank2_arrays():
     if not _emitter_present():
         pytest.skip("translators absent")
     import json
-    from optarena.emit_bridge import emit_kernel
+    from hpcagent_bench.emit_bridge import emit_kernel
     spec = BenchSpec.load("gemm")  # A, B, C are all rank-2
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     with tempfile.TemporaryDirectory() as d:
@@ -217,7 +217,7 @@ def test_pluto_keeps_rank1_arrays_flat():
     """A purely rank-1 kernel keeps flat pointer params -- a 1-D ``a[i]`` is already affine, no VLA needed."""
     if not _emitter_present():
         pytest.skip("translators absent")
-    from optarena.emit_bridge import emit_kernel
+    from hpcagent_bench.emit_bridge import emit_kernel
     spec = BenchSpec.load(KERNEL)  # tsvc_2_s212: a, b, c, d all 1-D
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
     with tempfile.TemporaryDirectory() as d:

@@ -1,4 +1,4 @@
-"""Guards for :func:`optarena.flags.ncores` -- the core count that sizes autopar and OMP. Not advisory:
+"""Guards for :func:`hpcagent_bench.flags.ncores` -- the core count that sizes autopar and OMP. Not advisory:
 ``-ftree-parallelize-loops=N`` bakes N into the generated call, overriding ``OMP_NUM_THREADS`` at run
 time, so whatever ncores() returns at build time is the thread count for the life of the cached .so.
 Getting it wrong oversubscribes: hyperthreads counted as cores (2x on SMT), or the whole machine read
@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from optarena import flags
+from hpcagent_bench import flags
 
 
 def test_reports_physical_cores_not_hyperthreads():
@@ -23,14 +23,14 @@ def test_never_returns_zero_or_negative():
 
 
 def test_the_explicit_override_wins(monkeypatch):
-    monkeypatch.setenv("OPTARENA_NCORES", "3")
+    monkeypatch.setenv("HPCAGENT_BENCH_NCORES", "3")
     assert flags.ncores() == 3
 
 
 @pytest.mark.parametrize("bogus", ["0", "-4", "", "many"])
 def test_a_bogus_override_is_ignored_rather_than_obeyed(monkeypatch, bogus):
-    """OPTARENA_NCORES=0 must not size a thread pool to zero."""
-    monkeypatch.setenv("OPTARENA_NCORES", bogus)
+    """HPCAGENT_BENCH_NCORES=0 must not size a thread pool to zero."""
+    monkeypatch.setenv("HPCAGENT_BENCH_NCORES", bogus)
     assert flags.ncores() >= 1
 
 

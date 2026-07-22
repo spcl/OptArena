@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pluto non-affine access detector.
 
@@ -66,8 +66,8 @@ def test_gather_kernel_scop_is_detected_nonaffine():
     """End-to-end: ``reroll_gather`` (``b[ip[i]]``) emits an affine-looking loop but
     an indirect access, so the detector flags its real scop -- the pluto path then
     skips it instead of miscompiling."""
-    from optarena.spec import BenchSpec
-    from optarena.emit_bridge import legacy_bench_info_dict
+    from hpcagent_bench.spec import BenchSpec
+    from hpcagent_bench.emit_bridge import legacy_bench_info_dict
     info = legacy_bench_info_dict(BenchSpec.load("reroll_gather"))["benchmark"]
     td = Path(tempfile.mkdtemp())
     ok, diag = _emit("reroll_gather", info, td, precision="float64")

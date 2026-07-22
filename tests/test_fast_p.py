@@ -1,18 +1,18 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The KernelBench ``fast_p`` disclosure metric (optarena.harness.metric).
+"""The KernelBench ``fast_p`` disclosure metric (hpcagent_bench.harness.metric).
 
 Two layers:
 * **the pure function** ``fast_p`` -- the correctness-gated speedup-threshold count
   over ``(correct, speedup)`` pairs, including the hard AND-gate and the inclusive
   boundary.
 * **the wiring**: that ``aggregate`` exposes ``SuiteScore.fast_p`` from the raw
-  (unclamped) per-task speedup, ALONGSIDE the untouched geomean OptArena Score.
+  (unclamped) per-task speedup, ALONGSIDE the untouched geomean HPCAgent-Bench Score.
 """
 import pytest
 
-from optarena.harness import metric as M
-from optarena.harness.metric import fast_p
+from hpcagent_bench.harness import metric as M
+from hpcagent_bench.harness.metric import fast_p
 
 
 def _ts(solved, raw_speedup, s_i=None):
@@ -82,11 +82,11 @@ def test_aggregate_exposes_fast_p_from_raw_speedup():
 
 
 def test_fast_p_is_additive_not_replacing_the_ranked_score():
-    """fast_p is reported ALONGSIDE the geomean; the ranked OptArena Score and
+    """fast_p is reported ALONGSIDE the geomean; the ranked HPCAgent-Bench Score and
     solve_rate are unchanged by its presence."""
     ts = [_ts(True, 4.0, s_i=4.0), _ts(True, 9.0, s_i=9.0)]
     s = M.aggregate(ts)
-    assert s.optarena_score == pytest.approx((4 * 9)**0.5)  # geomean untouched
+    assert s.hpcagent_bench_score == pytest.approx((4 * 9)**0.5)  # geomean untouched
     assert s.solve_rate == 1.0
     assert s.fast_p[1.0] == 1.0
 

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Cross-platform (Linux / macOS / WSL2) portability of the build + isolation layers.
 
@@ -11,8 +11,8 @@ failure, not a crashed runner.
 """
 import pytest
 
-from optarena import config, flags, osinfo
-from optarena.harness import native_call
+from hpcagent_bench import config, flags, osinfo
+from hpcagent_bench.harness import native_call
 
 
 # --------------------------------------------------------------------------- #
@@ -75,12 +75,12 @@ def test_rss_scale_is_bytes_on_macos_kilobytes_on_linux():
 
 
 def test_missing_compiler_is_a_scored_build_failure_not_a_crash(monkeypatch):
-    from optarena import languages
-    from optarena.harness.envelope import Submission
-    from optarena.harness.sandbox import Sandbox
-    from optarena.harness.task import Task
-    from optarena.support.bindings import binding_from_spec
-    from optarena.spec import BenchSpec
+    from hpcagent_bench import languages
+    from hpcagent_bench.harness.envelope import Submission
+    from hpcagent_bench.harness.sandbox import Sandbox
+    from hpcagent_bench.harness.task import Task
+    from hpcagent_bench.support.bindings import binding_from_spec
+    from hpcagent_bench.spec import BenchSpec
 
     binding = binding_from_spec(BenchSpec.load("gemm"))
     task = Task("gemm", "restricted", "c")
@@ -88,9 +88,9 @@ def test_missing_compiler_is_a_scored_build_failure_not_a_crash(monkeypatch):
     # FileNotFoundError (an OSError). The guard must turn that into BuildResult(ok=False),
     # exactly the stock-macOS case where gfortran/mpicc is absent.
     monkeypatch.setattr(languages, "build_shared_lib_commands",
-                        lambda *a, **k: [["optarena-no-such-compiler-xyzzy", "-shared", "-o", "x.so", "x.c"]])
+                        lambda *a, **k: [["hpcagent_bench-no-such-compiler-xyzzy", "-shared", "-o", "x.so", "x.c"]])
     sub = Submission(language="c", source="void gemm() {}\n", build=[])
     with Sandbox(binding) as sb:
         result = sb.build(sub)
     assert not result.ok
-    assert "optarena-no-such-compiler-xyzzy" in result.log
+    assert "hpcagent_bench-no-such-compiler-xyzzy" in result.log

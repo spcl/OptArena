@@ -9,8 +9,8 @@ import types
 
 import numpy as np
 
-from optarena.harness.grading import _grade
-from optarena.fuzz import resolve_ranges
+from hpcagent_bench.harness.grading import _grade
+from hpcagent_bench.fuzz import resolve_ranges
 
 
 def _spec(outs):
@@ -37,6 +37,6 @@ def test_grade_real_output_unaffected():
 def test_resolve_ranges_hi_is_absolute_xl():
     # XL is an ABSOLUTE size; the default range must be [L, XL], not [L, L+XL].
     # size_cap=0 disables the clamp so the assertion is independent of any global
-    # OPTARENA_FUZZ_SIZE_CAP a test env may set.
+    # HPCAGENT_BENCH_FUZZ_SIZE_CAP a test env may set.
     ranges = resolve_ranges({"L": {"N": 1000}, "XL": {"N": 4000}}, size_cap=0)
     assert ranges["N"] == [1000, 4000]

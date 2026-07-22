@@ -6,7 +6,7 @@ name: CI
 # translators pays for gt4py, and ONLY mpi pays for the MPICH + mpi4py source build.
 #
 # The e2e sweep (tests/test_e2e_numerical.py) is partitioned by BACKEND via
-# OPTARENA_E2E_BACKENDS so no single runner carries all ~80 min of it and Pluto stays isolated:
+# HPCAGENT_BENCH_E2E_BACKENDS so no single runner carries all ~80 min of it and Pluto stays isolated:
 # numba+jax on unit, pluto on frameworks-pluto, c+cpp+fortran on e2e-native, pythran on
 # e2e-pythran (pythran isolated -- it is the memory/time pig) -- all seven backends covered
 # exactly once. Unset (a local run) still sweeps the full set.
@@ -145,7 +145,7 @@ jobs:
         # own forked jax/native children, so this only catches an in-process numba hang.
         timeout-minutes: 35
         env:
-          OPTARENA_E2E_BACKENDS: "numba,jax"
+          HPCAGENT_BENCH_E2E_BACKENDS: "numba,jax"
         run: |
           python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
 
@@ -164,14 +164,14 @@ jobs:
               && [ -n "$HF_DATASET_REPO" ] && [ -n "$HF_TOKEN" ]; then
             PUSH="--push $HF_DATASET_REPO"
           fi
-          python -m optarena.cli export-hf --selector all --out optarena_hf.parquet $PUSH
+          python -m hpcagent_bench.cli export-hf --selector all --out hpcagent_bench_hf.parquet $PUSH
 
       - name: Phase 7 -- upload the HF dataset as a workflow artifact
         if: ${{ success() }}
         uses: actions/upload-artifact@v4
         with:
-          name: optarena-hf-dataset
-          path: optarena_hf.parquet
+          name: hpcagent_bench-hf-dataset
+          path: hpcagent_bench_hf.parquet
           if-no-files-found: ignore
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
@@ -227,7 +227,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python -m pytest -q -p no:cacheprovider -rfsxX -n auto --timeout=900 \
-            optarena/numpy_translators/tests/
+            hpcagent_bench/numpy_translators/tests/
 
       - name: Phase 2b -- port fidelity (numpy port vs original C/C++/Fortran reference)
         if: ${{ !cancelled() }}
@@ -240,7 +240,7 @@ jobs:
           # Discover the whole tree rather than listing files: the xsbench / gromacs / lavamd
           # reference suites sat outside an explicit list here and so never ran in CI at all.
           python -m pytest -q -p no:cacheprovider -rs --import-mode=importlib -n auto --timeout=600 \
-            optarena/benchmarks/
+            hpcagent_bench/benchmarks/
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics
@@ -340,8 +340,8 @@ jobs:
         # and the GPU frameworks self-skip when their toolchain/GPU is absent. -rs surfaces skips.
         if: ${{ !cancelled() }}
         env:
-          OPTARENA_TVM_NOTUNE: "1"
-          OPTARENA_TVM_METASCHEDULE_TRIALS: "2"
+          HPCAGENT_BENCH_TVM_NOTUNE: "1"
+          HPCAGENT_BENCH_TVM_METASCHEDULE_TRIALS: "2"
         run: |
           python -m pytest -q -p no:cacheprovider -rs --timeout=900 \
             tests/test_frameworks.py \
@@ -351,7 +351,7 @@ jobs:
       - name: Phase 5 -- e2e numerical sweep [pluto] @ S
         if: ${{ !cancelled() }}
         env:
-          OPTARENA_E2E_BACKENDS: "pluto"
+          HPCAGENT_BENCH_E2E_BACKENDS: "pluto"
         run: |
           python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
 
@@ -365,7 +365,7 @@ jobs:
   # has received a shutdown signal" -- the runner VM was reclaimed). c/cpp/fortran compiles each peak
   # at a few hundred MB (vs a single pythran compile at ~7 GB / 11 min), so with pythran gone this
   # slice runs at full -n auto (4) well under 16 GB. tests/test_e2e_numerical.py reads
-  # OPTARENA_E2E_BACKENDS and run_kernel(only_backends=...) emits ONLY the requested backends, so a
+  # HPCAGENT_BENCH_E2E_BACKENDS and run_kernel(only_backends=...) emits ONLY the requested backends, so a
   # job that omits pythran never invokes a pythran compile.
   # ===========================================================================================
   e2e-native:
@@ -409,7 +409,7 @@ jobs:
         # the shared setup action, so the job pays no new setup. unit (23.5) and e2e-pythran
         # (30.9, at budget) have no room; translators has no native toolchain rationale.
         # ~25 s serial: 18 numpy kernels (~5 s) + 3 emitted+compiled polly kernels + one plot.
-        # -n1 (no xdist): the module-scoped fixture drives BOTH sweeps into ONE optarena.db,
+        # -n1 (no xdist): the module-scoped fixture drives BOTH sweeps into ONE hpcagent_bench.db,
         # and splitting its tests across workers would re-run the whole fixture per worker.
         if: ${{ !cancelled() }}
         timeout-minutes: 15
@@ -421,7 +421,7 @@ jobs:
         # pythran removed -> peak a few GB -> full -n auto (4) safe under 16 GB.
         timeout-minutes: 60
         env:
-          OPTARENA_E2E_BACKENDS: "c,cpp,fortran"
+          HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
         run: |
           python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
 
@@ -439,8 +439,8 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 60
         env:
-          OPTARENA_E2E_BACKENDS: "c,cpp,fortran"
-          OPTARENA_E2E_PRECISION: "fp32"
+          HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
+          HPCAGENT_BENCH_E2E_PRECISION: "fp32"
         run: |
           python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
 
@@ -452,7 +452,7 @@ jobs:
   # e2e-pythran -- the pythran slice of the e2e sweep, isolated because pythran is the memory/time
   # pig: a single pythran compile peaks ~7 GB / 11 min while c/cpp/fortran compiles are hundreds of
   # MB. Folding it into the native job overran the 16 GB runner (exit 143). Same partition mechanism
-  # as e2e-native: OPTARENA_E2E_BACKENDS="pythran" so run_kernel(only_backends=...) emits pythran only.
+  # as e2e-native: HPCAGENT_BENCH_E2E_BACKENDS="pythran" so run_kernel(only_backends=...) emits pythran only.
   # ===========================================================================================
   e2e-pythran:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
@@ -498,7 +498,7 @@ jobs:
         # -n 1 still fits the cap (the four-backend job did ~1000 items at -n 2 in under 4 min).
         timeout-minutes: 60
         env:
-          OPTARENA_E2E_BACKENDS: "pythran"
+          HPCAGENT_BENCH_E2E_BACKENDS: "pythran"
         run: |
           python -m pytest -q -p no:cacheprovider -n 1 --timeout=600 tests/test_e2e_numerical.py
 
@@ -527,11 +527,11 @@ jobs:
         run: |
           # Install apptainer WITHOUT root, via its unprivileged install script -- the same rootless
           # path our HPC targets (no sudo) use -- exercised through our shipped
-          # `optarena-install-apptainer` wrapper (optarena/containers.py). rpm2cpio + cpio: the
+          # `hpcagent-bench-install-apptainer` wrapper (hpcagent_bench/containers.py). rpm2cpio + cpio: the
           # installer unpacks an rpm. uidmap: newuidmap/newgidmap that --fakeroot uses to map this
           # user's subuid range.
           sudo apt-get install -y rpm2cpio cpio uidmap
-          optarena-install-apptainer "$HOME/apptainer"
+          hpcagent-bench-install-apptainer "$HOME/apptainer"
           echo "$HOME/apptainer/bin" >> "$GITHUB_PATH"
           # Sudoless apptainer needs unprivileged user namespaces for BOTH --fakeroot build and
           # plain exec. Where the host already permits them -- local dev, HPC, a permissive runner --
@@ -545,14 +545,14 @@ jobs:
           fi
 
       - name: Phase 6a -- build + smoke-test the cpu agent-bench image (unified OCI -> SIF, gating)
-        # GATES now. UNIFIED build: one OCI Dockerfile (containers/optarena.Dockerfile, HW=cpu) is the
+        # GATES now. UNIFIED build: one OCI Dockerfile (containers/hpcagent_bench.Dockerfile, HW=cpu) is the
         # single recipe; apptainer builds the SIF FROM that OCI image, no .def, no --fakeroot (the
         # conversion runs no %post). We go through a `docker save` TAR + `docker-archive:` rather than
         # `docker-daemon://` so apptainer never needs Docker-daemon/socket access -- the archive path is
         # daemon-agnostic and the robust way to hand a locally-built OCI image to apptainer.
         # UNVERIFIED end-to-end on the heavy image; the docker-save -> docker-archive -> SIF -> exec
         # MECHANISM is validated locally with a minimal image. Revert = `apptainer build --fakeroot
-        # optarena-cpu.sif containers/cpu.def`.
+        # hpcagent_bench-cpu.sif containers/cpu.def`.
         if: ${{ !cancelled() }}
         run: |
           # Reclaim disk FIRST. The unified image (torch + dace + jax + the HPC stack) is multi-GB
@@ -562,29 +562,29 @@ jobs:
           # preinstalled toolchains are never used by this job.
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
           df -h / | tail -1
-          docker build -f containers/optarena.Dockerfile --build-arg HW=cpu -t optarena:cpu .
-          docker save optarena:cpu -o optarena-cpu.tar
+          docker build -f containers/hpcagent_bench.Dockerfile --build-arg HW=cpu -t hpcagent_bench:cpu .
+          docker save hpcagent_bench:cpu -o hpcagent_bench-cpu.tar
           # The docker layers are dead once the tar exists; drop them before the SIF (a third copy).
-          docker image rm optarena:cpu >/dev/null 2>&1 || true
+          docker image rm hpcagent_bench:cpu >/dev/null 2>&1 || true
           docker builder prune -af >/dev/null 2>&1 || true
-          apptainer build optarena-cpu.sif docker-archive:optarena-cpu.tar
+          apptainer build hpcagent_bench-cpu.sif docker-archive:hpcagent_bench-cpu.tar
           # ...and the tar is dead once the SIF exists; Phase 6b only needs the SIF.
-          rm -f optarena-cpu.tar
+          rm -f hpcagent_bench-cpu.tar
           df -h / | tail -1
           # The cpu image must import its numeric deps and carry the CPU-only torch build: a
           # bare ``torch`` would drag in the ~2 GB CUDA stack (see cpu.def). Assert the ``+cpu``
           # local version.
-          apptainer exec optarena-cpu.sif python3 -c "import numpy, scipy, dace, jax, numba, pythran, xgboost, h5py, netCDF4; import torch; assert '+cpu' in torch.__version__, 'cpu image has non-CPU torch: ' + torch.__version__; print('cpu image OK: deps import, torch', torch.__version__)"
+          apptainer exec hpcagent_bench-cpu.sif python3 -c "import numpy, scipy, dace, jax, numba, pythran, xgboost, h5py, netCDF4; import torch; assert '+cpu' in torch.__version__, 'cpu image has non-CPU torch: ' + torch.__version__; print('cpu image OK: deps import, torch', torch.__version__)"
           # The agent-linkable numeric libs (containers/LIBRARIES.md) must be present: HPTT is
           # SOURCE-built (build-hptt.sh, the fragile step -- guard header + .so), the rest are apt.
-          apptainer exec optarena-cpu.sif sh -c 'set -e; test -e /usr/local/include/hptt.h; test -e /usr/local/lib/libhptt.so; for l in libhwy libsleef libhwloc liblapacke; do ldconfig -p | grep -q "$l" || { echo "missing $l"; exit 1; }; done; echo "cpu image native libs OK: hptt (src) + hwy + sleef + hwloc + lapacke"; for b in perf numactl heaptrack likwid-topology papi_avail strace objdump; do command -v $b >/dev/null 2>&1 || { echo "missing $b"; exit 1; }; done; echo "cpu image perf tools OK: perf numactl heaptrack likwid papi strace objdump";'
+          apptainer exec hpcagent_bench-cpu.sif sh -c 'set -e; test -e /usr/local/include/hptt.h; test -e /usr/local/lib/libhptt.so; for l in libhwy libsleef libhwloc liblapacke; do ldconfig -p | grep -q "$l" || { echo "missing $l"; exit 1; }; done; echo "cpu image native libs OK: hptt (src) + hwy + sleef + hwloc + lapacke"; for b in perf numactl heaptrack likwid-topology papi_avail strace objdump; do command -v $b >/dev/null 2>&1 || { echo "missing $b"; exit 1; }; done; echo "cpu image perf tools OK: perf numactl heaptrack likwid papi strace objdump";'
 
       - name: Phase 6b -- container functionality (sudoless two-container launch, gating)
         # GATES now. The launch is sudoless -- unprivileged userns supplies the container isolation,
         # no sudo -- so a broken judge<->agent path reds the build instead of being swallowed.
         if: ${{ !cancelled() }}
         env:
-          OPTARENA_JUDGE_SIF: ${{ github.workspace }}/optarena-cpu.sif
+          HPCAGENT_BENCH_JUDGE_SIF: ${{ github.workspace }}/hpcagent_bench-cpu.sif
         run: |
           python -m pytest -q -p no:cacheprovider --timeout=900 tests/test_container_launch.py
 

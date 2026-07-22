@@ -29,7 +29,7 @@
 # dace
 # mkdocs documentation
 # mypy
-# optarena hardware_info downloads (HPL tarball, stream.c, extracted trees)
+# hpcagent_bench hardware_info downloads (HPL tarball, stream.c, extracted trees)
 # pipenv
 # pyenv
 #Pipfile.lock
@@ -62,7 +62,7 @@
 .ipynb_checkpoints
 .mypy_cache/
 .nox/
-.optarena_cache/
+.hpcagent_bench_cache/
 .pyre/
 .pytest_cache/
 .python-version
@@ -100,7 +100,7 @@ lib/
 lib64/
 local_settings.py
 nosetests.xml
-optarena.db
+hpcagent_bench.db
 parts/
 pip-delete-this-directory.txt
 pip-log.txt
@@ -123,43 +123,43 @@ wheels/
 # are deterministic, so the repo keeps only the numpy reference + manifest +
 # hand-written overrides. A HAND override at one of these canonical names is
 # committed explicitly with `git add -f <file>`.
-optarena/benchmarks/**/*_dace.py
-optarena/benchmarks/**/*_cupy.py
-optarena/benchmarks/**/*_numba_n.py
-optarena/benchmarks/**/*_numba_np.py
-optarena/benchmarks/**/*_pythran.py
+hpcagent_bench/benchmarks/**/*_dace.py
+hpcagent_bench/benchmarks/**/*_cupy.py
+hpcagent_bench/benchmarks/**/*_numba_n.py
+hpcagent_bench/benchmarks/**/*_numba_np.py
+hpcagent_bench/benchmarks/**/*_pythran.py
 # JAX is auto-generated for ALL kernels (numpyto_jax); the only committed
 # *_jax.py are hand overrides for legacy (microbench) kernels, force-added.
 # (TVM/Triton have NO auto-translator, so they are NOT ignored -- their
 # committed hand siblings, microbench only, are the sole source.)
-optarena/benchmarks/**/*_jax.py
-optarena/benchmarks/**/*_auto.py
+hpcagent_bench/benchmarks/**/*_jax.py
+hpcagent_bench/benchmarks/**/*_auto.py
 # Native (C/C++/Fortran) siblings: <short>[_<sparse>]_<fptype>.<ext> + the
 # <module>_cpp.py wrapper + the per-precision binding JSON, all generated on
 # demand from <short>_numpy.py. The repo commits none; a HAND override at one of
 # these names is committed with `git add -f`.
-optarena/benchmarks/**/*_cpp.py
-optarena/benchmarks/**/cpp_backend/*.c
-optarena/benchmarks/**/cpp_backend/*.cpp
-optarena/benchmarks/**/cpp_backend/*.f90
-optarena/benchmarks/**/cpp_backend/*_binding.json
-optarena/benchmarks/**/cpp_backend/*.so
-optarena/benchmarks/**/cpp_backend/build/
-optarena/benchmarks/**/cpp_backend/build-clang/
+hpcagent_bench/benchmarks/**/*_cpp.py
+hpcagent_bench/benchmarks/**/cpp_backend/*.c
+hpcagent_bench/benchmarks/**/cpp_backend/*.cpp
+hpcagent_bench/benchmarks/**/cpp_backend/*.f90
+hpcagent_bench/benchmarks/**/cpp_backend/*_binding.json
+hpcagent_bench/benchmarks/**/cpp_backend/*.so
+hpcagent_bench/benchmarks/**/cpp_backend/build/
+hpcagent_bench/benchmarks/**/cpp_backend/build-clang/
 
 # Pluto polyhedral-optimizer intermediates (the committed *_pluto_input.c are the
 # INPUTS and stay; .pluto.cloog is a generated artifact -- never commit it).
 *.pluto.cloog
 
-# HuggingFace dataset export (optarena export-hf). The dataset is a pure
+# HuggingFace dataset export (hpcagent-bench export-hf). The dataset is a pure
 # regenerator over the manifest tree -- never cached in the repo (the CI workflow
 # rebuilds + publishes it). The default local output stays out of git.
-optarena_hf.parquet
-optarena_hf.jsonl
+hpcagent_bench_hf.parquet
+hpcagent_bench_hf.jsonl
 
 # Harbor adapter: generated task directories (regenerated from the kernel suite by
-# adapters/optarena/run_adapter.py -- never committed).
-adapters/optarena/tasks/
+# adapters/hpcagent_bench/run_adapter.py -- never committed).
+adapters/hpcagent_bench/tasks/
 
 # --- Local run scratch (machine-specific; never committed) --------------------
 # Hardware/CPU dumps, agent run outputs, and SDFG/visualization scratch left by
@@ -175,8 +175,8 @@ scripts/verify_tvm.py
 tools/pluto_affine_survey_results.txt
 
 # Native (no-container) run scratch -- keep the folder, ignore its contents.
-optarena/native_runs/*
-!optarena/native_runs/.gitkeep
+hpcagent_bench/native_runs/*
+!hpcagent_bench/native_runs/.gitkeep
 
 # --- Build / cache artifacts (machine-generated; never committed) -------------
 # GT4Py kernel cache, compiled Fortran modules, ruff cache.
@@ -202,8 +202,8 @@ id_ecdsa*
 *.p12
 *.pfx
 
-# Optional compiler diagnostics (optarena/perf_reports.py): vectorization reports +
-# objdump disassembly, produced only when $OPTARENA_PERF_REPORTS_* is switched on.
+# Optional compiler diagnostics (hpcagent_bench/perf_reports.py): vectorization reports +
+# objdump disassembly, produced only when $HPCAGENT_BENCH_PERF_REPORTS_* is switched on.
 # Build OUTPUT of a local run mirroring the benchmark tree -- regenerable from the
 # sources, host-specific (-march=native decides which loops vectorize and at what
 # width, so a committed report would describe someone else's CPU), and the tree is

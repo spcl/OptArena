@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Each codegen/compiler framework builds + runs + validates gemm end to end; skips if its toolchain is absent."""
 import os
@@ -12,7 +12,7 @@ KERNEL = "gemm"  # has C/Polly/Pluto autogen + a tvm and a triton sibling
 
 def _run_and_validate(framework: str) -> dict:
     """Run KERNEL through `framework`, validating vs numpy; returns the harness timing/validation dict."""
-    from optarena.frameworks import Benchmark, Test, generate_framework
+    from hpcagent_bench.frameworks import Benchmark, Test, generate_framework
     test = Test(Benchmark(KERNEL), generate_framework(framework), generate_framework("numpy"))
     return test.run(preset="S", validate=True, repeat=1, timeout=300.0, datatype="float64", ignore_errors=True)
 
@@ -75,7 +75,7 @@ def test_pluto_executes():
 def test_tvm_cpu_executes(monkeypatch):
     pytest.importorskip("tvm")
     # FORCE the no-tune path: the meta-schedule search is slow and runs outside the per-call timeout.
-    monkeypatch.setenv("OPTARENA_TVM_NOTUNE", "1")
+    monkeypatch.setenv("HPCAGENT_BENCH_TVM_NOTUNE", "1")
     _assert_validated("tvm_cpu")
 
 
@@ -83,11 +83,11 @@ def test_tvm_gpu_executes(monkeypatch):
     pytest.importorskip("tvm")
     if not _has_gpu():
         pytest.skip("no CUDA GPU for TVM (gpu) target")
-    monkeypatch.setenv("OPTARENA_TVM_NOTUNE", "1")
+    monkeypatch.setenv("HPCAGENT_BENCH_TVM_NOTUNE", "1")
     _assert_validated("tvm")
 
 
-# --- Triton (GPU-only: Triton has no CPU backend in OptArena) ---
+# --- Triton (GPU-only: Triton has no CPU backend in HPCAgent-Bench) ---
 def test_triton_executes():
     pytest.importorskip("triton")
     if not _has_gpu():

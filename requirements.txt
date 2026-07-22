@@ -1,4 +1,4 @@
-# optarena dependency list (hand-maintained).
+# HPCAgent-Bench dependency list (hand-maintained).
 # The runtime deps live in requirements/cpu.txt; this file pulls them in and adds
 # only the DEV-ONLY formatting/lint tools on top.
 -r requirements/cpu.txt

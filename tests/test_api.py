@@ -1,17 +1,17 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The public Python bindings (:mod:`optarena.api`): score / verify a kernel from
+"""The public Python bindings (:mod:`hpcagent_bench.api`): score / verify a kernel from
 your own code, native (in-process) or against a running judge -- the same contract
 the container endpoints expose, plus the str-enum config dataclass."""
 import dataclasses
 
 import pytest
 
-from optarena import api
-from optarena.harness.agent import reference_source
-from optarena.harness.envelope import Submission
-from optarena.harness.scoring import Score
-from optarena.harness.task import Task
+from hpcagent_bench import api
+from hpcagent_bench.harness.agent import reference_source
+from hpcagent_bench.harness.envelope import Submission
+from hpcagent_bench.harness.scoring import Score
+from hpcagent_bench.harness.task import Task
 
 TASK = Task("gemm", "restricted", "c")
 
@@ -45,11 +45,11 @@ def test_runconfig_coerces_strings_and_validates():
 
 
 def test_toplevel_lazy_exports():
-    import optarena
-    assert optarena.init is api.init  # forwarded to optarena.api on first access
-    assert optarena.RunMode is api.RunMode and optarena.Kernel is api.Kernel
+    import hpcagent_bench
+    assert hpcagent_bench.init is api.init  # forwarded to hpcagent_bench.api on first access
+    assert hpcagent_bench.RunMode is api.RunMode and hpcagent_bench.Kernel is api.Kernel
     with pytest.raises(AttributeError):
-        optarena.does_not_exist  # unknown attribute still raises (not swallowed)
+        hpcagent_bench.does_not_exist  # unknown attribute still raises (not swallowed)
 
 
 # --- init + the handle --------------------------------------------------------
@@ -151,7 +151,7 @@ def test_native_baseline_measures_the_time_to_beat():
 def test_container_mode_scores_via_a_running_judge(make_judge):
     if not _emitter_and_gcc():
         pytest.skip("NumpyToC emitter or gcc absent")
-    from optarena.harness.service import ServiceConfig
+    from hpcagent_bench.harness.service import ServiceConfig
     _srv, url = make_judge(ServiceConfig(baseline="c", oracle="numpy", input_mode="any", repeat=2))
     k = api.init("gemm", language="c", mode="container", judge_url=url)
     # info + baseline come from the judge in this mode

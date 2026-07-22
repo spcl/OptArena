@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The repo task layout (`layout='repo'`): ships a mock git repo with a naive seed + 'too slow' issue."""
 import json
@@ -6,10 +6,10 @@ import subprocess
 
 import pytest
 
-from optarena import harbor_adapter as A
-from optarena import hf_export
-from optarena.harness import repo_pr
-from optarena.spec import BenchSpec
+from hpcagent_bench import harbor_adapter as A
+from hpcagent_bench import hf_export
+from hpcagent_bench.harness import repo_pr
+from hpcagent_bench.spec import BenchSpec
 
 #: A simple kernel that HAS a NumpyToX C translation, so its repo ships a real seed.
 _KERNEL = "gemm"
@@ -29,7 +29,7 @@ def test_repo_layout_ships_a_mock_repo_with_seed_issue_and_makefile(tmp_path):
     spec = BenchSpec.load(_KERNEL)
     row = hf_export.resolved_row(spec, A._default_rb(spec), commit="abc123")
     dirs = A.generate(str(tmp_path), selector=_KERNEL, layout="repo", commit="abc123")
-    assert [d.name for d in dirs] == [f"optarena-{_KERNEL}"]
+    assert [d.name for d in dirs] == [f"hpcagent_bench-{_KERNEL}"]
     td = dirs[0]
 
     # The mock repo lives under environment/<kernel>/repo/ -> /app/<kernel>/repo/.
@@ -112,7 +112,7 @@ def test_repo_test_sh_grades_in_repo_source_and_gates_the_pr(tmp_path):
                           check=True).stdout.strip()
     assert f"--seed-sha {seed}" in sh
     assert f'seed_sha = "{seed}"' in (td / "task.toml").read_text()
-    assert "optarena.harness.harbor_grade" in sh
+    assert "hpcagent_bench.harness.harbor_grade" in sh
     assert "/logs/verifier/reward.json" in sh
     assert "submission.c" not in sh
 

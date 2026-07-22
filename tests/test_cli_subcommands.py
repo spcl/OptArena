@@ -1,10 +1,10 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Smoke tests for the collection/reporting subcommands folded in from ``scripts/``.
 
 The former standalone ``scripts/`` entrypoints (run_benchmark / run_framework /
 run_sparse_benchmark / plot_results / quickstart / pluto_affine_survey) are now
-``optarena`` CLI subcommands dispatching DIRECTLY to importable package functions.
+``hpcagent_bench`` CLI subcommands dispatching DIRECTLY to importable package functions.
 These tests assert, without any toolchain (no compile, no plot, no Pluto):
 
 * every new subcommand is registered on the top-level parser;
@@ -20,21 +20,21 @@ import types
 
 import pytest
 
-from optarena import config
-from optarena.cli import build_parser, main
+from hpcagent_bench import config
+from hpcagent_bench.cli import build_parser, main
 
 NEW_SUBCOMMANDS = ("run-benchmark", "run-framework", "run-sparse", "plot", "quickstart", "pluto-survey")
 
 #: subcommand -> (module dotted path, function name, trivial argv, expected cmd_* name).
 DISPATCH = {
-    "run-benchmark": ("optarena.support.collect.sweep", "run_benchmark_sweep", ["run-benchmark", "-b",
-                                                                                "gemm"], "cmd_run_benchmark"),
-    "run-framework": ("optarena.support.collect.sweep", "run_framework_sweep", ["run-framework", "-b",
-                                                                                "gemm"], "cmd_run_framework"),
-    "run-sparse": ("optarena.support.collect.sweep", "run_sparse_sweep", ["run-sparse"], "cmd_run_sparse"),
-    "plot": ("optarena.plotting", "plot_heatmap", ["plot"], "cmd_plot"),
-    "quickstart": ("optarena.support.collect.quickstart", "quickstart", ["quickstart"], "cmd_quickstart"),
-    "pluto-survey": ("optarena.support.collect.pluto_survey", "survey", ["pluto-survey"], "cmd_pluto_survey"),
+    "run-benchmark": ("hpcagent_bench.support.collect.sweep", "run_benchmark_sweep", ["run-benchmark", "-b",
+                                                                                      "gemm"], "cmd_run_benchmark"),
+    "run-framework": ("hpcagent_bench.support.collect.sweep", "run_framework_sweep", ["run-framework", "-b",
+                                                                                      "gemm"], "cmd_run_framework"),
+    "run-sparse": ("hpcagent_bench.support.collect.sweep", "run_sparse_sweep", ["run-sparse"], "cmd_run_sparse"),
+    "plot": ("hpcagent_bench.plotting", "plot_heatmap", ["plot"], "cmd_plot"),
+    "quickstart": ("hpcagent_bench.support.collect.quickstart", "quickstart", ["quickstart"], "cmd_quickstart"),
+    "pluto-survey": ("hpcagent_bench.support.collect.pluto_survey", "survey", ["pluto-survey"], "cmd_pluto_survey"),
 }
 
 
@@ -84,8 +84,8 @@ def test_subcommand_dispatches_to_module_function(subcommand, monkeypatch):
 def test_run_benchmark_resolves_preset_and_forwards_flags(monkeypatch):
     """`-p fuzzed:7` is resolved to base `fuzzed` and the selectors are forwarded."""
     calls = []
-    _stub_module(monkeypatch, "optarena.support.collect.sweep", "run_benchmark_sweep", lambda *a, **k: calls.append(
-        (a, k)))
+    _stub_module(monkeypatch, "hpcagent_bench.support.collect.sweep", "run_benchmark_sweep",
+                 lambda *a, **k: calls.append((a, k)))
     try:
         assert main(["run-benchmark", "-b", "atax", "-f", "numba", "-p", "fuzzed:7"]) == 0
     finally:
@@ -98,10 +98,10 @@ def test_run_benchmark_resolves_preset_and_forwards_flags(monkeypatch):
 
 def test_plot_forwards_db_and_output_defaults(monkeypatch):
     calls = []
-    _stub_module(monkeypatch, "optarena.plotting", "plot_heatmap", lambda **k: calls.append(k))
+    _stub_module(monkeypatch, "hpcagent_bench.plotting", "plot_heatmap", lambda **k: calls.append(k))
     assert main(["plot"]) == 0
     kwargs = calls[0]
-    assert kwargs["db"] == "optarena.db"
+    assert kwargs["db"] == "hpcagent_bench.db"
     assert kwargs["output"] == "heatmap.pdf"
     assert kwargs["preset"] == "S"  # plot's default preset (matches the legacy plot_results.py)
 

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Sudoless Apptainer launch of the judge + agent containers: structural checks + a gated e2e run."""
 import json
@@ -13,8 +13,8 @@ import time
 import pytest
 import yaml
 
-from optarena import paths
-from optarena.harness import tools
+from hpcagent_bench import paths
+from hpcagent_bench.harness import tools
 
 REPO = paths.ROOT
 SCRIPT = REPO / "scripts" / "run_agent_in_container.sh"
@@ -51,14 +51,14 @@ def test_apptainer_runs_unprivileged():
 
 # --- end-to-end (gated on a SIF) ---
 def _judge_sif():
-    env = os.environ.get("OPTARENA_JUDGE_SIF")
+    env = os.environ.get("HPCAGENT_BENCH_JUDGE_SIF")
     if env and os.path.exists(env):
         return env
-    hits = sorted(REPO.glob("optarena-*cpu*.sif"))
+    hits = sorted(REPO.glob("hpcagent_bench-*cpu*.sif"))
     if hits:
         return str(hits[0])
-    if os.environ.get("OPTARENA_BUILD_SIF") == "1":
-        sif = REPO / "optarena-cpu.sif"
+    if os.environ.get("HPCAGENT_BENCH_BUILD_SIF") == "1":
+        sif = REPO / "hpcagent_bench-cpu.sif"
         # --fakeroot so an unprivileged install (no setuid) can run the %post.
         subprocess.run(["apptainer", "build", "--fakeroot", str(sif), str(REPO / "containers" / "cpu.def")], check=True)
         return str(sif)
@@ -99,9 +99,9 @@ def _exec(sif, *cmd, env=None, background=False, log=None):
 KERNEL = "tsvc_2_vdotr"
 _AGENT_SNIPPET = f"""
 import json
-from optarena.harness import tools
-from optarena.harness.optimizers import BlasReductionOptimizer
-from optarena.harness.task import Task
+from hpcagent_bench.harness import tools
+from hpcagent_bench.harness.optimizers import BlasReductionOptimizer
+from hpcagent_bench.harness.task import Task
 sub = BlasReductionOptimizer().solve(Task("{KERNEL}", "restricted", "c"))
 c = tools.JudgeClient()  # JUDGE_URL from env
 print(json.dumps({{"verify": c.verify(sub, "{KERNEL}"), "score": c.score(sub, "{KERNEL}")}}))
@@ -113,7 +113,7 @@ def test_two_containers_judge_and_agent_via_tools(tmp_path):
         pytest.skip("apptainer not installed")
     sif = _judge_sif()
     if sif is None:
-        pytest.skip("no judge SIF (set OPTARENA_JUDGE_SIF=... or OPTARENA_BUILD_SIF=1)")
+        pytest.skip("no judge SIF (set HPCAGENT_BENCH_JUDGE_SIF=... or HPCAGENT_BENCH_BUILD_SIF=1)")
 
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
@@ -123,7 +123,7 @@ def test_two_containers_judge_and_agent_via_tools(tmp_path):
     judge = _exec(sif,
                   "python3",
                   "-m",
-                  "optarena.cli",
+                  "hpcagent_bench.cli",
                   "serve",
                   "--host",
                   "127.0.0.1",

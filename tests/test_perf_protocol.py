@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The configs x shapes performance protocol primitives in :mod:`optarena.fuzz`:
+"""The configs x shapes performance protocol primitives in :mod:`hpcagent_bench.fuzz`:
 config enumeration, correctness edge shapes, and timed large shapes.
 
 See docs/DESIGN_perf_protocol_configs_shapes.md. These are pure resolvers (no
@@ -8,7 +8,7 @@ emitter / FFI), so they run everywhere.
 """
 import pytest
 
-from optarena import fuzz
+from hpcagent_bench import fuzz
 
 # Validates the REAL size ranges/large-shape draws -> opt out of the suite-wide
 # small-size cap (the autouse _cap_fuzz_sizes fixture in conftest). Pure resolvers,

@@ -1,4 +1,4 @@
-// Copyright 2026 ETH Zurich and the OptArena authors.
+// Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Hand-written C++ reimplementation of vexx_k_numpy.py::vexx_all_paths -- the QE

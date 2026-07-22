@@ -1,10 +1,10 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Preset-token parsing: S/M/L/XL/fuzzed plus the fuzzed:<seed> grammar."""
 import pytest
 
-from optarena import config
-from optarena.spec import parse_preset, preset_arg, resolve_preset, select_short_names
+from hpcagent_bench import config
+from hpcagent_bench.spec import parse_preset, preset_arg, resolve_preset, select_short_names
 
 
 @pytest.fixture

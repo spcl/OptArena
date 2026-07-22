@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-kernel timeout: resolver precedence (override > yaml > per-level > fallback) + runner wiring."""
 import re
@@ -7,14 +7,14 @@ import types
 
 import pytest
 
-from optarena import config
-from optarena.harness import runner
-from optarena.harness.agent import StubAgent
-from optarena.harness.envelope import Submission
-from optarena.harness.runner import solve_task
-from optarena.harness.scoring import Score, resolve_kernel_timeout
-from optarena.harness.task import Task
-from optarena.spec import BenchSpec
+from hpcagent_bench import config
+from hpcagent_bench.harness import runner
+from hpcagent_bench.harness.agent import StubAgent
+from hpcagent_bench.harness.envelope import Submission
+from hpcagent_bench.harness.runner import solve_task
+from hpcagent_bench.harness.scoring import Score, resolve_kernel_timeout
+from hpcagent_bench.harness.task import Task
+from hpcagent_bench.spec import BenchSpec
 
 
 def _spec(*, level=None, **extra):

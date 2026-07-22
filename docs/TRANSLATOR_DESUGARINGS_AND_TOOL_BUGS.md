@@ -1,7 +1,7 @@
 # Translator Desugarings & Backend Tool Bugs
 
 Living ledger for the numpy->{C, C++, Fortran, numba, pythran, jax, pluto} translators
-(`optarena/numpy_translators/`). Two intertwined things are tracked here:
+(`hpcagent_bench/numpy_translators/`). Two intertwined things are tracked here:
 
 1. **Desugarings / emit-helpers we add** so a backend can express a kernel it otherwise
    rejects, or so an external tool (pluto, XLA) emits *correct / faster* code.

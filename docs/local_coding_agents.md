@@ -20,7 +20,7 @@ unpacked app bundle (macOS) -- never touching system dirs.
 
 ## 2. Three ways to use it
 
-### a) optarena benchmark agent (the in-harness auto-tuner)
+### a) HPCAgent-Bench benchmark agent (the in-harness auto-tuner)
 
 The benchmark loop models an agent as an auto-tuner: it hands the model a kernel
 + the exact C-ABI signature, gets back an implementation, compiles it, and scores
@@ -28,8 +28,8 @@ correctness + speedup. The Ollama backend needs **no Python package** (it speaks
 HTTP over the stdlib):
 
 ```bash
-python -m optarena.cli agent --agent ollama --kernels gemm --languages c
-# OPTARENA_OLLAMA_MODEL / OPTARENA_OLLAMA_HOST override the model / server.
+python -m hpcagent_bench.cli agent --agent ollama --kernels gemm --languages c
+# HPCAGENT_BENCH_OLLAMA_MODEL / HPCAGENT_BENCH_OLLAMA_HOST override the model / server.
 ```
 
 ### b) Continue.dev -- VS Code inline assistant
@@ -95,7 +95,7 @@ than hand-rolling the loop:
   OpenAI-compatible endpoint (`http://localhost:11434/v1`) and loop on a
   `run_tests` tool until it returns 0. Only worth it for full control.
 
-For the **optarena benchmark**, the harness *is* the loop: `agent --agent ollama`
+For the **HPCAgent-Bench benchmark**, the harness *is* the loop: `agent --agent ollama`
 generates -> compiles -> scores, and the correctness/speedup gate is the stop
 condition. (A propose->compile->repair retry loop that feeds the compiler error
 back to the model is the natural next step here.)
@@ -107,6 +107,6 @@ and reuses the same image definitions Docker does -- build a SIF directly from a
 committed definition and run it:
 
 ```bash
-apptainer build optarena-cpu.sif containers/cpu.def
-apptainer exec optarena-cpu.sif python3 scripts/run_benchmark.py -b gemm -f numpy -p S -v True
+apptainer build hpcagent_bench-cpu.sif containers/cpu.def
+apptainer exec hpcagent_bench-cpu.sif python3 scripts/run_benchmark.py -b gemm -f numpy -p S -v True
 ```

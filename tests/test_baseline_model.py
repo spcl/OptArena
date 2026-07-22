@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The per-track + per-language-autopar baseline model: track defaults, candidate compilers, vocabularies."""
 import importlib.util
@@ -7,11 +7,11 @@ import shutil
 
 import pytest
 
-from optarena import languages
-from optarena.harness import grading
-from optarena.harness.task import Task
-from optarena.flags import Mode
-from optarena.spec import BenchSpec
+from hpcagent_bench import languages
+from hpcagent_bench.harness import grading
+from hpcagent_bench.harness.task import Task
+from hpcagent_bench.flags import Mode
+from hpcagent_bench.spec import BenchSpec
 
 # Real corpus kernels, one per track, for the resolution tests.
 _FOUNDATION = "tsvc_2_s212"
@@ -157,7 +157,7 @@ def test_fortran_autopar_candidates_are_multicore_autopar():
 
 
 def test_api_baseline_enum_and_default():
-    from optarena import api
+    from hpcagent_bench import api
     values = [b.value for b in api.Baseline]
     assert values == ["numpy", "c", "c-autopar", "cpp-autopar", "fortran-autopar"]
     # The user-facing default resolves per track: None internally, "auto" on the wire.
@@ -168,7 +168,7 @@ def test_api_baseline_enum_and_default():
 
 
 def test_service_config_default_and_validation():
-    from optarena.harness.service import ServiceConfig, from_config
+    from hpcagent_bench.harness.service import ServiceConfig, from_config
     # The per-track default is None internally (the "auto" boundary token).
     assert ServiceConfig().baseline is None and from_config().baseline is None
     # Every concrete option is accepted + coerced; the "auto" sentinel resolves to None.
@@ -193,7 +193,7 @@ def test_c_autopar_reference_builds_and_times():
     """A c-autopar baseline compiles the multi-core autopar reference (fastest candidate) and times it."""
     if not _emitter_and_any(["clang", "gcc"]):
         pytest.skip("NumpyToC emitter or a C autopar compiler (clang/gcc) absent")
-    from optarena.harness.scoring import measure_baselines
+    from hpcagent_bench.harness.scoring import measure_baselines
     task = Task(_FOUNDATION, "restricted", "c")
     # Explicit c-autopar AND the auto (per-track) default must both land on the c-autopar reference.
     for baseline in ("c-autopar", "auto"):
@@ -208,7 +208,7 @@ def test_hpc_resolves_to_c_autopar_and_times():
     """An hpc kernel resolves to the c-autopar baseline and times the strongest available candidate."""
     if not _emitter_and_any(["clang", "gcc"]):
         pytest.skip("NumpyToC emitter or a C autopar compiler (clang/gcc) absent")
-    from optarena.harness.scoring import measure_baselines
+    from hpcagent_bench.harness.scoring import measure_baselines
     out = measure_baselines(Task(_HPC, "restricted", "c"), preset="S", repeat=2, baseline="auto")
     assert out, "no baseline timed"
     label = "c-autopar" if "c-autopar" in out else "numpy"
@@ -217,6 +217,6 @@ def test_hpc_resolves_to_c_autopar_and_times():
 
 def test_numpy_baseline_times_when_explicitly_selected():
     """An explicit numpy override times the numpy reference (the non-compiled denominator path)."""
-    from optarena.harness.scoring import measure_baselines
+    from hpcagent_bench.harness.scoring import measure_baselines
     out = measure_baselines(Task(_HPC, "restricted", "c"), preset="S", repeat=2, baseline="numpy")
     assert out.get("numpy", 0) > 0

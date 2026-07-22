@@ -1,10 +1,10 @@
 # Reference-container numeric libraries
 
-The canonical list of third-party numeric libraries pre-installed in the OptArena
+The canonical list of third-party numeric libraries pre-installed in the HPCAgent-Bench
 containers so an agent can link them (`-l...`) and the judge can re-link/re-run the
 submission reproducibly. **Both images must carry the identical set** -- the agent
-compiles against these in `optarena-cpu.sif` and the judge grades in
-`optarena-judge.sif`, which is `From: optarena-cpu.sif` (so the judge inherits this
+compiles against these in `hpcagent_bench-cpu.sif` and the judge grades in
+`hpcagent_bench-judge.sif`, which is `From: hpcagent_bench-cpu.sif` (so the judge inherits this
 stack automatically; only the CPU/GPU agent defs need editing).
 
 The agent build-token policy allows `-I / -D / -l / -L` (never `-O*`/`-march`, which the
@@ -14,7 +14,7 @@ harness supplies), so anything here is linkable as `-l<name>`. The base image is
 Scope: CPU numeric libraries for the 13 Berkeley dwarfs (dense/sparse linear algebra,
 spectral, structured/unstructured grids, N-body, tensor). GPU math libraries (cuBLAS,
 cuTENSOR, rocBLAS, ...) ship with the CUDA/ROCm toolkits in the `HW=nvidia` / `HW=amd`
-build of `optarena.Dockerfile` and are tracked separately in `optarena/envs/toolset.yaml`.
+build of `hpcagent_bench.Dockerfile` and are tracked separately in `hpcagent_bench/envs/toolset.yaml`.
 
 Legend: **[have]** already installed . **[add-apt]** apt, add to the images .
 **[add-src]** build from source (not packaged) . **[opt]** optional/heavy, listed not
@@ -132,7 +132,7 @@ submission in-container. All from apt on the same shared install line.
 
 ## Concrete change to the images
 
-Applied to the unified **`optarena.Dockerfile`** -- one apt install line shared by every
+Applied to the unified **`hpcagent_bench.Dockerfile`** -- one apt install line shared by every
 `HW=cpu|nvidia|amd` variant -- and the kept **`cpu.def`** Apptainer recipe (`judge.def`
 inherits `cpu.sif`). Added to the single apt install line:
 
@@ -149,7 +149,7 @@ Then HPTT is built from source in a post-apt step (`sh /build-hptt.sh`, the copi
 ## Notes / follow-ups
 
 - **Deduplicate**: DONE -- the per-hardware recipes were unified into a single
-  `optarena.Dockerfile` (build arg `HW=cpu|nvidia|amd`), so the apt list lives in exactly
+  `hpcagent_bench.Dockerfile` (build arg `HW=cpu|nvidia|amd`), so the apt list lives in exactly
   one place. This file remains the human-readable rationale for that list.
 - **Advertise to the agent**: the prompt/ABI doc does not currently tell the agent which
   libraries are present, so it will not link them. Add an "available libraries" section to

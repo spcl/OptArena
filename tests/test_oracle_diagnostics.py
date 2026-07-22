@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A FAIL status must carry the compiler / emitter's own message, not just the phase name.
 
@@ -97,7 +97,7 @@ def test_compile_failure_status_carries_the_compiler_error(monkeypatch):
 
 def test_pluto_survey_still_buckets_a_diagnosed_compile_failure():
     """The survey buckets on the phase, so appending a message must not reclassify the outcome."""
-    pytest.importorskip("optarena.support.collect.pluto_survey")
-    from optarena.support.collect import pluto_survey
+    pytest.importorskip("hpcagent_bench.support.collect.pluto_survey")
+    from hpcagent_bench.support.collect import pluto_survey
     assert pluto_survey.bucket("FAIL:compile: error: unknown type name 'nope'") == "compile-failed"
     assert pluto_survey.bucket("FAIL:compile") == "compile-failed"

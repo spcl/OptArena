@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The distributed (MPI) no-op optimizer -- the multi-node analog of NoOpOptimizer. Pure tests: no
 MPI launch or cluster; the output must be a valid Submission that round-trips scatter/gather. The
@@ -6,13 +6,13 @@ gated end-to-end scoring lives in ``test_mpi_scoring.py``."""
 import numpy as np
 import pytest
 
-from optarena.harness.agent import reference_mpi_source
-from optarena.harness.mpi_descriptor import Descriptor
-from optarena.harness.optimizers import NoOpMPIOptimizer, optimizer_registry
-from optarena.harness.task import Task
-from optarena.support.bindings import binding_from_spec
-from optarena.support.bindings.mpi_driver import gen_kernel_mpi_stub, mpi_symbol
-from optarena.spec import BenchSpec
+from hpcagent_bench.harness.agent import reference_mpi_source
+from hpcagent_bench.harness.mpi_descriptor import Descriptor
+from hpcagent_bench.harness.optimizers import NoOpMPIOptimizer, optimizer_registry
+from hpcagent_bench.harness.task import Task
+from hpcagent_bench.support.bindings import binding_from_spec
+from hpcagent_bench.support.bindings.mpi_driver import gen_kernel_mpi_stub, mpi_symbol
+from hpcagent_bench.spec import BenchSpec
 
 DISTRIBUTED_C = Task(kernel="scaled_add", language="c", residency="distributed")
 DISTRIBUTED_PY = Task(kernel="scaled_add", language="python", residency="distributed")
@@ -20,7 +20,7 @@ _BLOCK0 = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
 
 
 def test_registered_in_the_optimizer_registry():
-    """`optarena agent --agent noop-mpi` resolves through the same registry as every optimizer."""
+    """`hpcagent-bench agent --agent noop-mpi` resolves through the same registry as every optimizer."""
     assert optimizer_registry().get("noop-mpi") is NoOpMPIOptimizer
 
 

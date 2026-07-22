@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """SYNTAX-only gate for the CUDA codegen -- no GPU required.
 
@@ -27,9 +27,9 @@ import tempfile
 
 import pytest
 
-from optarena.spec import BenchSpec
-from optarena.support.bindings import binding_from_spec
-from optarena.support.bindings.mpi_driver import gen_mpi_driver
+from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.support.bindings import binding_from_spec
+from hpcagent_bench.support.bindings.mpi_driver import gen_mpi_driver
 
 #: (kernel, grid, device pointer indices). scaled_add is the elementwise 1-D reference the
 #: distributed track already uses; mat_scaled_add exercises the 2-D grid + the mixed

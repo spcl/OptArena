@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Provider-agnostic web search (:mod:`optarena.websearch`): env-keyed provider
+"""Provider-agnostic web search (:mod:`hpcagent_bench.websearch`): env-keyed provider
 selection, per-provider request shaping, and one normalized result shape -- all
 driven with an injected transport, so no test ever touches the network."""
 import json
@@ -8,14 +8,14 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from optarena import websearch
-from optarena.websearch import Provider, SearchResponse, WebSearchConfig, WebSearchError, search
+from hpcagent_bench import websearch
+from hpcagent_bench.websearch import Provider, SearchResponse, WebSearchConfig, WebSearchError, search
 
 #: All env vars any provider reads -- cleared before each test so the host's real
 #: keys never leak into selection assertions.
 _ALL_KEYS = sorted({k
                     for keys in websearch._ENV_KEYS.values()
-                    for k in keys} | {"OPTARENA_WEBSEARCH_PROVIDER", "GOOGLE_CSE_ID"})
+                    for k in keys} | {"HPCAGENT_BENCH_WEBSEARCH_PROVIDER", "GOOGLE_CSE_ID"})
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +58,7 @@ def test_explicit_config_provider_wins(monkeypatch):
 
 
 def test_env_override_selects_provider(monkeypatch):
-    monkeypatch.setenv("OPTARENA_WEBSEARCH_PROVIDER", "serper")
+    monkeypatch.setenv("HPCAGENT_BENCH_WEBSEARCH_PROVIDER", "serper")
     assert websearch.resolve_provider(WebSearchConfig()) is Provider.SERPER
 
 

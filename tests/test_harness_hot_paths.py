@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The harness's hot paths: what must stay cheap, and why.
 
@@ -17,10 +17,10 @@ import time
 import numpy as np
 import pytest
 
-from optarena import languages, osinfo, spec
-from optarena.flags import Mode
-from optarena.harness import native_call, timing
-from optarena.support.bindings.contract import binding_from_spec
+from hpcagent_bench import languages, osinfo, spec
+from hpcagent_bench.flags import Mode
+from hpcagent_bench.harness import native_call, timing
+from hpcagent_bench.support.bindings.contract import binding_from_spec
 
 #: Optional dependencies the framework registry must NOT drag in just to be imported.
 HEAVY = ("dace", "jax", "sqlmodel", "sympy", "torch", "tvm")
@@ -28,10 +28,10 @@ HEAVY = ("dace", "jax", "sqlmodel", "sympy", "torch", "tvm")
 
 # ------------------------------ lazy framework registry ------------------------------ #
 def test_importing_the_framework_registry_pulls_in_no_backend():
-    """``optarena.frameworks`` used to star-import every backend, so ~3.5s of dace + jax +
+    """``hpcagent_bench.frameworks`` used to star-import every backend, so ~3.5s of dace + jax +
     sqlmodel was paid by anything that touched it -- including every forked child and every
     pytest worker. A fresh interpreter must import the package with none of them loaded."""
-    code = ("import sys, optarena.frameworks;"
+    code = ("import sys, hpcagent_bench.frameworks;"
             f"print(','.join(m for m in {HEAVY!r} if m in sys.modules))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "", f"framework import pulled in: {out.stdout.strip()}"
@@ -40,7 +40,7 @@ def test_importing_the_framework_registry_pulls_in_no_backend():
 def test_the_harness_modules_import_without_a_backend():
     """The scorer's own modules reach into the registry for Benchmark / compare_arrays /
     tolerances_for. Those must not be a backdoor to the heavy imports."""
-    code = ("import sys, optarena.harness.scoring, optarena.harness.native_call;"
+    code = ("import sys, hpcagent_bench.harness.scoring, hpcagent_bench.harness.native_call;"
             f"print(','.join(m for m in {HEAVY!r} if m in sys.modules))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "", f"harness import pulled in: {out.stdout.strip()}"
@@ -50,15 +50,15 @@ def test_every_lazily_exported_name_actually_resolves():
     """A name in the map that its module does not define would raise only when first touched,
     which for a backend can be deep into a sweep."""
     import importlib
-    import optarena.frameworks as frameworks
+    import hpcagent_bench.frameworks as frameworks
     for name, module in frameworks._LAZY_EXPORTS.items():
-        assert name in vars(importlib.import_module(f"optarena.frameworks.{module}")), name
+        assert name in vars(importlib.import_module(f"hpcagent_bench.frameworks.{module}")), name
         assert frameworks.__getattr__(name) is not None, name
 
 
 def test_an_unknown_attribute_still_raises_attribute_error():
     """__getattr__ must not turn a typo into an import error or a None."""
-    import optarena.frameworks as frameworks
+    import hpcagent_bench.frameworks as frameworks
     with pytest.raises(AttributeError):
         frameworks.NoSuchFramework
 
@@ -67,7 +67,7 @@ def test_the_rebindable_dtype_globals_are_not_lazily_exported():
     """``dc_float`` and friends are rebound when a framework configures its precision, and
     __getattr__ caches into globals() -- exporting them here would pin the pre-configuration
     ``None`` for the life of the process. They belong to their defining module only."""
-    import optarena.frameworks as frameworks
+    import hpcagent_bench.frameworks as frameworks
     for name in ("dc_float", "dc_complex_float", "tl_float", "tvm_dtype"):
         assert name not in frameworks._LAZY_EXPORTS
 
@@ -75,10 +75,10 @@ def test_the_rebindable_dtype_globals_are_not_lazily_exported():
 def test_a_star_import_still_reaches_every_backend():
     """``import *`` consults __all__, never __getattr__: without it each backend becomes a
     NameError at its USE site, far from here."""
-    import optarena.frameworks as frameworks
+    import hpcagent_bench.frameworks as frameworks
     assert set(frameworks._LAZY_EXPORTS) <= set(frameworks.__all__)
     ns: dict = {}
-    exec("from optarena.frameworks import *", ns)  # noqa: S102 -- the behaviour under test
+    exec("from hpcagent_bench.frameworks import *", ns)  # noqa: S102 -- the behaviour under test
     for name in ("DaceFramework", "TritonFramework", "Test", "tolerances_for"):
         assert name in ns, f"{name} vanished from a star-import"
 
@@ -86,7 +86,7 @@ def test_a_star_import_still_reaches_every_backend():
 def test_a_map_entry_its_module_does_not_define_raises_attribute_error(monkeypatch):
     """getattr(..., default) and hasattr() absorb only AttributeError, so a KeyError from a
     stale map entry blows past every caller's fallback."""
-    import optarena.frameworks as frameworks
+    import hpcagent_bench.frameworks as frameworks
     monkeypatch.setitem(frameworks._LAZY_EXPORTS, "NotDefinedAnywhere", "errors")
     with pytest.raises(AttributeError):
         frameworks.NotDefinedAnywhere
@@ -121,7 +121,7 @@ def test_a_whole_measurement_runs_in_one_child(monkeypatch):
 def test_a_warmup_rep_skips_the_output_marshalling(monkeypatch):
     """sampled_reps passes ``warming`` so the callee can drop work whose result is discarded.
     On the device path that output map is a real D2H copy of every output, per warmup rep."""
-    from optarena.harness import grading
+    from hpcagent_bench.harness import grading
     real, calls = grading.bind_kernel_outputs, []
 
     def counting(*args, **kwargs):
@@ -261,14 +261,14 @@ def test_refreshing_the_registry_drops_the_manifest_cache():
 def test_the_reference_emit_is_memoized_per_kernel_and_language():
     """One emit is a full translator run (~0.8s) and a single task asks for the same source up
     to five times."""
-    from optarena.harness.agent import emit_reference_source
+    from hpcagent_bench.harness.agent import emit_reference_source
     assert emit_reference_source("gemm", "c") is emit_reference_source("gemm", "c")
 
 
 def test_refreshing_the_registry_drops_the_reference_emit_too():
     """The emitted reference derives from the manifest, so a cache left behind serves source
     built from the OLD spec, with nothing about it looking stale."""
-    from optarena.harness.agent import emit_reference_source
+    from hpcagent_bench.harness.agent import emit_reference_source
     first = emit_reference_source("gemm", "c")
     spec.KERNELS.refresh()
     assert emit_reference_source("gemm", "c") is not first

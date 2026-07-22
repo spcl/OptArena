@@ -1,7 +1,7 @@
 # Third-party fixture license notice
 
 `lulesh_comp_kernels_original.f90` in this directory is a **vendored third-party
-source** and is **NOT** covered by the OptArena / dace-fortran license. It is a
+source** and is **NOT** covered by the HPCAgent-Bench / dace-fortran license. It is a
 byte-identical copy of the dace-fortran fixture
 `tests/lulesh/lulesh_comp_kernels.f90`.
 
@@ -12,7 +12,7 @@ byte-identical copy of the dace-fortran fixture
 | License | **GNU General Public License v3 or later** |
 
 It is included **only as a test fixture**: `test_reference.py` compiles it
-together with `lulesh_xcheck_caller.f90` (the OptArena `bind(c)` cross-check
+together with `lulesh_xcheck_caller.f90` (the HPCAgent-Bench `bind(c)` cross-check
 harness) and pins the numpy LULESH port numerically against the genuine Fortran
 kernels -- the same source the dace-fortran SDFG / generated C++ are validated
 against.
@@ -22,17 +22,17 @@ against.
 - **`lulesh_comp_kernels_original.f90`** -- the vendored LULESH kernels (GPL-3.0),
   byte-identical to the dace-fortran fixture (see its header for the dace-fortran
   authors' GPL Sec. 5 modification notes).
-- **`lulesh_xcheck_caller.f90`** -- OptArena's GPL-3.0 `bind(c)` cross-check
+- **`lulesh_xcheck_caller.f90`** -- HPCAgent-Bench's GPL-3.0 `bind(c)` cross-check
   harness (derives from the vendored GPL source by `USE`). Forwards to the
   genuine leaf kernels and assembles the full nodal-force / EOS paths from them.
 
-## OptArena bug fixes (GPL section 5 marked)
+## HPCAgent-Bench bug fixes (GPL section 5 marked)
 
 Three serial code paths in the vendored fixture carried never-executed upstream
 bugs (the fixture's own driver `STOP`s before the time loop; its inliner test
-only ran `CalcElemVolumeDerivative`). The OptArena authors FIXED them in
+only ran `CalcElemVolumeDerivative`). The HPCAgent-Bench authors FIXED them in
 `lulesh_comp_kernels_original.f90` (marked per GPL section 5 in the file header
-and at each `! OptArena fix:` site) so the genuine full serial Lagrange-leapfrog
+and at each `! HPCAgent-Bench fix:` site) so the genuine full serial Lagrange-leapfrog
 can run end-to-end as a bit-exact reference (`c_run_full` ->
 `test_full_trajectory_bit_exact`: numpy == genuine Fortran to ~1e-13):
 
@@ -50,9 +50,9 @@ can run end-to-end as a bit-exact reference (`c_run_full` ->
    whose slice bounds defaulted to 1-based. Fixed to
    `elemToNode(0:) => m_nodelist(i,:)`.
 
-These are bugs in this OptArena vendored copy only; the user-owned dace-fortran
+These are bugs in this HPCAgent-Bench vendored copy only; the user-owned dace-fortran
 source (`tests/lulesh/lulesh_comp_kernels.f90`) is left untouched.
 
 > Note: bundling a GPL-v3 fixture is a deliberate, repository-owner decision
 > recorded here for transparency; the fixture is test-only and is not linked into
-> any distributed OptArena artifact.
+> any distributed HPCAgent-Bench artifact.

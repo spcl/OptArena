@@ -1,7 +1,7 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """CI lint: optimization flags (``-O3`` / ``-march=native`` / ``-ffast-math``)
-must come from the central matrix (``optarena/flags.py``), never be
+must come from the central matrix (``hpcagent_bench/flags.py``), never be
 string-literal'd elsewhere in the harness or build scripts.
 
 The scan looks at LIVE code only: a flag mentioned in a comment or a docstring
@@ -22,16 +22,16 @@ import re
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 _PATTERN = re.compile(r"-O3|-march=native|-ffast-math")
-_SCAN_DIRS = ("optarena", "scripts")
+_SCAN_DIRS = ("hpcagent_bench", "scripts")
 _ALLOW = {
-    "optarena/flags.py",  # the matrix itself
+    "hpcagent_bench/flags.py",  # the matrix itself
     "scripts/emit_cpp_ports.py",  # emits CMake text (TODO: route)
     "scripts/emit_c_variants.py",  # emits CMake text (TODO: route)
     "scripts/pull_cpp.py",  # emits CMake text (TODO: route)
-    "optarena/harbor_adapter.py",  # agent-facing delivery prose: documents which flags the harness auto-applies (not a build command)
-    "optarena/benchmarks/hpc/n_body_methods/gromacs/nbnxm/tests/test_gromacs_nbnxm.py",  # -O3 builds the C correctness oracle, not the graded matrix
-    "optarena/benchmarks/hpc/n_body_methods/lavamd/tests/test_lavamd.py",  # ditto: reference-C oracle build
-    "optarena/benchmarks/hpc/map_reduce/xsbench/tests/test_xsbench.py",  # ditto: reference-C oracle build
+    "hpcagent_bench/harbor_adapter.py",  # agent-facing delivery prose: documents which flags the harness auto-applies (not a build command)
+    "hpcagent_bench/benchmarks/hpc/n_body_methods/gromacs/nbnxm/tests/test_gromacs_nbnxm.py",  # -O3 builds the C correctness oracle, not the graded matrix
+    "hpcagent_bench/benchmarks/hpc/n_body_methods/lavamd/tests/test_lavamd.py",  # ditto: reference-C oracle build
+    "hpcagent_bench/benchmarks/hpc/map_reduce/xsbench/tests/test_xsbench.py",  # ditto: reference-C oracle build
 }
 
 #: AST nodes that carry a leading docstring (module / class / def / async def).
@@ -94,6 +94,6 @@ def test_no_literal_opt_flags_outside_matrix():
     for p, rel in _candidates():
         text = p.read_text(errors="ignore")
         offenders += _py_offenders(text, rel) if p.suffix == ".py" else _raw_offenders(text, rel)
-    assert not offenders, ("Literal optimization flags found outside optarena/flags.py -- route them "
+    assert not offenders, ("Literal optimization flags found outside hpcagent_bench/flags.py -- route them "
                            "through the matrix (or allowlist with a justification in this file):\n  " +
                            "\n  ".join(offenders))

@@ -1,13 +1,13 @@
-# Copyright 2026 ETH Zurich and the OptArena authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Resolution of the config/shape forms in :func:`optarena.fuzz.sample_params`.
+"""Resolution of the config/shape forms in :func:`hpcagent_bench.fuzz.sample_params`.
 
 Microkernels (intervals/sets/scalars only) resolve exactly as before; microapps
 add derive/construct/in size forms + a valid config space + residual constraints.
 """
 import pytest
 
-from optarena import fuzz
+from hpcagent_bench import fuzz
 
 # Validates the REAL size ranges/distributions -> opt out of the suite-wide small-size
 # cap (the autouse _cap_fuzz_sizes fixture in conftest). No speed cost: pure sampler.
@@ -145,8 +145,8 @@ def _microapp_manifest():
 
 
 def test_fuzz_configs_survive_benchspec_roundtrip_and_reach_sample_params():
-    from optarena.emit_bridge import legacy_bench_info_dict
-    from optarena.spec import BenchSpec
+    from hpcagent_bench.emit_bridge import legacy_bench_info_dict
+    from hpcagent_bench.spec import BenchSpec
     spec = BenchSpec.from_dict(_microapp_manifest(), source="cfgprobe")
     info = legacy_bench_info_dict(spec)["benchmark"]
 

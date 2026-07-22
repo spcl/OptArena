@@ -1,9 +1,9 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every ported kernel must be DISCOVERABLE, or it silently vanishes from the suite.
 
-A kernel is found by :func:`optarena.spec._scan_kernels`, which rglobs
-``optarena/benchmarks/**`` for a non-underscore ``<stem>.yaml`` and keys it by path. The numpy
+A kernel is found by :func:`hpcagent_bench.spec._scan_kernels`, which rglobs
+``hpcagent_bench/benchmarks/**`` for a non-underscore ``<stem>.yaml`` and keys it by path. The numpy
 reference is loaded separately by ``module_name``. So a port that ships a ``<k>_numpy.py`` but whose
 ``<k>.yaml`` is missing, underscore-prefixed, or malformed is INVISIBLE -- ``BenchSpec.load`` and the
 whole e2e sweep skip right past it, green and none the wiser.
@@ -15,8 +15,8 @@ until a downstream clone came up short. These guards make the class of loss loud
 
 import pytest
 
-import optarena.spec as spec
-from optarena.spec import BenchSpec
+import hpcagent_bench.spec as spec
+from hpcagent_bench.spec import BenchSpec
 from tests.numerical_oracle import foundation_kernels, legacy_kernels
 
 BENCH = spec.paths.BENCHMARKS

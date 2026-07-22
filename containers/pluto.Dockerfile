@@ -5,8 +5,8 @@
 # apt-heavy; baking it into this image keeps that cost OUT of every CI run and makes
 # the build reproducible + testable locally:
 #
-#   docker build -f containers/pluto.Dockerfile -t optarena-pluto .
-#   docker run --rm optarena-pluto polycc --version
+#   docker build -f containers/pluto.Dockerfile -t hpcagent_bench-pluto .
+#   docker run --rm hpcagent_bench-pluto polycc --version
 #
 # The commit is pinned (bump deliberately) and matches the unit-tests / e2e job's
 # PLUTO_COMMIT in .github/workflows/tests.yml.

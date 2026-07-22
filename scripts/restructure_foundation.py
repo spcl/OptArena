@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Migrate the flat foundation/ benchmark tree into per-kernel subfolders.
 
@@ -49,7 +49,7 @@ import pathlib
 import subprocess
 import sys
 
-FOUNDATION = pathlib.Path("optarena/benchmarks/foundation")
+FOUNDATION = pathlib.Path("hpcagent_bench/benchmarks/foundation")
 
 #: Files that are not per-kernel artifacts and must stay at the foundation root.
 KEEP_AT_ROOT = {"__init__.py", "README.md"}
@@ -144,7 +144,7 @@ def main(argv=None):
                 print(f"  {src}  ->  {dst}")
     if args.apply:
         print(f"[APPLY] moved {moved} files into {len(moves)} kernel folders (staged, not committed).")
-        print("Verify: python -c \"from optarena.spec import registry; print(len(registry()))\" "
+        print("Verify: python -c \"from hpcagent_bench.spec import registry; print(len(registry()))\" "
               "and run a foundation e2e before committing.")
 
 

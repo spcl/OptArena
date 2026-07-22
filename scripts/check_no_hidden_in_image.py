@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CI guard: keep the held-out hidden tests out of every AGENT-facing image.
 
-The held-out scoring tests live in ``optarena/harness/hidden_tests/`` and are
+The held-out scoring tests live in ``hpcagent_bench/harness/hidden_tests/`` and are
 HOST-SIDE ONLY for the AGENT -- they must never be baked into, mounted into, or
 otherwise made visible inside any image, sandbox, or prompt the AGENT can read.
 The repo-root ``Dockerfile`` does ``COPY . .``, so without an explicit guard the
@@ -12,7 +12,7 @@ it computes the reference answers and is never handed to an agent, so it
 legitimately holds the hidden tests (see ``containers/agentbench.compose.yml`` --
 "judge holds the hidden tests"; the agent container "has NO hidden tests"). A def
 opts into that exemption EXPLICITLY by carrying the
-``optarena-firewall: trusted-judge-image`` marker comment, so the exemption is
+``hpcagent_bench-firewall: trusted-judge-image`` marker comment, so the exemption is
 auditable and every other def stays default-deny.
 
 Static checks (run on the repo, no Docker required):
@@ -42,12 +42,12 @@ import sys
 from pathlib import Path
 
 HIDDEN_DIRNAME = "hidden_tests"
-HIDDEN_REL_PATH = "optarena/harness/hidden_tests"
+HIDDEN_REL_PATH = "hpcagent_bench/harness/hidden_tests"
 
 # A def carrying this marker comment is the trusted judge/scorer image -- the one
 # image allowed to bake in the hidden tests (it is never given to an agent). The
 # opt-in is explicit so the exemption is greppable and default-deny for all others.
-TRUSTED_JUDGE_MARKER = "optarena-firewall: trusted-judge-image"
+TRUSTED_JUDGE_MARKER = "hpcagent_bench-firewall: trusted-judge-image"
 
 # Image-internal locations to probe in --built docker mode.
 DOCKER_PROBE_PATHS = (
@@ -113,8 +113,8 @@ def _source_leaks_hidden(src: str) -> bool:
     """True if a ``%files`` SOURCE path would copy the hidden_tests dir in.
 
     Apptainer ``%files`` does NOT honor ``.dockerignore``, so copying the repo
-    root (``.``) or any ANCESTOR of ``hidden_tests`` (``optarena``,
-    ``optarena/harness``, ...) bakes the answers in even though the line never
+    root (``.``) or any ANCESTOR of ``hidden_tests`` (``hpcagent_bench``,
+    ``hpcagent_bench/harness``, ...) bakes the answers in even though the line never
     contains the literal ``hidden_tests``.
     """
     src = src.strip().strip('"').strip("'").rstrip("/")
@@ -130,7 +130,7 @@ def _source_leaks_hidden(src: str) -> bool:
 def scan_def(path: Path, violations: list[str]) -> None:
     """Reject %files-section lines that would copy any hidden_tests path in --
     either by naming it directly or by copying an ancestor directory (``.`` /
-    ``optarena`` / ``optarena/harness``), since %files ignores .dockerignore.
+    ``hpcagent_bench`` / ``hpcagent_bench/harness``), since %files ignores .dockerignore.
 
     The trusted judge image (carrying ``TRUSTED_JUDGE_MARKER``) is exempt: it is
     the scorer, never handed to an agent, and legitimately holds the answers."""

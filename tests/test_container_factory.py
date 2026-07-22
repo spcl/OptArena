@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Unit tests for the container-launch factory: argv assembly, backend resolution, Harbor provider name."""
 import os
@@ -6,14 +6,14 @@ import subprocess
 
 import pytest
 
-from optarena import containers
+from hpcagent_bench import containers
 
 
 @pytest.fixture(autouse=True)
 def clean_backend_env(monkeypatch):
     """Drop every ambient container/runtime var so a developer's shell cannot skew the argv assertions."""
     for key in list(os.environ):
-        if key.startswith("OPTARENA_") or key in ("OLLAMA_HOST", "ANTHROPIC_API_KEY"):
+        if key.startswith("HPCAGENT_BENCH_") or key in ("OLLAMA_HOST", "ANTHROPIC_API_KEY"):
             monkeypatch.delenv(key, raising=False)
     yield
 
@@ -28,15 +28,15 @@ def test_load_backends_lists_the_two_exec_wrappers():
 
 def test_resolve_backend_precedence(monkeypatch):
     assert containers.resolve_backend("podman") == "podman"  # explicit wins
-    monkeypatch.setenv("OPTARENA_RUNTIME_BACKEND", "podman")
+    monkeypatch.setenv("HPCAGENT_BENCH_RUNTIME_BACKEND", "podman")
     assert containers.resolve_backend() == "podman"  # canonical env next
-    monkeypatch.delenv("OPTARENA_RUNTIME_BACKEND")
+    monkeypatch.delenv("HPCAGENT_BENCH_RUNTIME_BACKEND")
     assert containers.resolve_backend() == "apptainer"  # config/code default
 
 
 def test_resolve_backend_ignores_the_legacy_bash_var(monkeypatch):
-    # $OPTARENA_CONTAINER_RUNTIME is the shell launcher's own knob; only $OPTARENA_RUNTIME_BACKEND is shared.
-    monkeypatch.setenv("OPTARENA_CONTAINER_RUNTIME", "podman")
+    # $HPCAGENT_BENCH_CONTAINER_RUNTIME is the shell launcher's own knob; only $HPCAGENT_BENCH_RUNTIME_BACKEND is shared.
+    monkeypatch.setenv("HPCAGENT_BENCH_CONTAINER_RUNTIME", "podman")
     assert containers.resolve_backend() == "apptainer"
 
 
@@ -47,13 +47,13 @@ def test_resolve_backend_rejects_unknown():
 
 
 def test_local_run_command_apptainer_cpu():
-    argv = containers.local_run_command(["python", "-m", "optarena.cli", "agent"],
+    argv = containers.local_run_command(["python", "-m", "hpcagent_bench.cli", "agent"],
                                         backend="apptainer",
                                         hardware="cpu",
                                         repo_root="/repo")
     assert argv == [
-        "apptainer", "exec", "--env", "OPTARENA_IMAGE=cpu", "--bind", "/repo:/repo", "--pwd", "/repo",
-        "/repo/optarena-cpu.sif", "python", "-m", "optarena.cli", "agent"
+        "apptainer", "exec", "--env", "HPCAGENT_BENCH_IMAGE=cpu", "--bind", "/repo:/repo", "--pwd", "/repo",
+        "/repo/hpcagent_bench-cpu.sif", "python", "-m", "hpcagent_bench.cli", "agent"
     ]
 
 
@@ -62,7 +62,7 @@ def test_local_run_command_podman_nvidia_gpu_tokens():
     # podman run --rm --network host --device nvidia.com/gpu=all ...
     assert argv[:5] == ["podman", "run", "--rm", "--network", "host"]
     assert "--device" in argv and "nvidia.com/gpu=all" in argv
-    assert argv[-2:] == ["optarena:nvidia", "run"]
+    assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
 
 def test_local_run_command_podman_amd_gpu_tokens():
@@ -77,28 +77,28 @@ def test_local_run_command_rejects_dropped_backend():
 
 
 def test_default_image_sif_tag_and_overrides(monkeypatch):
-    assert containers.default_image("apptainer", "cpu", repo_root="/r") == "/r/optarena-cpu.sif"
-    assert containers.default_image("podman", "nvidia") == "optarena:nvidia"
-    monkeypatch.setenv("OPTARENA_SIF", "/scratch/my.sif")
+    assert containers.default_image("apptainer", "cpu", repo_root="/r") == "/r/hpcagent_bench-cpu.sif"
+    assert containers.default_image("podman", "nvidia") == "hpcagent_bench:nvidia"
+    monkeypatch.setenv("HPCAGENT_BENCH_SIF", "/scratch/my.sif")
     assert containers.default_image("apptainer", "cpu", repo_root="/r") == "/scratch/my.sif"
-    monkeypatch.setenv("OPTARENA_DOCKER_IMAGE", "reg/img:tag")
+    monkeypatch.setenv("HPCAGENT_BENCH_DOCKER_IMAGE", "reg/img:tag")
     assert containers.default_image("podman", "cpu") == "reg/img:tag"
 
 
 def test_collect_env_order_is_pinned(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk")  # a passthrough (non-OPTARENA) var
-    monkeypatch.setenv("OPTARENA_ZED", "z")  # dynamic OPTARENA_*, sorts last
-    monkeypatch.setenv("OPTARENA_ABC", "a")  # dynamic OPTARENA_*, sorts before ZED
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk")  # a passthrough (non-HPCAGENT_BENCH) var
+    monkeypatch.setenv("HPCAGENT_BENCH_ZED", "z")  # dynamic HPCAGENT_BENCH_*, sorts last
+    monkeypatch.setenv("HPCAGENT_BENCH_ABC", "a")  # dynamic HPCAGENT_BENCH_*, sorts before ZED
     pairs = containers.collect_env("cpu")
-    assert pairs[0] == ("OPTARENA_IMAGE", "cpu")  # image first
+    assert pairs[0] == ("HPCAGENT_BENCH_IMAGE", "cpu")  # image first
     assert ("ANTHROPIC_API_KEY", "sk") in pairs
     keys = [k for k, _ in pairs]
-    assert keys.index("OPTARENA_ABC") < keys.index("OPTARENA_ZED")  # sorted
-    assert keys.count("OPTARENA_IMAGE") == 1  # no duplicate
+    assert keys.index("HPCAGENT_BENCH_ABC") < keys.index("HPCAGENT_BENCH_ZED")  # sorted
+    assert keys.count("HPCAGENT_BENCH_IMAGE") == 1  # no duplicate
 
 
 def test_collect_env_rejects_a_newline_value(monkeypatch):
-    monkeypatch.setenv("OPTARENA_BAD", "line1\nline2")
+    monkeypatch.setenv("HPCAGENT_BENCH_BAD", "line1\nline2")
     with pytest.raises(ValueError):
         containers.collect_env("cpu")
 

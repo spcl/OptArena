@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """End-to-end pipeline smoke: run the no-op optimizer (grade + record) and emit a report PDF (seed
 results, plot heatmap). Every gate SKIPs, never fails, when a toolchain is genuinely absent. All side
@@ -14,16 +14,16 @@ import time
 import pytest
 from sqlmodel import Session
 
-import optarena
-from optarena.harness import recording
-from optarena.harness.optimizers import NoOpOptimizer
-from optarena.harness.scoring import score
-from optarena.harness.task import Task
-from optarena.frameworks.forked import run_forked
-from optarena.frameworks.schema import Result, results_engine
-from optarena.spec import BenchSpec
+import hpcagent_bench
+from hpcagent_bench.harness import recording
+from hpcagent_bench.harness.optimizers import NoOpOptimizer
+from hpcagent_bench.harness.scoring import score
+from hpcagent_bench.harness.task import Task
+from hpcagent_bench.frameworks.forked import run_forked
+from hpcagent_bench.frameworks.schema import Result, results_engine
+from hpcagent_bench.spec import BenchSpec
 
-pytest.importorskip("optarena.emit_bridge")  # the reference emitter must be importable
+pytest.importorskip("hpcagent_bench.emit_bridge")  # the reference emitter must be importable
 
 KERNEL = "tsvc_2_s212"  # small, fast-loading foundation kernel with a non-empty domain
 
@@ -35,7 +35,7 @@ _LATEX_ERROR_SIGNATURES = ("latex", "usetex", "dvipng", "kpathsea", "cm-super", 
 def _plot_script_path():
     """The heatmap plotter, resolved relative to the installed package; returned even if absent so
     the caller can SKIP with a clear message."""
-    root = pathlib.Path(optarena.__file__).resolve().parent.parent
+    root = pathlib.Path(hpcagent_bench.__file__).resolve().parent.parent
     return root / "scripts" / "plot_results.py"
 
 
@@ -90,7 +90,7 @@ def _seed_results(db, specs, samples=4):
 
 
 def _run_plot(workdir):
-    """Drive the heatmap plotter over ``workdir/optarena.db``; SKIPs when the script is gone or LaTeX
+    """Drive the heatmap plotter over ``workdir/hpcagent_bench.db``; SKIPs when the script is gone or LaTeX
     is incomplete, hard-fails on any other non-zero exit."""
     script = _plot_script_path()
     if not script.exists():
@@ -141,7 +141,7 @@ def test_noop_pipeline_records_and_emits_pdf(tmp_path):
 
     # report leg: seed the results table with the run's real timings, emit the PDF.
     domain = _kernel_domain(KERNEL)
-    _seed_results(tmp_path / "optarena.db", [
+    _seed_results(tmp_path / "hpcagent_bench.db", [
         (domain, KERNEL, "numpy", result.baseline_ns),
         (domain, KERNEL, "c", result.native_ns),
     ])
@@ -159,7 +159,7 @@ def test_plot_emits_pdf_from_seeded_results(tmp_path):
     for bench, domain in (("tsvc_2_s212", "classical compiler optimizations"), ("gemm", "LinAlg")):
         specs.append((domain, bench, "numpy", 10_000_000))  # 10 ms baseline
         specs.append((domain, bench, "dace", 5_000_000))  # 5 ms -> 2x over numpy
-    _seed_results(tmp_path / "optarena.db", specs)
+    _seed_results(tmp_path / "hpcagent_bench.db", specs)
 
     pdf = _run_plot(tmp_path)
     assert pdf.stat().st_size > 0, "emitted heatmap.pdf is empty"

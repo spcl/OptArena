@@ -1,10 +1,10 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Fuzzing conditioning/stability regimes (optarena.support.distributions.conditioning)."""
+"""Fuzzing conditioning/stability regimes (hpcagent_bench.support.distributions.conditioning)."""
 import numpy as np
 
-from optarena.support import distributions
-from optarena.precision import Precision
+from hpcagent_bench.support import distributions
+from hpcagent_bench.precision import Precision
 
 
 def _gen(name, shape):

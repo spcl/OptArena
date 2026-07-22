@@ -14,12 +14,12 @@
 !     `[nodeElemStart(g) : +count]` directly (was an invalid rank-2 pointer
 !     bind to a non-target), with off-by-one fixes.
 !
-! FURTHER MODIFICATIONS by the OptArena authors (GPL section 5 -- marking
+! FURTHER MODIFICATIONS by the HPCAgent-Bench authors (GPL section 5 -- marking
 ! changes), made to fix three latent bugs in code paths that the dace-fortran
 ! fixture never executed (its driver STOPs before the time loop and its inliner
 ! test only ran CalcElemVolumeDerivative), so that the FULL serial Lagrange-
-! leapfrog can run end-to-end as a bit-exact reference for the OptArena numpy
-! port. Each fix is marked with an `! OptArena fix:` comment at its site:
+! leapfrog can run end-to-end as a bit-exact reference for the HPCAgent-Bench numpy
+! port. Each fix is marked with an `! HPCAgent-Bench fix:` comment at its site:
 !   * InitStressTermsForElems: the loop `DO ii = 1, numElem` ran 1-based over the
 !     0-based sig/m_p/m_q arrays (read m_p(numElem) out of bounds, skipped
 !     element 0). Changed to `DO ii = 0, numElem-1` (canonical LULESH
@@ -568,7 +568,7 @@ CONTAINS
     INTEGER(KIND=4) :: ii
 
 !$OMP PARALLEL DO PRIVATE(ii) DEFAULT(none) SHARED(domain, sigxx, sigyy, sigzz)
-    ! OptArena fix: was `DO ii = 1, numElem` -- 1-based over 0-based arrays, which
+    ! HPCAgent-Bench fix: was `DO ii = 1, numElem` -- 1-based over 0-based arrays, which
     ! read m_p(numElem)/m_q(numElem) out of bounds and skipped element 0. The
     ! canonical LULESH stress term is sig = -p - q over all elements 0..numElem-1.
     DO ii = 0, numElem - 1
@@ -860,7 +860,7 @@ CONTAINS
       ALLOCATE (fy_elem(0:numElem8 - 1))
       ALLOCATE (fz_elem(0:numElem8 - 1))
     ELSE
-      ! OptArena fix: the serial branch below writes into fx_local/fy_local/
+      ! HPCAgent-Bench fix: the serial branch below writes into fx_local/fy_local/
       ! fz_local, which are ALLOCATABLE and were never allocated (undefined
       ! behaviour / segfault). Allocate the per-element (0:7) scratch here.
       ALLOCATE (fx_local(0:7))
@@ -871,7 +871,7 @@ CONTAINS
 !$OMP PARALLEL DO PRIVATE(kk, lnode, gnode, elemToNode, B, x_local, y_local, z_local)  &
 !$OMP DEFAULT(none) SHARED(domain, sigxx, sigyy, sigzz, fx_elem, fy_elem, fz_elem)
     DO kk = 0, numElem - 1
-      ! OptArena fix: `(0:)` keeps the rank-1 pointer's lower bound at 0 so the
+      ! HPCAgent-Bench fix: `(0:)` keeps the rank-1 pointer's lower bound at 0 so the
       ! `elemToNode(0..7)` reads below are in range (a bare `=> ...(kk,:)` gives
       ! default 1-based bounds).
       elemToNode(0:) => domain%m_nodelist(kk, :)
@@ -931,7 +931,7 @@ CONTAINS
       DEALLOCATE (fy_elem)
       DEALLOCATE (fz_elem)
     ELSE
-      ! OptArena fix: release the serial-path scratch allocated above.
+      ! HPCAgent-Bench fix: release the serial-path scratch allocated above.
       DEALLOCATE (fx_local)
       DEALLOCATE (fy_local)
       DEALLOCATE (fz_local)
@@ -1223,7 +1223,7 @@ CONTAINS
 !$OMP DEFAULT(none) SHARED(domain, determ, gamma, x8n, y8n, z8n)
     DO i2 = 0, numElem - 1
 
-      elemToNode(0:) => domain%m_nodelist(i2, :)  ! OptArena fix: 0-based slice bounds
+      elemToNode(0:) => domain%m_nodelist(i2, :)  ! HPCAgent-Bench fix: 0-based slice bounds
 
       i3 = 8*i2
       volinv = (1.0_RLK)/determ(i2)
@@ -1452,7 +1452,7 @@ CONTAINS
 !$OMP DEFAULT(none) SHARED(domain, determ, numElem)
     DO i = 0, numElem - 1
       ! Index_t* elemToNode = domain.nodelist(i);
-      elemToNode(0:) => domain%m_nodelist(i, :)  ! OptArena fix: 0-based slice bounds
+      elemToNode(0:) => domain%m_nodelist(i, :)  ! HPCAgent-Bench fix: 0-based slice bounds
       CALL CollectDomainNodesToElemNodes(domain, elemToNode, x1, y1, z1)
 
       CALL CalcElemVolumeDerivative(pfx, pfy, pfz, x1, y1, z1)
@@ -1830,7 +1830,7 @@ CONTAINS
 !$OMP                     lnode, gnode, dt2, j)                                    &
 !$OMP DEFAULT(none) SHARED(domain)
     DO k = 0, numElem - 1
-      elemToNode(0:) => domain%m_nodelist(k, :)  ! OptArena fix: 0-based slice bounds
+      elemToNode(0:) => domain%m_nodelist(k, :)  ! HPCAgent-Bench fix: 0-based slice bounds
 
       ! Get nodal coordinates from global arrays and copy into local arrays
       CALL CollectDomainNodesToElemNodes(domain, elemToNode, &
@@ -1955,7 +1955,7 @@ CONTAINS
 !$OMP DEFAULT(none) SHARED(domain, ptiny)
     DO i = 0, numElem - 1
 
-      elemToNode(0:) => domain%m_nodelist(i, :)  ! OptArena fix: 0-based slice bounds
+      elemToNode(0:) => domain%m_nodelist(i, :)  ! HPCAgent-Bench fix: 0-based slice bounds
       n0 = elemToNode(0)
       n1 = elemToNode(1)
       n2 = elemToNode(2)

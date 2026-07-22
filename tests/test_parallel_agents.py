@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """~4 agents grading in parallel -- the isolation contract: no two runs may collide. Pins native
 per-call build dirs, native run folders segregated by ``<run_id>/<kernel>``, and the judge service
@@ -9,10 +9,10 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import pytest
 
-from optarena.harness import native
-from optarena.harness.agent import reference_source
-from optarena.harness.envelope import Submission
-from optarena.harness.task import Task
+from hpcagent_bench.harness import native
+from hpcagent_bench.harness.agent import reference_source
+from hpcagent_bench.harness.envelope import Submission
+from hpcagent_bench.harness.task import Task
 
 TASK = Task("gemm", "restricted", "c")
 
@@ -37,9 +37,9 @@ def _grade_worker(item):
     """One agent in its own process: a ScriptedAgent that verifies twice, grading through the native
     API. Returns ``(index, all_correct, tokens)``. Top-level so it survives the ``spawn`` start method."""
     index, kernel, source, sleep_s = item
-    from optarena import api
-    from optarena.harness.agent import ScriptedAgent
-    from optarena.harness.task import Task as _Task
+    from hpcagent_bench import api
+    from hpcagent_bench.harness.agent import ScriptedAgent
+    from hpcagent_bench.harness.task import Task as _Task
     task = _Task(kernel, "restricted", "c")
     agent = ScriptedAgent([source, source], cost=(1, 1))  # the scripted move, replayed twice
     handle = api.init(kernel, language="c", repeat=1)
@@ -93,9 +93,9 @@ def test_concurrent_judge_keeps_each_agents_result_separate(make_judge):
     The scoring fork is pinned to ``forkserver`` so the threaded judge forks safely."""
     if not _emitter_and_gcc():
         pytest.skip("NumpyToC emitter or gcc absent")
-    from optarena import config
-    from optarena.harness import tools
-    from optarena.harness.service import ServiceConfig
+    from hpcagent_bench import config
+    from hpcagent_bench.harness import tools
+    from hpcagent_bench.harness.service import ServiceConfig
 
     config.set_override("runtime.mp_context", "forkserver")
     try:

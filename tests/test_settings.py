@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The typed config singleton.
 
@@ -10,8 +10,8 @@ import dataclasses
 
 import pytest
 
-from optarena import config
-from optarena.config import AttemptSettings, PromptSettings, Section, Settings, settings
+from hpcagent_bench import config
+from hpcagent_bench.config import AttemptSettings, PromptSettings, Section, Settings, settings
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +59,7 @@ def test_every_declared_field_exists_in_the_yaml():
 def test_prompt_settings_mirrors_prompt_config():
     """PromptConfig resolves the same prompt.* keys per call; a field added to one and not
     the other means the singleton cannot reach it."""
-    from optarena.harness.prompts import PromptConfig
+    from hpcagent_bench.harness.prompts import PromptConfig
     assert {f.name for f in dataclasses.fields(PromptSettings)} == {f.name for f in dataclasses.fields(PromptConfig)}
 
 
@@ -70,7 +70,7 @@ def test_assignment_changes_the_config_for_this_process():
 
 def test_assignment_reaches_the_consumer_not_just_the_singleton():
     """The point of the singleton: a component that resolves its own config sees the change."""
-    from optarena.harness.prompts import PromptConfig
+    from hpcagent_bench.harness.prompts import PromptConfig
     assert PromptConfig.from_config().inline_kernel is False
     settings().prompt.inline_kernel = True
     assert PromptConfig.from_config().inline_kernel is True
@@ -78,17 +78,17 @@ def test_assignment_reaches_the_consumer_not_just_the_singleton():
 
 def test_assignment_beats_an_env_var(monkeypatch):
     """Precedence is override > env > file, and the singleton is the override layer."""
-    monkeypatch.setenv("OPTARENA_ATTEMPTS_MAX_ROUNDS", "9")
+    monkeypatch.setenv("HPCAGENT_BENCH_ATTEMPTS_MAX_ROUNDS", "9")
     assert config.get("attempts.max_rounds") == 9
     settings().attempts.max_rounds = 3
     assert config.get("attempts.max_rounds") == 3
 
 
 def test_env_still_resolves_per_call_not_at_load(monkeypatch):
-    """Env must NOT be snapshotted into the singleton: tests (and callers) set OPTARENA_*
+    """Env must NOT be snapshotted into the singleton: tests (and callers) set HPCAGENT_BENCH_*
     after the config has already been read."""
     settings()  # force the load first
-    monkeypatch.setenv("OPTARENA_ATTEMPTS_MAX_ROUNDS", "7")
+    monkeypatch.setenv("HPCAGENT_BENCH_ATTEMPTS_MAX_ROUNDS", "7")
     assert config.get("attempts.max_rounds") == 7
 
 
@@ -97,7 +97,7 @@ def test_loading_registers_no_overrides(monkeypatch):
     would be permanently masked for every field the singleton touched."""
     config.reload()
     settings()  # load, without assigning anything
-    monkeypatch.setenv("OPTARENA_PROMPT_STRATEGY", "loopnest")
+    monkeypatch.setenv("HPCAGENT_BENCH_PROMPT_STRATEGY", "loopnest")
     assert config.get("prompt.strategy") == "loopnest"
 
 

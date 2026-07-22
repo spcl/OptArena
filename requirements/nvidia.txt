@@ -1,4 +1,4 @@
-# optarena dependency list (hand-maintained).
+# HPCAgent-Bench dependency list (hand-maintained).
 # --pre required for: apache-tvm
 --pre
 numpy>=2,<3
@@ -10,7 +10,7 @@ pygount
 pyyaml
 jsonschema
 setuptools
-# Typed results-DB schema layer (optarena/frameworks/schema.py).
+# Typed results-DB schema layer (hpcagent_bench/frameworks/schema.py).
 sqlmodel
 jinja2
 cffi
@@ -29,7 +29,7 @@ apache-tvm
 xgboost
 torch
 triton
-# mpi4py: the MPI-track SPMD Python driver; built against the image's MPICH (MPICC pin in containers/optarena.Dockerfile)
+# mpi4py: the MPI-track SPMD Python driver; built against the image's MPICH (MPICC pin in containers/hpcagent_bench.Dockerfile)
 mpi4py
 # HDF5 / netCDF bindings for the apt libhdf5-dev + libnetcdf-dev the images install.
 # Declared EXPLICITLY: they used to arrive only as a transitive dep of the stock PyPI

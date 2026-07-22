@@ -1,14 +1,14 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The EffiBench-style memory disclosure metric: pure MU/NMU functions + the aggregate() wiring."""
 import numpy as np
 import pytest
 
-from optarena.harness import metric as M
-from optarena.harness import native_call
-from optarena.harness.metric import max_memory, norm_memory
-from optarena.spec import BenchSpec
-from optarena.support.bindings.contract import binding_from_spec
+from hpcagent_bench.harness import metric as M
+from hpcagent_bench.harness import native_call
+from hpcagent_bench.harness.metric import max_memory, norm_memory
+from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.support.bindings.contract import binding_from_spec
 
 #: A python delivery only needs the binding for its kernel name; any kernel's will do.
 _BINDING = binding_from_spec(BenchSpec.load("gemm"))
@@ -89,7 +89,7 @@ def test_memory_metric_is_additive_not_replacing_the_ranked_score():
     """MU/NMU are reported alongside the geomean; the ranked score and solve_rate are unchanged."""
     ts = [_ts(100, 50, s_i=4.0), _ts(200, 100, s_i=9.0)]
     s = M.aggregate(ts)
-    assert s.optarena_score == pytest.approx((4 * 9)**0.5)  # geomean untouched
+    assert s.hpcagent_bench_score == pytest.approx((4 * 9)**0.5)  # geomean untouched
     assert s.solve_rate == 1.0
     assert s.max_memory_bytes == pytest.approx(150.0)  # the disclosure view is additive
     assert s.norm_memory == pytest.approx(2.0)

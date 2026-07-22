@@ -1,13 +1,13 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The static agent run: W workers round-robin over vLLM + judge endpoints, the judge's
 authoritative HTTP score folds onto the agent's think row, provenance survives, and endpoint
 assignment is static. Every test fakes the agent + the judge -- no LLM, no compile, no GPU."""
-import optarena.harness.pipeline as pipeline
-from optarena.harness.envelope import Submission
-from optarena.harness.runner import CallPoint, RunRow
-from optarena.harness.scoring import Score
-from optarena.harness.task import Task
+import hpcagent_bench.harness.pipeline as pipeline
+from hpcagent_bench.harness.envelope import Submission
+from hpcagent_bench.harness.runner import CallPoint, RunRow
+from hpcagent_bench.harness.scoring import Score
+from hpcagent_bench.harness.task import Task
 
 
 def make_think_row(**over) -> RunRow:
@@ -96,23 +96,23 @@ def test_gradable():
 
 
 def test_vllm_and_judge_endpoints(monkeypatch):
-    for k in ("OPTARENA_VLLM_URLS", "VLLM_BASE_URL", "OPENAI_BASE_URL", "OPTARENA_JUDGE_URLS", "JUDGE_URL"):
+    for k in ("HPCAGENT_BENCH_VLLM_URLS", "VLLM_BASE_URL", "OPENAI_BASE_URL", "HPCAGENT_BENCH_JUDGE_URLS", "JUDGE_URL"):
         monkeypatch.delenv(k, raising=False)
     assert pipeline.vllm_endpoints() == [None]  # nothing set -> agent default
     assert pipeline.judge_endpoints() == [pipeline.DEFAULT_JUDGE_URL]
-    monkeypatch.setenv("OPTARENA_VLLM_URLS", "http://a/v1, http://b/v1 ,")
-    monkeypatch.setenv("OPTARENA_JUDGE_URLS", "http://j0:8800,http://j1:8800")
+    monkeypatch.setenv("HPCAGENT_BENCH_VLLM_URLS", "http://a/v1, http://b/v1 ,")
+    monkeypatch.setenv("HPCAGENT_BENCH_JUDGE_URLS", "http://j0:8800,http://j1:8800")
     assert pipeline.vllm_endpoints() == ["http://a/v1", "http://b/v1"]  # split + trimmed, blanks dropped
     assert pipeline.judge_endpoints() == ["http://j0:8800", "http://j1:8800"]
 
 
 def test_agent_workers_default_is_one_per_endpoint(monkeypatch):
-    monkeypatch.delenv("OPTARENA_AGENT_WORKERS", raising=False)
-    from optarena import config
+    monkeypatch.delenv("HPCAGENT_BENCH_AGENT_WORKERS", raising=False)
+    from hpcagent_bench import config
     config.set_override("agent.workers", None)
     try:
         assert pipeline.agent_workers(["v0", "v1", "v2"], ["j0"]) == 3
-        monkeypatch.setenv("OPTARENA_AGENT_WORKERS", "8")
+        monkeypatch.setenv("HPCAGENT_BENCH_AGENT_WORKERS", "8")
         assert pipeline.agent_workers(["v0"], ["j0"]) == 8
     finally:
         config.clear_override("agent.workers")

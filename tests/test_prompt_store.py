@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The content-addressed prompt store: recording.store_prompt + the prompts table +
 the prompt_hash link on the result rows.
@@ -12,7 +12,7 @@ name (== hash) finds every result row that used it.
 import hashlib
 from types import SimpleNamespace
 
-from optarena.harness import recording
+from hpcagent_bench.harness import recording
 
 
 def _point(**kw):

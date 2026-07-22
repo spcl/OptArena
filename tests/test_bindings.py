@@ -1,15 +1,15 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Canonical C-ABI binding generation: pins the load-bearing guarantees of abi_contract.md."""
 
-from optarena.support.bindings import (
+from hpcagent_bench.support.bindings import (
     PackedGroup,
     binding_from_spec,
     gen_call_stub,
     gen_host_glue,
 )
-from optarena.support.bindings.stubs import LANGS
-from optarena.spec import BenchSpec
+from hpcagent_bench.support.bindings.stubs import LANGS
+from hpcagent_bench.spec import BenchSpec
 
 # --- Dense kernel: gemm --- #
 
@@ -203,7 +203,7 @@ def _declared_value(spec, name):
 
 
 def _corpus_specs():
-    from optarena.spec import KERNELS, BenchSpec
+    from hpcagent_bench.spec import KERNELS, BenchSpec
     for key in sorted(KERNELS):
         stem = key.rsplit("/", 1)[-1]
         try:
@@ -216,7 +216,7 @@ def test_no_fractional_scalar_is_bound_as_an_integer():
     """A scalar whose declared value is fractional must never be bound integer (dt=0.05 -> 0)."""
     import numpy as np
 
-    from optarena.support.bindings.contract import binding_from_spec
+    from hpcagent_bench.support.bindings.contract import binding_from_spec
     offenders = []
     for stem, spec in _corpus_specs():
         try:
@@ -236,7 +236,7 @@ def test_no_integer_scalar_is_bound_as_a_float():
     """The mirror: an integer-declared scalar must not reach the kernel as a double."""
     import numpy as np
 
-    from optarena.support.bindings.contract import binding_from_spec
+    from hpcagent_bench.support.bindings.contract import binding_from_spec
     offenders = []
     for stem, spec in _corpus_specs():
         try:
@@ -256,8 +256,8 @@ def test_no_integer_scalar_is_bound_as_a_float():
 
 def test_nbody_timestep_survives_the_abi():
     """The concrete regression: nbody's dt/softening/G must be fp64, not int64 (can't be deleted away)."""
-    from optarena.spec import BenchSpec
-    from optarena.support.bindings.contract import binding_from_spec
+    from hpcagent_bench.spec import BenchSpec
+    from hpcagent_bench.support.bindings.contract import binding_from_spec
     by = {a.name: a for a in binding_from_spec(BenchSpec.load("nbody")).args}
     for name in ("dt", "softening", "G", "tEnd"):
         assert by[name].dtype == "float64", (f"nbody.{name} bound {by[name].dtype}: int(0.05) == 0, so a C "

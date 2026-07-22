@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The compile-options matrix (``optarena/flags.py``) must produce flag sets a real compiler accepts
+"""The compile-options matrix (``hpcagent_bench/flags.py``) must produce flag sets a real compiler accepts
 and that yield a runnable program; each case skips when its compiler is not installed."""
 import os
 import shutil
@@ -9,7 +9,7 @@ import tempfile
 
 import pytest
 
-from optarena import flags
+from hpcagent_bench import flags
 
 # A trivial program per language whose result depends on an FP loop, so the optimizer can't delete it.
 _C_SRC = "int main(void){double x=1.0;for(int i=0;i<1000;i++)x*=1.0000001;return x>1e9;}\n"
@@ -73,7 +73,7 @@ def test_fortran_baseline_compiles_and_runs(name, exe, baseline):
 
 
 def _compiler_blocks():
-    from optarena.languages import _load_compilers
+    from hpcagent_bench.languages import _load_compilers
     return _load_compilers()
 
 
@@ -86,7 +86,7 @@ def test_every_compilers_yaml_ref_resolves():
             ref = block.get(key)
             if ref is not None and ref not in flag_vars:
                 bad.append(f"{name}.{key} -> {ref!r}")
-    assert not bad, f"compilers.yaml names constants that do not exist in optarena.flags: {bad}"
+    assert not bad, f"compilers.yaml names constants that do not exist in hpcagent_bench.flags: {bad}"
 
 
 def test_flang_uses_the_flang_baseline_not_the_clang_one():
@@ -99,9 +99,9 @@ def test_flang_uses_the_flang_baseline_not_the_clang_one():
 
 def test_every_native_flavor_is_wired_end_to_end():
     """A FRAMEWORK_META native flavor must be registered in every table the build path reads."""
-    from optarena.autogen import NATIVE_FRAMEWORKS
-    from optarena.benchmarks.cpp_runtime import FRAMEWORK_LANG
-    from optarena.frameworks.framework import FRAMEWORK_META
+    from hpcagent_bench.autogen import NATIVE_FRAMEWORKS
+    from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_LANG
+    from hpcagent_bench.frameworks.framework import FRAMEWORK_META
 
     native = {n for n, meta in FRAMEWORK_META.items() if meta["base"] == "native"}
     assert native, "no native flavors discovered -- the check would pass vacuously"
@@ -113,8 +113,8 @@ def test_every_native_flavor_is_wired_end_to_end():
 
 def test_a_cpp_flavor_names_its_compiler_explicitly():
     """Any cpp flavor absent from FRAMEWORK_COMPILER silently gets the g++ default."""
-    from optarena.benchmarks.cpp_runtime import FRAMEWORK_COMPILER, FRAMEWORK_LANG
-    from optarena.frameworks.framework import FRAMEWORK_META
+    from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_COMPILER, FRAMEWORK_LANG
+    from hpcagent_bench.frameworks.framework import FRAMEWORK_META
 
     unset = sorted(n for n, meta in FRAMEWORK_META.items()
                    if meta["base"] == "native" and FRAMEWORK_LANG.get(n) == "cpp" and n not in FRAMEWORK_COMPILER)

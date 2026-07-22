@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The two optional diagnostics (``optarena/perf_reports.py``): a vectorization report and a
+"""The two optional diagnostics (``hpcagent_bench/perf_reports.py``): a vectorization report and a
 lowered-code dump. Both knobs default off, and even switched on the report is a SEPARATE compile that
 must leave the timed ``.so`` byte-identical. Native cases build a fabricated two-precision
 ``cpp_backend`` with a pinned source, vectorizing in one loop and provably not in the other."""
@@ -10,10 +10,10 @@ import subprocess
 
 import pytest
 
-from optarena import flags, perf_reports
-from optarena.benchmarks import cpp_runtime
-from optarena.frameworks import generate_framework
-from optarena.languages import report_flags
+from hpcagent_bench import flags, perf_reports
+from hpcagent_bench.benchmarks import cpp_runtime
+from hpcagent_bench.frameworks import generate_framework
+from hpcagent_bench.languages import report_flags
 
 #: One kernel per precision: a loop that MUST vectorize followed by one that CANNOT (a dependence),
 #: so one report states both a width and a refusal. Symbol carries precision since both sources link
@@ -52,7 +52,7 @@ def test_both_knobs_default_off():
 @pytest.mark.parametrize("kind", sorted(perf_reports.KINDS))
 def test_knob_is_independently_enabled_by_env(kind, monkeypatch):
     """The two capabilities are independent: enabling one must not enable the other."""
-    monkeypatch.setenv(f"OPTARENA_PERF_REPORTS_{kind.upper()}", "1")
+    monkeypatch.setenv(f"HPCAGENT_BENCH_PERF_REPORTS_{kind.upper()}", "1")
     assert perf_reports.enabled(kind) is True
     other = next(k for k in perf_reports.KINDS if k != kind)
     assert perf_reports.enabled(other) is False
@@ -87,7 +87,7 @@ def test_clang_filter_never_matches_every_pass():
 
 
 def test_report_flags_never_name_a_missing_constant():
-    """Every ``report_ref`` in the compiler table must name a real :mod:`optarena.flags` constant."""
+    """Every ``report_ref`` in the compiler table must name a real :mod:`hpcagent_bench.flags` constant."""
     compilers = cpp_runtime.FRAMEWORK_LANG
     for framework, lang in compilers.items():
         report_flags(lang, compiler=cpp_runtime.FRAMEWORK_COMPILER.get(framework))

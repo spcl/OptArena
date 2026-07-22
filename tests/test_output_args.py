@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Validate every kernel's ``output_args`` (the C-ABI output-buffer contract).
 
@@ -16,7 +16,7 @@ import sys
 
 import pytest
 
-from optarena.spec import KERNELS, BenchSpec
+from hpcagent_bench.spec import KERNELS, BenchSpec
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 # infer_output_args.py is a local-only dev tool (gitignored, absent in a fresh

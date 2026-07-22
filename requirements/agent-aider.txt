@@ -1,2 +1,2 @@
-# optarena dependency list (hand-maintained).
+# HPCAgent-Bench dependency list (hand-maintained).
 aider-chat

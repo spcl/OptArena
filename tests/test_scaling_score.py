@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Multi-node scaling scores (paper sec:distributed): achieved speed-up sigma_i(P)=T_i(1)/T_i(P),
 ideal sigma*_i(P) = P for BOTH modes, parallel efficiency eta_i(P)=sigma_i(P)/sigma*_i(P),
@@ -13,8 +13,8 @@ import math
 
 import pytest
 
-from optarena.harness.metric import ScalingScore, ideal_speedup, scaling_point, scaling_score
-from optarena.spec import BenchSpec
+from hpcagent_bench.harness.metric import ScalingScore, ideal_speedup, scaling_point, scaling_score
+from hpcagent_bench.spec import BenchSpec
 
 
 # --------------------------------------------------------------------------------------- #

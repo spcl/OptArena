@@ -1,12 +1,12 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The shared benchmark-folder structure + every manifest's YAML structure: only the three tracks live
 at the top level, every kernel resolves by its on-disk path, and loading all manifests is the
 YAML-structure gate (a malformed one fails ``BenchSpec.load`` here)."""
 import ast
 
-from optarena import paths
-from optarena.spec import KERNELS, BenchSpec
+from hpcagent_bench import paths
+from hpcagent_bench.spec import KERNELS, BenchSpec
 
 TRACKS = ("hpc", "foundation", "ml")
 
@@ -146,7 +146,7 @@ def test_no_loop_variable_is_used_outside_its_loop():
 
 
 def test_top_level_is_only_the_three_tracks():
-    from optarena.harness.prompts import SUBTRACK_HINTS_DIR
+    from hpcagent_bench.harness.prompts import SUBTRACK_HINTS_DIR
 
     entries = {p.name for p in paths.BENCHMARKS.iterdir() if not p.name.startswith("__")}
     # The three tracks, the shared C runtime helper, the corpus provenance index, and the two

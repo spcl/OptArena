@@ -20,9 +20,9 @@ import numpy as np
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
 #: Wall-clock cap (s) on the forked jax child; a hung trace records skip:too-long for jax only.
-JAX_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_JAX_FORK_TIMEOUT_S", "180"))
+JAX_FORK_TIMEOUT_S = int(os.environ.get("HPCAGENT_BENCH_JAX_FORK_TIMEOUT_S", "180"))
 #: Wall-clock cap (s) on a forked Python/JIT backend child (numba/pythran/cupy): whole leg, emit->run.
-PY_FORK_TIMEOUT_S = int(os.environ.get("OPTARENA_PY_FORK_TIMEOUT_S", "600"))
+PY_FORK_TIMEOUT_S = int(os.environ.get("HPCAGENT_BENCH_PY_FORK_TIMEOUT_S", "600"))
 #: Kernels whose numpy reference is only valid at declared size; the polybench down-scale must skip them.
 NO_SCALE = ("distribution_search", "gpt2_block", "raman_fitting")
 #: Kernels out of scope for the static translators (control-flow search, not array math) -> documented skip.
@@ -31,7 +31,7 @@ OUT_OF_SCOPE = {
 }
 #: Address-space cap (GiB) on a backend compile subprocess, so a runaway compile (pythran) fails itself
 #: instead of OOM-killing the whole CI runner. Env-overridable.
-COMPILE_MEMORY_CAP_GB = int(os.environ.get("OPTARENA_COMPILE_MEMORY_CAP_GB", "8"))
+COMPILE_MEMORY_CAP_GB = int(os.environ.get("HPCAGENT_BENCH_COMPILE_MEMORY_CAP_GB", "8"))
 
 
 def _cap_compile_memory():
@@ -46,7 +46,7 @@ def _cap_compile_memory():
 
 #: Wall-clock cap (s) on a forked native-invoke child (C/C++/Fortran/pluto); a miscompile can spin
 #: forever, so bound the read + SIGKILL on expiry -> FAIL:timeout instead of hanging the sweep.
-_INVOKE_TIMEOUT_S = int(os.environ.get("OPTARENA_INVOKE_TIMEOUT_S", "120"))
+_INVOKE_TIMEOUT_S = int(os.environ.get("HPCAGENT_BENCH_INVOKE_TIMEOUT_S", "120"))
 # Cap OpenMP threads: pluto compiles with -fopenmp, and under `pytest -n auto` each xdist worker
 # would otherwise oversubscribe cores. Also keeps the strict-xfail gate deterministic.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -54,15 +54,15 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 # each preallocate a slice of it. setdefault so a caller can still force JAX_PLATFORMS=cuda.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
-from optarena import dtypes as _dtypes  # noqa: E402
-from optarena import languages  # noqa: E402
-from optarena.spec import BenchSpec  # noqa: E402
-from optarena.initialize import auto_initialize  # noqa: E402
-from optarena.precision import Precision  # noqa: E402
+from hpcagent_bench import dtypes as _dtypes  # noqa: E402
+from hpcagent_bench import languages  # noqa: E402
+from hpcagent_bench.spec import BenchSpec  # noqa: E402
+from hpcagent_bench.initialize import auto_initialize  # noqa: E402
+from hpcagent_bench.precision import Precision  # noqa: E402
 # The emitter's own fp-tag helper, so this file's globs match what it names emitted files.
 from numpyto_common.naming import fptype_tag  # noqa: E402
 # Shared with the nest-forge Pluto lane; kept under its historical private name for callers here.
-from optarena.pluto_affine import scop_nonaffine_reason as _scop_nonaffine_reason  # noqa: E402,F401
+from hpcagent_bench.pluto_affine import scop_nonaffine_reason as _scop_nonaffine_reason  # noqa: E402,F401
 
 #: by-value scalar ``kind`` -> ctypes type, sourced from the shared dtype registry so marshalling
 #: width matches the emitted signature.
@@ -103,7 +103,7 @@ def _all_backend_status(reason: str) -> Dict[str, str]:
     return {b: reason for b in (*BACKENDS, *PY_BACKENDS, "jax")}
 
 
-#: Defaults for ``optarena/config.yaml``'s ``oracle:`` block when a key is absent.
+#: Defaults for ``hpcagent_bench/config.yaml``'s ``oracle:`` block when a key is absent.
 _CONFIG_DEFAULTS = {
     "compile_timeout_s": 75,
     "kernel_timeout_s": 180,
@@ -114,7 +114,7 @@ _CONFIG_DEFAULTS = {
 
 def _cfg(key: str, short: str = "") -> Any:
     """Config value for ``key`` from ``oracle:``, honouring per-kernel ``oracle.overrides.<short>``."""
-    from optarena import config
+    from hpcagent_bench import config
     if short:
         ov = (config.get("oracle.overrides") or {}).get(short) or {}
         if key in ov:
@@ -152,13 +152,13 @@ def _grading_precision(spec: BenchSpec, precision: str) -> str:
 
 
 def foundation_kernels() -> List[str]:
-    base = REPO / "optarena" / "benchmarks" / "foundation"
+    base = REPO / "hpcagent_bench" / "benchmarks" / "foundation"
     return sorted(p.stem.removesuffix("_numpy") for p in base.rglob("*_numpy.py"))
 
 
 def legacy_kernels() -> List[str]:
     """Non-foundation kernels that load as a registered benchmark."""
-    base = REPO / "optarena" / "benchmarks"
+    base = REPO / "hpcagent_bench" / "benchmarks"
     out = []
     for p in base.rglob("*_numpy.py"):
         if "foundation" in p.parts:
@@ -196,14 +196,14 @@ def _custom_initialize(info, syms, datatype=np.float64) -> Dict[str, Any]:
     init = info["init"]
     # Lives in <module>.py beside <module>_numpy.py, never inside it (enforced by
     # tests/test_tree_structure.py); imported as a package module so intra-package imports resolve.
-    src = REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}.py'
+    src = REPO / "hpcagent_bench" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}.py'
     hint = (f'a kernel\'s {init["func_name"]!r} lives in {info["module_name"]}.py beside '
             f'{info["module_name"]}_numpy.py; defining it in the _numpy reference is not supported')
     if not src.is_file():
         raise FileNotFoundError(f'{info["module_name"]}: init.func_name is {init["func_name"]!r} '
                                 f"but {src} does not exist -- {hint}.")
-    mod = importlib.import_module("optarena.benchmarks.{r}.{m}".format(r=info["relative_path"].replace("/", "."),
-                                                                       m=info["module_name"]))
+    mod = importlib.import_module("hpcagent_bench.benchmarks.{r}.{m}".format(r=info["relative_path"].replace("/", "."),
+                                                                             m=info["module_name"]))
     fn = vars(mod).get(init["func_name"])
     if fn is None:
         raise AttributeError(f'{src} defines no {init["func_name"]!r} -- {hint}.')
@@ -220,7 +220,7 @@ def _custom_initialize(info, syms, datatype=np.float64) -> Dict[str, Any]:
 
 def _numpy_fn(info):
     import importlib.util
-    p = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
+    p = (REPO / "hpcagent_bench" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
     spec = importlib.util.spec_from_file_location(info["module_name"], p)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
@@ -261,8 +261,8 @@ def _diag_text(returncode: int, out: Optional[str], err: Optional[str], limit: i
 
 def _emit(short, info, out: pathlib.Path, precision: str = "") -> Tuple[bool, str]:
     """``(ok, diagnostic)`` -- the diagnostic is a status suffix, empty when ok."""
-    from optarena.emit_bridge import bench_info_tempfile
-    npy = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
+    from hpcagent_bench.emit_bridge import bench_info_tempfile
+    npy = (REPO / "hpcagent_bench" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
     # The legacy bench_info JSON the emitter reads is synthesized on the fly from the co-located YAML.
     with bench_info_tempfile(BenchSpec.load(short)) as bi:
         for mod in ("numpyto_c.cli", "numpyto_fortran.cli"):
@@ -291,10 +291,10 @@ def run_kernel(short: str,
     """
     np_float, prec_enum, emit_prec, rtol, atol = PRECISIONS[precision]
     spec = BenchSpec.load(short)
-    from optarena.emit_bridge import legacy_bench_info_dict
+    from hpcagent_bench.emit_bridge import legacy_bench_info_dict
     info = legacy_bench_info_dict(BenchSpec.load(short))["benchmark"]
     if "sparse_layouts" in info:
-        # Delegated to optarena/numpy_translators/tests/test_sparse_oracle.py, which builds the
+        # Delegated to hpcagent_bench/numpy_translators/tests/test_sparse_oracle.py, which builds the
         # per-layout scipy buffer ABI this sweep cannot (run_kernel's arg list is the logical operand).
         return _all_backend_status("skip:sparse")
     if spec.init is None:
@@ -457,7 +457,7 @@ def run_kernel(short: str,
                 return {b: f"skip:unresolved-arg:{nm}" for b in BACKENDS}
         # Set precision globals before loading the reference: some references use np_complex as a
         # dtype at import time (mandelbrot), which is None until set_datatype runs.
-        from optarena.frameworks import framework
+        from hpcagent_bench.frameworks import framework
         framework.np_float = np_float
         framework.np_complex = (np.complex64 if np_float == np.float32 else np.complex128)
         try:
@@ -662,8 +662,8 @@ def _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol,
     """Emit + compile + import + run + compare a Python/JIT backend, only in the forked child."""
     import importlib.util
     cli, extra, pattern, dep = PY_BACKENDS[backend]
-    npy = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
-    from optarena.emit_bridge import bench_info_tempfile
+    npy = (REPO / "hpcagent_bench" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
+    from hpcagent_bench.emit_bridge import bench_info_tempfile
     # bench_info JSON synthesized from the co-located YAML.
     with bench_info_tempfile(BenchSpec.load(short)) as bi, tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
@@ -815,11 +815,11 @@ def _jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec
     import jax
     import jax.numpy as jnp
     jax.config.update("jax_enable_x64", emit_prec != "float32")
-    npy = (REPO / "optarena" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
+    npy = (REPO / "hpcagent_bench" / "benchmarks" / info["relative_path"] / f'{info["module_name"]}_numpy.py')
     func_name = info["func_name"]
-    # OPTARENA_JAX_JIT=1 validates the AoT-compiled classifier form instead of the verbatim eager
+    # HPCAGENT_BENCH_JAX_JIT=1 validates the AoT-compiled classifier form instead of the verbatim eager
     # form (default); falls back to eager if the classifier can't express the kernel.
-    jax_jit = os.environ.get("OPTARENA_JAX_JIT") == "1"
+    jax_jit = os.environ.get("HPCAGENT_BENCH_JAX_JIT") == "1"
     src_text = npy.read_text()
     try:
         jax_src = emit_jax(src_text, func_name, jit=jax_jit)

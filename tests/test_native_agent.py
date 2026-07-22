@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Native (no-container) agent run mode + two run-loop fixes. Part A: native mode is host-framed, lands
 submissions under ``native_runs/<run_id>/<kernel>/``, and records ``execution="native"`` pinned over
@@ -9,14 +9,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from optarena import config
-from optarena.harness import native, runner
-from optarena.harness.agent import StubAgent
-from optarena.harness.envelope import Submission
-from optarena.harness.prompts import PromptConfig, available_variants, build_prompt
-from optarena.harness.runner import _feedback, _improve_feedback
-from optarena.harness.scoring import Score
-from optarena.harness.task import Task
+from hpcagent_bench import config
+from hpcagent_bench.harness import native, runner
+from hpcagent_bench.harness.agent import StubAgent
+from hpcagent_bench.harness.envelope import Submission
+from hpcagent_bench.harness.prompts import PromptConfig, available_variants, build_prompt
+from hpcagent_bench.harness.runner import _feedback, _improve_feedback
+from hpcagent_bench.harness.scoring import Score
+from hpcagent_bench.harness.task import Task
 
 TASK = Task("gemm", "restricted", "c")
 
@@ -34,7 +34,7 @@ def test_native_prompt_is_host_framed_and_default_is_container_framed():
     default_p = build_prompt(TASK, prompt_config=PromptConfig.from_config())
     # native: on the host, in the native_runs folder, no container
     assert "NATIVELY on the host" in native_p
-    assert "optarena/native_runs" in native_p and "submission.c" in native_p
+    assert "hpcagent_bench/native_runs" in native_p and "submission.c" in native_p
     assert "on this host" in native_p  # the how-to profiling line drops the "in the container" wording
     # default keeps the container framing, and never claims native
     assert "NATIVELY on the host" not in default_p
@@ -45,10 +45,10 @@ def test_native_prompt_is_host_framed_and_default_is_container_framed():
 
 
 def test_native_prompt_via_cli_variant(capsys):
-    from optarena.cli import main
+    from hpcagent_bench.cli import main
     assert main(["prompt", "gemm", "--variant", "native"]) == 0
     out = capsys.readouterr().out
-    assert "NATIVELY on the host" in out and "optarena/native_runs" in out
+    assert "NATIVELY on the host" in out and "hpcagent_bench/native_runs" in out
 
 
 # --- Part A: native_runs on-host layout --------------------------------------
@@ -81,7 +81,7 @@ def test_save_submission_writes_source_under_native_runs(tmp_path, monkeypatch):
 
 
 def test_cli_agent_native_flag_parses():
-    from optarena.cli import build_parser
+    from hpcagent_bench.cli import build_parser
     p = build_parser()
     assert p.parse_args(["agent", "stub"]).native is False
     assert p.parse_args(["agent", "stub", "--native"]).native is True
@@ -93,7 +93,7 @@ def test_cli_agent_native_flag_parses():
 def test_agent_summary_counts_timeout_correct():
     """A kernel that timed out AFTER reaching a correct best-so-far counts toward the correct-count
     and geomean; a not-solved timeout must not."""
-    from optarena.cli import _agent_summary
+    from hpcagent_bench.cli import _agent_summary
     rows = [
         SimpleNamespace(status="ok", correct=True, speedup=2.0),
         SimpleNamespace(status="timeout", correct=True, speedup=8.0),  # timed-out-but-correct -> counts
@@ -185,14 +185,14 @@ def _emitter_and_gcc():
 
 def test_native_run_records_native_and_saves_submission(tmp_path, monkeypatch):
     """A full native CLI run: submissions land under native_runs, and execution is pinned to 'native'
-    even with an ambient OPTARENA_RECORD_EXECUTION=container -- the in-process override wins."""
+    even with an ambient HPCAGENT_BENCH_RECORD_EXECUTION=container -- the in-process override wins."""
     if not _emitter_and_gcc():
         pytest.skip("NumpyToC emitter or gcc absent")
     import sqlite3
 
-    from optarena.cli import main
+    from hpcagent_bench.cli import main
     monkeypatch.setattr(native, "NATIVE_RUNS", tmp_path / "native_runs")
-    monkeypatch.setenv("OPTARENA_RECORD_EXECUTION", "container")  # ambient container provenance...
+    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_EXECUTION", "container")  # ambient container provenance...
     db = str(tmp_path / "r.db")
     config.set_override("record.db_path", db)
     try:

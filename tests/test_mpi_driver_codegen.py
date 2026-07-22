@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The generated C MPI driver + kernel_mpi stub: pins the abi_contract.md Sec. 12 shape without a cluster."""
 import shutil
@@ -6,10 +6,10 @@ import subprocess
 
 import pytest
 
-from optarena.languages import std_flag
-from optarena.support.bindings.contract import Arg, Binding
-from optarena.support.bindings.mpi_driver import gen_kernel_mpi_stub, gen_mpi_driver, mpi_symbol
-from optarena.support.bindings.stubs import LANGS
+from hpcagent_bench.languages import std_flag
+from hpcagent_bench.support.bindings.contract import Arg, Binding
+from hpcagent_bench.support.bindings.mpi_driver import gen_kernel_mpi_stub, gen_mpi_driver, mpi_symbol
+from hpcagent_bench.support.bindings.stubs import LANGS
 
 #: The C standard the harness builds with (compilers.yaml), not a literal restated here.
 C_STD = std_flag("c")
@@ -169,7 +169,7 @@ def test_host_driver_has_no_device_tokens():
 @pytest.mark.skipif(_NVCC is None or _MPICC is None, reason="nvcc + an MPI wrapper are required")
 def test_generated_device_driver_compiles_with_nvcc(tmp_path):
     # The strongest offline check for the device path: nvcc compiles the portable-shim driver as CUDA C++.
-    from optarena.languages import mpi_wrapper_flags
+    from hpcagent_bench.languages import mpi_wrapper_flags
     mpi_inc, _ = mpi_wrapper_flags("mpicc.mpich" if shutil.which("mpicc.mpich") else "mpicc")
     src = tmp_path / "driver.cu"
     src.write_text(gen_mpi_driver(_yax(), [4], device_arrays=(1, )))

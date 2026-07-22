@@ -1,4 +1,4 @@
-"""Every optarena-owned YAML follows the one house style.
+"""Every hpcagent_bench-owned YAML follows the one house style.
 
 Guards the repo-wide convention enforced by ``tests/check_yaml_style.py``
 (``#`` header line, 2-space structural indent, no tabs, no trailing whitespace,

@@ -1,4 +1,4 @@
-name: "OptArena CI setup"
+name: "HPCAgent-Bench CI setup"
 description: >
   Native toolchain (make/gcc/g++/gfortran/clang + OpenBLAS + FFTW) and the base Python
   deps every CI runner shares. Job-specific extras (tvm, Pluto, gt4py, Apptainer) stay in
@@ -32,7 +32,7 @@ runs:
         pip_retry -r requirements.txt \
           pytest pytest-timeout pytest-xdist sympy jinja2 cffi tree-sitter-language-pack psutil py-cpuinfo
         pip_retry -e .
-        # DaCe: editable install of spcl/dace @ extended (the branch OptArena develops against), NOT the
+        # DaCe: editable install of spcl/dace @ extended (the branch HPCAgent-Bench develops against), NOT the
         # stock PyPI wheel. extended carries compiler.build_mode=native, which compiles each SDFG by
         # invoking the compiler directly and skips the per-SDFG cmake configure -- cutting the framework
         # + translator SDFG build time. Shallow clone keeps it fast; editable so the native codegen loads.

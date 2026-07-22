@@ -91,7 +91,7 @@ solved(submission) =
 ### Anti-cheat posture (what defeats which cheat)
 
 Mapped against KernelBench adversarial
-tests. The first two cheats are **defeated by OptArena's existing isolation**, not
+tests. The first two cheats are **defeated by HPCAgent-Bench's existing isolation**, not
 by added guards:
 
 1. **Input mutation** (candidate zeros/mutates the shared input so the oracle then
@@ -228,7 +228,7 @@ Two requirements that pull in opposite directions, reconciled by **two seeds**:
    - it is a fixed config value, so every run with that config draws the same
      timed shape -- reproducible by construction (rotate it per deployment to
      re-randomize);
-   - it stays hidden because the **agent image carries no optarena package**
+   - it stays hidden because the **agent image carries no HPCAgent-Bench package**
      (`containers/cpu.def` installs only a toolchain; `.dockerignore` excludes the
      harness), so `config.yaml` never reaches the agent -- the *same* firewall that
      keeps the hidden tests and the reference emitter out of the agent image.

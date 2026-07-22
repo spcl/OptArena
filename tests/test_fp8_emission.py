@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """fp8 (E4M3/E5M2) native emission for C/C++/Fortran: promote-on-read, round-on-op, demote-on-write."""
 import ctypes
@@ -15,7 +15,7 @@ import numerical_oracle as no  # noqa: E402
 
 ml_dtypes = pytest.importorskip("ml_dtypes")
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "optarena" / "numpy_translators" / "src"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "numpy_translators" / "src"))
 from numpyto_common import dtypes  # noqa: E402
 
 #: The two OCP fp8 formats: (CLI ``--precision`` spelling, canonical registry dtype,
@@ -36,8 +36,8 @@ _EXT = {"c": ".c", "cpp": ".cpp", "fortran": ".f90"}
 
 def _emit_fp8(tmp_path, precision):
     """Emit `KERNEL` at `precision` into `tmp_path` via the same CLI path the numerical oracle uses."""
-    from optarena.emit_bridge import legacy_bench_info_dict
-    from optarena.spec import BenchSpec
+    from hpcagent_bench.emit_bridge import legacy_bench_info_dict
+    from hpcagent_bench.spec import BenchSpec
     info = legacy_bench_info_dict(BenchSpec.load(KERNEL))["benchmark"]
     ok, diag = no._emit(KERNEL, info, tmp_path, precision=precision)
     assert ok, f"{KERNEL}: fp8 emit failed at {precision}{diag}"

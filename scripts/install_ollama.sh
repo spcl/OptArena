@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Install Ollama (sudoless if needed) and pull the local coding models optarena
+# Install Ollama (sudoless if needed) and pull the local coding models hpcagent_bench
 # drives as agents. Works on Linux, WSL, and macOS.
 #
 #   scripts/install_ollama.sh                         # install + pull the defaults
 #   scripts/install_ollama.sh qwen2.5-coder:32b       # + extra model(s)
-#   OPTARENA_OLLAMA_MODELS="qwen2.5-coder:7b" scripts/install_ollama.sh   # override list
-#   OPTARENA_OLLAMA_PREFIX=$HOME/.local scripts/install_ollama.sh         # install prefix
+#   HPCAGENT_BENCH_OLLAMA_MODELS="qwen2.5-coder:7b" scripts/install_ollama.sh   # override list
+#   HPCAGENT_BENCH_OLLAMA_PREFIX=$HOME/.local scripts/install_ollama.sh         # install prefix
 #
 # The canonical model is qwen2.5-coder:7b (chat/edit); qwen2.5-coder:1.5b is the
-# fast autocomplete model. The optarena agent talks to the running server over
-# HTTP -- no Python deps:  python -m optarena.cli agent --agent ollama ...
+# fast autocomplete model. The hpcagent-bench agent talks to the running server over
+# HTTP -- no Python deps:  python -m hpcagent_bench.cli agent --agent ollama ...
 set -euo pipefail
 
 # --- defined model list (canonical first) ----------------------------------
-# qwen2.5-coder:7b   -> chat / edit / multi-file agent work (Aider, optarena agent)
+# qwen2.5-coder:7b   -> chat / edit / multi-file agent work (Aider, hpcagent-bench agent)
 # qwen2.5-coder:1.5b -> snappy tab-autocomplete (Continue.dev), tiny + CPU-friendly
 DEFAULT_MODELS=("qwen2.5-coder:7b" "qwen2.5-coder:1.5b")
 # Other popular local coders (pass as args to also pull):
 #   qwen2.5-coder:32b  deepseek-coder-v2:16b  codellama:13b  starcoder2:7b
 
-PREFIX="${OPTARENA_OLLAMA_PREFIX:-$HOME/.local}"
+PREFIX="${HPCAGENT_BENCH_OLLAMA_PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 export OLLAMA_HOST
@@ -105,8 +105,8 @@ main() {
   ensure_ollama
   ensure_server
   local models
-  if [ -n "${OPTARENA_OLLAMA_MODELS:-}" ]; then
-    read -r -a models <<< "$OPTARENA_OLLAMA_MODELS"
+  if [ -n "${HPCAGENT_BENCH_OLLAMA_MODELS:-}" ]; then
+    read -r -a models <<< "$HPCAGENT_BENCH_OLLAMA_MODELS"
   else
     models=("${DEFAULT_MODELS[@]}")
   fi
@@ -120,7 +120,7 @@ main() {
   cat <<EOF
 
 Done. Models are served at $OLLAMA_HOST.
-  - optarena benchmark agent : python -m optarena.cli agent --agent ollama --kernels gemm --languages c
+  - hpcagent_bench benchmark agent : python -m hpcagent_bench.cli agent --agent ollama --kernels gemm --languages c
   - terminal coding agent   : aider --model ollama/qwen2.5-coder:7b
 See docs/local_coding_agents.md.
 EOF

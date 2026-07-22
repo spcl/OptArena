@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Port-correctness gate for the microapp DaCe ports.
 
@@ -21,8 +21,8 @@ import os
 
 import pytest
 
-from optarena import paths
-from optarena.spec import KERNELS, BenchSpec
+from hpcagent_bench import paths
+from hpcagent_bench.spec import KERNELS, BenchSpec
 
 #: MPI env the corpus normally sets; a spawned child inherits the parent env, but
 #: set it defensively so a bare lowering does not block on MPI_Init (see the dace
@@ -60,10 +60,10 @@ def _to_sdfg_worker(queue, rel, mod, fn):
         # until configured; the port's ``from ... import dc_float`` binds the value
         # at import, so configure BEFORE importing the port (fp64 for this gate).
         import dace
-        import optarena.frameworks.dace_framework as dfw
+        import hpcagent_bench.frameworks.dace_framework as dfw
         dfw.dc_float = dace.float64
         dfw.dc_complex_float = dace.complex128
-        pkg = "optarena.benchmarks." + rel.replace("/", ".") + f".{mod}_dace"
+        pkg = "hpcagent_bench.benchmarks." + rel.replace("/", ".") + f".{mod}_dace"
         m = importlib.import_module(pkg)
         prog = vars(m).get(fn) or vars(m).get(mod)
         if prog is None:

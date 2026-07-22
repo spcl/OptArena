@@ -1,4 +1,4 @@
-# Contributing to OptArena
+# Contributing to HPCAgent-Bench
 
 The contributor guide lives in the **[README](README.md)** -- it is the single
 document. Jump to:
@@ -14,19 +14,19 @@ document. Jump to:
 
 Normative reference specs:
 
-- [`optarena/docs/abi_contract.md`](optarena/docs/abi_contract.md) -- the canonical
+- [`hpcagent_bench/docs/abi_contract.md`](hpcagent_bench/docs/abi_contract.md) -- the canonical
   C-ABI every native kernel exposes.
-- [`optarena/docs/sparse_abi.md`](optarena/docs/sparse_abi.md) -- how a sparse matrix is
+- [`hpcagent_bench/docs/sparse_abi.md`](hpcagent_bench/docs/sparse_abi.md) -- how a sparse matrix is
   declared and unpacked.
 
-Conventions: prefer `pip`; no literal compiler flags outside `optarena/flags.py`;
+Conventions: prefer `pip`; no literal compiler flags outside `hpcagent_bench/flags.py`;
 classes and files are public-by-default (no leading-underscore names); reuse existing
 harness utilities over new abstractions; edit the `*_numpy.py` reference (the
 framework siblings regenerate from it) -- never hand-edit a generated sibling. A
 manifest argument may not be named `workspace`, `workspace_size`, or `time_ns` --
 those are reserved by the C-ABI (abi_contract.md Sec. 11) and rejected at load.
 
-YAML house style (all optarena-owned YAML -- the per-kernel manifests, the
+YAML house style (all HPCAgent-Bench-owned YAML -- the per-kernel manifests, the
 config/env files): a one-line `#` header saying what the file is,
 two-space structural indent, no tabs, no trailing whitespace, one final newline.
 `python tests/check_yaml_style.py` is the gate (`--fix` for the mechanical

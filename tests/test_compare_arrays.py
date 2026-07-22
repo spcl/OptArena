@@ -8,7 +8,7 @@ ranked and thresholded on, so the non-finite cases below are pinned as tightly a
 import numpy as np
 import pytest
 
-from optarena.frameworks.utilities import compare_arrays
+from hpcagent_bench.frameworks.utilities import compare_arrays
 
 INF = float("inf")
 

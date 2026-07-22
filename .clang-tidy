@@ -1,4 +1,4 @@
-# clang-tidy policy for OptArena's C/C++ (kernels are extern "C" FFI, so the pointer
+# clang-tidy policy for HPCAgent-Bench's C/C++ (kernels are extern "C" FFI, so the pointer
 # ABI is REQUIRED, not a smell). We keep bug-catching + safe modernization and DROP
 # the noisy/inapplicable checks:
 #   - magic-numbers / c-arrays / macro-usage: benchmark kernels use them by design.

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Scratch-workspace ABI (abi_contract.md Sec. 11).
 
@@ -19,12 +19,12 @@ import subprocess
 import numpy as np
 import pytest
 
-from optarena import languages
-from optarena.harness.envelope import Submission
-from optarena.harness.native_call import (_alloc_workspace, _call_native, _workspace_bytes, WORKSPACE_ALIGN)
-from optarena.support.bindings.contract import Arg, Binding, RESERVED_ARG_NAMES
-from optarena.support.bindings.glue import gen_host_glue
-from optarena.support.bindings.stubs import LANGS, gen_call_stub
+from hpcagent_bench import languages
+from hpcagent_bench.harness.envelope import Submission
+from hpcagent_bench.harness.native_call import (_alloc_workspace, _call_native, _workspace_bytes, WORKSPACE_ALIGN)
+from hpcagent_bench.support.bindings.contract import Arg, Binding, RESERVED_ARG_NAMES
+from hpcagent_bench.support.bindings.glue import gen_host_glue
+from hpcagent_bench.support.bindings.stubs import LANGS, gen_call_stub
 
 
 # --------------------------------------------------------------------------- #

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """PromptConfig + optimization-strategy prompt knobs.
 
@@ -9,10 +9,10 @@ knobs gate their sections leak-free. All pure: no compile, no hidden tests.
 """
 import pytest
 
-from optarena import config
-from optarena.harness.prompts import (PROMPT_VARIANTS, STRATEGIES, PromptConfig, available_variants, build_context,
-                                      build_prompt)
-from optarena.harness.task import Task
+from hpcagent_bench import config
+from hpcagent_bench.harness.prompts import (PROMPT_VARIANTS, STRATEGIES, PromptConfig, available_variants,
+                                            build_context, build_prompt)
+from hpcagent_bench.harness.task import Task
 
 TASK = Task("gemm", "restricted", "c")
 
@@ -139,7 +139,7 @@ def test_available_variants_includes_builtins():
 def test_cli_list_variants_and_all_variants(capsys):
     """CLI: --list-variants prints every built-in name; --all-variants renders one
     separator-headed block per variant, most of them distinct."""
-    from optarena.cli import main
+    from hpcagent_bench.cli import main
     assert main(["prompt", "--list-variants"]) == 0
     listed = capsys.readouterr().out
     for name in PROMPT_VARIANTS:

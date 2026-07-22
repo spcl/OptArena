@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Faithfulness of newly ported NumPy references to their upstream algorithm.
 
@@ -22,7 +22,7 @@ import multiprocessing as mp
 import numpy as np
 import pytest
 
-_BENCH = "optarena.benchmarks.hpc"
+_BENCH = "hpcagent_bench.benchmarks.hpc"
 
 
 def _load(dwarf, kernel):

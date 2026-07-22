@@ -1,11 +1,11 @@
-# Design -- OptArena as a HuggingFace Dataset + a Harbor harness
+# Design -- HPCAgent-Bench as a HuggingFace Dataset + a Harbor harness
 
-**Goal.** Make OptArena adoptable the way SWE-bench and AlgoTune are: a public,
+**Goal.** Make HPCAgent-Bench adoptable the way SWE-bench and AlgoTune are: a public,
 versioned **HF Dataset** of optimization tasks, plus a **Harbor adapter** that runs
 an agent against them and scores it -- both driven by one server-side judge.
 
-**Status.** Built. The scoring core (`optarena/harness/metric.py`), both front-ends
-(`optarena export-hf` Sec. 2.4, the Harbor adapter Sec. 3) and the dispersion
+**Status.** Built. The scoring core (`hpcagent_bench/harness/metric.py`), both front-ends
+(`hpcagent-bench export-hf` Sec. 2.4, the Harbor adapter Sec. 3) and the dispersion
 enrichment (Sec. 4.3) have all landed; they consume the same `SuiteScore`. What
 remains is the "still open" list in Sec. 8.
 
@@ -21,7 +21,7 @@ harmonic mean of speedup ratios."* We mirror its layout and parity discipline.
 |---|---|
 | **One row per sub-benchmark** (353; per-layout, 1:1 with the judge), tracks as configs | Sec. 2 |
 | **Judge is the single evaluator** -- hidden tests + timing + verify stay server-side | Sec. 1 |
-| **Headline metric** = `geomean_i S_i` (OptArena Score), built in `metric.py` | Sec. 4 |
+| **Headline metric** = `geomean_i S_i` (HPCAgent-Bench Score), built in `metric.py` | Sec. 4 |
 | **Anti-overfit** = seeded fuzz sweep + *secret eval seed* + all-iterations correctness gate | Sec. 2.3, Sec. 4.1 |
 | **Quality bar** = audited against Kistowski/Huppler, ICPE'15 | Sec. 5 |
 
@@ -31,17 +31,17 @@ harmonic mean of speedup ratios."* We mirror its layout and parity discipline.
 
 ```
  manifest tree (hpc / foundation / ml)
-        |  optarena export-hf                     source of truth -> distribution
+        |  hpcagent-bench export-hf                     source of truth -> distribution
         v
- HF Dataset  spcl/optarena      public tasks: numpy reference + C-ABI signature + metadata
+ HF Dataset  spcl/hpcagent_bench      public tasks: numpy reference + C-ABI signature + metadata
         |  load_dataset(...)
         v
- Harbor adapter  adapters/optarena       builds prompt, runs agent in a task container
+ Harbor adapter  adapters/hpcagent_bench       builds prompt, runs agent in a task container
         |  POST /oracle  (submission)
         v
- OptArena judge  (optarena.harness, containerized)   HIDDEN tests + timing + independent_verify
+ HPCAgent-Bench judge  (hpcagent_bench.harness, containerized)   HIDDEN tests + timing + independent_verify
         |
-        v  {correct, speedup}  ->  pass/fail + OptArena Score
+        v  {correct, speedup}  ->  pass/fail + HPCAgent-Bench Score
 ```
 
 **Key invariant -- the firewall.** The judge is the *single* evaluator for both the
@@ -53,7 +53,7 @@ dataset = tasks, scoring = held-out tests).
 
 ---
 
-## 2. HuggingFace Dataset (`spcl/optarena`)
+## 2. HuggingFace Dataset (`spcl/hpcagent_bench`)
 
 ### 2.1 Granularity, configs, splits
 - **One row per sub-benchmark** (`ResolvedBench` -- the unit the *judge* scores), so
@@ -103,20 +103,20 @@ sets `{set: [...]}`) verbatim -- it is already the input to
 
 **Seed secrecy -- the load-bearing anti-overfit invariant.** Concrete sizes are
 `fuzz.sample_params(parameters, seeds.fuzz + j)`, and **`seeds.fuzz` is a
-server-side secret** (config / `$OPTARENA_SEEDS_FUZZ`, never a dataset column). If
+server-side secret** (config / `$HPCAGENT_BENCH_SEEDS_FUZZ`, never a dataset column). If
 both the ranges *and* the seed were public, the agent could enumerate the exact `k`
 sizes and tune to them -- collapsing the sweep back to the fixed-size case we just
 rejected. So: **publish the ranges, hide the seed** -- the agent optimizes for the
 *distribution*, only the judge knows the draws (the hidden-tests firewall, applied
 to the size sampler).
 
-### 2.4 Export & consumption -- [x] IMPLEMENTED (`optarena/hf_export.py`)
+### 2.4 Export & consumption -- [x] IMPLEMENTED (`hpcagent_bench/hf_export.py`)
 
 The exporter is a **pure regenerator** over the manifest tree -- it caches nothing
 in the repo, so a new benchmark is reflected by re-running it.
 
-- `optarena export-hf [--selector all|hpc|<dwarf>|<kernel>] [--out f.parquet]
-  [--format parquet|jsonl] [--push spcl/optarena]`: `KERNELS.select` -> `BenchSpec.load`
+- `hpcagent-bench export-hf [--selector all|hpc|<dwarf>|<kernel>] [--out f.parquet]
+  [--format parquet|jsonl] [--push spcl/hpcagent_bench]`: `KERNELS.select` -> `BenchSpec.load`
   each -> `expand_layouts()` -> `resolved_row` (read `_numpy.py`, render per-layout
   `binding_from_spec`) -> **parquet**
   (or jsonl, dependency-free) -> optional `datasets` push, tagged by commit.
@@ -125,7 +125,7 @@ in the repo, so a new benchmark is reflected by re-running it.
   cannot export turns the PR red) + an auto-publish step in that same workflow
   (`.github/workflows/tests.yml`, republishes on push to `main`, gated on
   `HF_TOKEN`/`vars.HF_DATASET_REPO`).
-- `datasets.load_dataset("spcl/optarena", "hpc")` -> rows, consumed by the Harbor
+- `datasets.load_dataset("spcl/hpcagent_bench", "hpc")` -> rows, consumed by the Harbor
   adapter, the local judge, and a future leaderboard Space.
 
 > **Row granularity (as built):** one row per **sub-benchmark** (`ResolvedBench`) --
@@ -135,23 +135,23 @@ in the repo, so a new benchmark is reflected by re-running it.
 
 ---
 
-## 3. Harbor adapter (`adapters/optarena`) -- [x] IMPLEMENTED
+## 3. Harbor adapter (`adapters/hpcagent_bench`) -- [x] IMPLEMENTED
 
 Built against Harbor 0.16.0. Harbor's task model is the **Terminal-Bench
 task-directory** format, so the adapter is a **generator** (the `algotune`
-pattern), not a runtime `Task` class. The OptArena<->Harbor logic lives in
-`optarena/harbor_adapter.py` (unit-tested; carries no `harbor` dependency -- it
+pattern), not a runtime `Task` class. The HPCAgent-Bench<->Harbor logic lives in
+`hpcagent_bench/harbor_adapter.py` (unit-tested; carries no `harbor` dependency -- it
 renders the files as text); the in-container grader is
-`optarena/harness/harbor_grade.py`.
+`hpcagent_bench/harness/harbor_grade.py`.
 
 ```
-adapters/optarena/
+adapters/hpcagent_bench/
   run_adapter.py         # CLI: generate task dirs + `--run` (harbor run -p <dir>)
   adapter_metadata.json  # name, harness:"agent", tracks, scoring
   pyproject.toml, README.md
-adapters/optarena/tasks/ # GENERATED (gitignored): one task dir per kernel:
-  optarena-<kernel>/
-    task.toml            # schema 1.3; [environment].docker_image = optarena:cpu; metadata
+adapters/hpcagent_bench/tasks/ # GENERATED (gitignored): one task dir per kernel:
+  hpcagent_bench-<kernel>/
+    task.toml            # schema 1.3; [environment].docker_image = hpcagent_bench:cpu; metadata
     instruction.md       # leak-free: numpy reference + C-ABI signature + objective
     tests/test.sh        # verifier: harbor_grade -> /logs/verifier/reward.json (= S_i)
 ```
@@ -166,19 +166,19 @@ adapters/optarena/tasks/ # GENERATED (gitignored): one task dir per kernel:
 
 > Original design (mirrors the algotune layout, kept for reference):
 
-- **`adapter.py`** -- `load_tasks(config)` = `load_dataset("spcl/optarena", config)`;
-  `OptArenaTask.prompt` = instructions + `numpy_reference` + `signature` + judge URL
+- **`adapter.py`** -- `load_tasks(config)` = `load_dataset("spcl/hpcagent_bench", config)`;
+  `HPCAgent-BenchTask.prompt` = instructions + `numpy_reference` + `signature` + judge URL
   + objective (*"emit an optimized implementation; maximize `/oracle` `speedup`
-  while `correct` is true"*); `OptArenaTask.evaluate(workdir)` submits the artifact
+  while `correct` is true"*); `HPCAgent-BenchTask.evaluate(workdir)` submits the artifact
   and reads back `{correct, speedup}` + `independent_verify`.
 - **`template/`** -- reuse `containers/cpu.def` (gcc/gfortran/clang + OpenBLAS +
-  `optarena/harness/service.py`). The agent writes a kernel (C/Fortran source for
+  `hpcagent_bench/harness/service.py`). The agent writes a kernel (C/Fortran source for
   `restricted`, a built `.so` for `any`) and `POST`s `/oracle`. Toolchain + judge
   already exist -- this is wiring, not new code.
 - **Source mode** -- default `restricted` (agent edits code, like every Harbor coding
   adapter); `any` (prebuilt `.so`) stays as a power-user mode.
 - **Scoring hook** -- per-task pass/fail = `Solved(i) and S_i > tau` (`tau = 1.0`); suite
-  aggregate = the **OptArena Score** from `metric.aggregate(...) -> SuiteScore`
+  aggregate = the **HPCAgent-Bench Score** from `metric.aggregate(...) -> SuiteScore`
   (geomean of `S_i` over **all** tasks, harmonic `overall_speedup` alongside).
 
 **Parity (Harbor requirement).** The adapter reuses the *same* judge +
@@ -188,9 +188,9 @@ construction** -- parity is exact, not approximate. Validate on a sampled subset
 
 ---
 
-## 4. The OptArena Score (metric -- IMPLEMENTED)
+## 4. The HPCAgent-Bench Score (metric -- IMPLEMENTED)
 
-> Built in `optarena/harness/metric.py`: `score_task_fuzzed -> TaskScore`,
+> Built in `hpcagent_bench/harness/metric.py`: `score_task_fuzzed -> TaskScore`,
 > `aggregate -> SuiteScore`; the seeded sweep is wired through
 > `scoring.score(..., fuzz_iteration=j)` and `independent_verify(..., fuzz_iteration=j)`.
 
@@ -220,7 +220,7 @@ else **`S_i = 1.0`**.
   bounded). A win is credited only after surviving `suspect_above`; `C_max` then
   limits its leverage.
 
-**Level 2 -- the headline.** **OptArena Score = `geomean_i S_i`** over **all** tasks.
+**Level 2 -- the headline.** **HPCAgent-Bench Score = `geomean_i S_i`** over **all** tasks.
 
 ### 4.2 Why this is the right score
 
@@ -343,8 +343,8 @@ extras):
 |---|---|---|
 | **0 -- Score backbone** | `metric.py` (`score_task_fuzzed`, `aggregate`) + `fuzz_iteration` threading in `scoring.py`; 7/7 in `tests/test_metric.py`, no regression in `test_agent_bench.py`. | [x] **done** |
 | **0.5 -- Dispersion enrichment (Sec. 4.3)** | `gsd` field + min-detectable-speedup gate, live: `TaskScore.gsd_gated` floors a noise-band win to 1.0, knob `measurement.gsd_z`. | [x] **done** |
-| **1 -- export** | `optarena export-hf` (all tracks) -> parquet/jsonl; pure regenerator + completeness guard + auto-publish workflow. **One row per sub-benchmark** (353 rows, per-layout ABI, 1:1 with the judge); all export clean; `tests/test_hf_export.py` 13/13 (+1 parquet skip). | [x] **done** |
-| 2 -- MVP adapter | `adapters/optarena` for `foundation`, mirroring `algotune`; one agent e2e on ~5 kernels. | |
+| **1 -- export** | `hpcagent-bench export-hf` (all tracks) -> parquet/jsonl; pure regenerator + completeness guard + auto-publish workflow. **One row per sub-benchmark** (353 rows, per-layout ABI, 1:1 with the judge); all export clean; `tests/test_hf_export.py` 13/13 (+1 parquet skip). | [x] **done** |
+| 2 -- MVP adapter | `adapters/hpcagent_bench` for `foundation`, mirroring `algotune`; one agent e2e on ~5 kernels. | |
 | 3 -- Parity + scale | validate parity vs the native judge on a sample; extend to `hpc`/`ml` + preset/datatype sweeps; push the full Dataset. | |
 | 4 -- Leaderboard | Gradio Space over the results Dataset (per-track geomean + per-benchmark best); self-report PRs gated by re-`independent_verify`. | |
 

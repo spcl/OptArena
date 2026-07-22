@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Prompt variants: discovery from ``task_var<N>.j2``, and X variants -> X runs.
 
@@ -8,10 +8,10 @@ a sweep runs each kernel once per variant with one prompt each.
 """
 import pytest
 
-from optarena import config
-from optarena.cli import _resolve_prompt_variants
-from optarena.harness.prompts import PromptConfig, available_variants, build_prompt, discovered_variants
-from optarena.harness.task import Task
+from hpcagent_bench import config
+from hpcagent_bench.cli import _resolve_prompt_variants
+from hpcagent_bench.harness.prompts import PromptConfig, available_variants, build_prompt, discovered_variants
+from hpcagent_bench.harness.task import Task
 
 TASK = Task("gemm", "restricted", "c")
 
@@ -90,7 +90,7 @@ def test_unknown_variant_is_a_clean_error_not_a_traceback():
 
 def test_a_run_resolves_exactly_one_variant(variant_root, monkeypatch):
     """X variants = X runs, each rendering ONE prompt for all of its attempts."""
-    from optarena.harness import runner
+    from hpcagent_bench.harness import runner
     from tests.test_attempt_budget import RecordingAgent, failing_score
     monkeypatch.setattr(runner, "score", failing_score)
     for name, marker in (("var1", "VARIANT ONE"), ("var2", "VARIANT TWO")):
@@ -106,7 +106,7 @@ def test_static_pipeline_takes_a_variant_per_task():
     (task, variant) product is expanded by the caller and carried alongside the tasks."""
     import inspect
 
-    from optarena.harness.pipeline import run_static
+    from hpcagent_bench.harness.pipeline import run_static
     assert "prompt_variants" in inspect.signature(run_static).parameters
 
 
@@ -114,7 +114,7 @@ def test_static_pipeline_rejects_a_mismatched_variant_list():
     """Misaligned lists would silently run the wrong variant for a task -- fail loudly."""
     import pytest as _pytest
 
-    from optarena.harness.pipeline import run_static
+    from hpcagent_bench.harness.pipeline import run_static
     with _pytest.raises(ValueError, match="prompt_variants has"):
         run_static(lambda _u: None, [TASK, TASK],
                    vllm_urls=[None],

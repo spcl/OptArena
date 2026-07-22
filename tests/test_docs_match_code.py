@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Docs must not drift from the implementation.
 
@@ -12,18 +12,18 @@ import re
 
 import pytest
 
-from optarena import config
-from optarena.config import AttemptSettings, PromptSettings
-from optarena.harness.prompts import PROMPT_VARIANTS, PromptConfig
+from hpcagent_bench import config
+from hpcagent_bench.config import AttemptSettings, PromptSettings
+from hpcagent_bench.harness.prompts import PROMPT_VARIANTS, PromptConfig
 
-PROMPTS_DIR = pathlib.Path("optarena/harness/prompts")
+PROMPTS_DIR = pathlib.Path("hpcagent_bench/harness/prompts")
 DOCS = [
     pathlib.Path("README.md"),
     pathlib.Path("docs/PROMPTS.md"),
     pathlib.Path("docs/PROMPT_WALKTHROUGH.md"),
     pathlib.Path("docs/AGENTS_AND_TOOL_ACCESS.md"),
     pathlib.Path("docs/WRITING_AN_AGENT.md"),
-    pathlib.Path("optarena/harness/README.md"),
+    pathlib.Path("hpcagent_bench/harness/README.md"),
 ]
 
 #: `prompt.*` names that are config keys but NOT PromptConfig fields.

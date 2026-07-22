@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pure-logic tests for the single-job cluster launcher (no MPI / no cluster).
 
@@ -10,8 +10,9 @@ import socket
 
 import pytest
 
-from optarena.harness.cluster_launch import (JUDGE, RankRole, VLLM_HEAD, VLLM_WORKER, assemble_urls, endpoint_hostport,
-                                             expected_world, plan_roles, rank_status, settle_rounds, vllm_command)
+from hpcagent_bench.harness.cluster_launch import (JUDGE, RankRole, VLLM_HEAD, VLLM_WORKER, assemble_urls,
+                                                   endpoint_hostport, expected_world, plan_roles, rank_status,
+                                                   settle_rounds, vllm_command)
 
 
 class FakeProc:

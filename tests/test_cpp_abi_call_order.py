@@ -10,7 +10,7 @@ the override's logic is independent of how the binding got onto disk.
 """
 import types
 
-from optarena.frameworks.native_framework import NativeFramework
+from hpcagent_bench.frameworks.native_framework import NativeFramework
 
 
 def _framework():

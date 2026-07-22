@@ -1,7 +1,7 @@
 ! ============================================================================
 ! GPL-3.0-or-later (derives from the vendored GPL LULESH; see NOTICE.md).
 !
-! bind(c) cross-check harness for the OptArena numpy LULESH port. It calls the
+! bind(c) cross-check harness for the HPCAgent-Bench numpy LULESH port. It calls the
 ! GENUINE vendored LULESH kernels (USE lulesh_comp_kernels) so the numpy SoA
 ! reference can be pinned numerically against the authoritative Fortran.
 !

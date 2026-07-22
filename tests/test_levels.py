@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Kernel difficulty levels + the ``<selector>@lvl<n>`` filter.
 
@@ -9,7 +9,7 @@ Foundation is loop microkernels only, so it never reaches L3.
 """
 import pytest
 
-from optarena.spec import KERNELS, BenchSpec, validate_level, _split_level
+from hpcagent_bench.spec import KERNELS, BenchSpec, validate_level, _split_level
 
 
 @pytest.mark.parametrize(

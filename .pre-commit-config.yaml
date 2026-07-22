@@ -1,4 +1,4 @@
-# Pre-commit formatting for OptArena (column limit 120).
+# Pre-commit formatting for HPCAgent-Bench (column limit 120).
 #
 #   one-time:   pip install pre-commit && pre-commit install
 #   all files:  pre-commit run --all-files   (== python scripts/check_format.py --fix --all)
@@ -7,13 +7,13 @@
 # The single hook delegates to scripts/check_format.py --fix -- the SAME script
 # the CI `format-check` job runs in check mode -- so local and CI share one
 # routing table (yapf for .py, clang-format for C/C++, fprettify for Fortran, all
-# at 120 cols) and one skip policy (optarena/benchmarks/, optarena/numpy_translators/,
+# at 120 cols) and one skip policy (hpcagent_bench/benchmarks/, hpcagent_bench/numpy_translators/,
 # *_generated.*). check_format owns the skip logic, so any skipped file pre-commit
 # happens to pass through is left untouched -- the hook is safe to run repo-wide.
 repos:
   - repo: local
     hooks:
-      - id: optarena-format
+      - id: hpcagent_bench-format
         name: format (yapf / clang-format / fprettify @ 120 cols)
         entry: python scripts/check_format.py --fix
         language: system

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Collect the upstream ORIGINAL source beside each ported kernel's numpy reference.
 
-For every OptArena kernel that HAS a locatable original source, this places a copy
+For every HPCAgent-Bench kernel that HAS a locatable original source, this places a copy
 of that original next to its ``<stem>_numpy.py`` as ``<stem>_original.<ext>`` (where
 ``ext`` is the original source language: ``.f90`` / ``.c`` / ``.cpp`` / ``.py``), with a
 short attribution header. Agents may then choose to optimize from the original instead of
@@ -19,8 +19,8 @@ The collector is a single provenance map dispatched to per-family handlers:
   6. lulesh        -- vendored LULESH Fortran baseline.
   7. tsvc_cpp      -- Vectra Artifacts per-kernel C++ ``_d`` microkernels, timing removed.
   8. tsvc_cpp_emitted -- for a foundation kernel with NO Vectra microkernel, the C++
-     BASELINE emitted by OptArena's own NumpyToX C++ translator (the baseline the score
-     divides by), read back from :func:`optarena.harness.agent.reference_source`.
+     BASELINE emitted by HPCAgent-Bench's own NumpyToX C++ translator (the baseline the score
+     divides by), read back from :func:`hpcagent_bench.harness.agent.reference_source`.
 
 Family 8 is the exact complement of family 7 within the foundation track: it fires only for
 a foundation kernel whose Vectra ``_d.cpp`` is missing, so the two never target the same
@@ -36,7 +36,7 @@ original per kernel); its bucket is filled directly.
 
 It is idempotent (skip if the target exists unless ``--force``), never overwrites a
 ``<stem>_numpy.py``, never deletes anything, and supports ``--dry-run``. Kernel
-enumeration + taxonomy (``subtrack``) come READ-ONLY from :data:`optarena.spec.KERNELS`.
+enumeration + taxonomy (``subtrack``) come READ-ONLY from :data:`hpcagent_bench.spec.KERNELS`.
 """
 import argparse
 import pathlib
@@ -46,18 +46,18 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from optarena import paths
-from optarena.spec import KERNELS, BenchSpec
+from hpcagent_bench import paths
+from hpcagent_bench.spec import KERNELS, BenchSpec
 
 # ---------------------------------------------------------------------------
-# Source roots. Sibling repos live beside the optarena checkout (``.../Work/``);
+# Source roots. Sibling repos live beside the hpcagent_bench checkout (``.../Work/``);
 # derive that from paths.ROOT so nothing is hardcoded, and allow a CLI override.
 # ---------------------------------------------------------------------------
 WORK_ROOT: pathlib.Path = paths.ROOT.parent
 
 #: The fixed attribution wording (per-line, comment prefix added per language).
 HEADER_TEMPLATE = (
-    "Original source for OptArena kernel {stem}.",
+    "Original source for HPCAgent-Bench kernel {stem}.",
     "Upstream: {upstream}.",
     "License: {license}.",
     "Copied by scripts/collect_original_sources.py; not the scoring oracle",
@@ -65,7 +65,7 @@ HEADER_TEMPLATE = (
 )
 
 # ---------------------------------------------------------------------------
-# Family 2 -- npbench: OptArena stem -> path (under npbench/benchmarks) of the
+# Family 2 -- npbench: HPCAgent-Bench stem -> path (under npbench/benchmarks) of the
 # upstream numpy reference. The bare ``<kernel>.py`` in npbench is only an
 # ``initialize()`` stub; the ``_numpy.py`` sibling carries the actual algorithm,
 # so that is the meaningful "original" an agent can optimize from.
@@ -96,9 +96,9 @@ NPBENCH_MAP: Dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Family 5 -- polybench: OptArena stem -> path (under the PolyBench/C tree) of the
+# Family 5 -- polybench: HPCAgent-Bench stem -> path (under the PolyBench/C tree) of the
 # raw C kernel. ``k2mm``/``k3mm`` map to ``2mm``/``3mm``; ``cholesky2``/``covariance2``
-# are doubled-iteration OptArena variants that share the base polybench source.
+# are doubled-iteration HPCAgent-Bench variants that share the base polybench source.
 # ``eigh_test`` is subtrack=polybench but is NOT a PolyBench kernel, so it is absent
 # here and reported as a skip.
 # ---------------------------------------------------------------------------
@@ -180,9 +180,9 @@ FAMILY_META: Dict[str, Dict[str, str]] = {
         "license": "see upstream (Vectra Artifacts)",
     },
     "tsvc_cpp_emitted": {
-        "upstream": "OptArena NumpyToX C++ translator (numpyto_cpp), emitted from the numpy reference "
-        "via optarena.harness.agent.reference_source(Task(<kernel>, language='cpp'))",
-        "license": "OptArena, GPL-3.0-or-later",
+        "upstream": "HPCAgent-Bench NumpyToX C++ translator (numpyto_cpp), emitted from the numpy reference "
+        "via hpcagent_bench.harness.agent.reference_source(Task(<kernel>, language='cpp'))",
+        "license": "HPCAgent-Bench, GPL-3.0-or-later",
     },
 }
 
@@ -193,7 +193,7 @@ FAMILY_ORDER: Tuple[str, ...] = ("icon_fortran", "npbench", "cloudsc", "tsvc", "
 #: Attribution header baked into every produced ``<stem>_original.cpp``. It deliberately
 #: avoids the literal ``time_ns`` / ``chrono`` tokens so a grep for leaked instrumentation
 #: over the produced file stays clean.
-TSVC_CPP_HEADER = ("/* Original C++ source for OptArena kernel {stem}. "
+TSVC_CPP_HEADER = ("/* Original C++ source for HPCAgent-Bench kernel {stem}. "
                    "Upstream: Vectra Artifacts (Work/VectraArtifacts) tsvc microkernels. "
                    "Timing instrumentation removed. License: see upstream. "
                    "Not the scoring oracle -- the numpy reference remains the correctness oracle. */")
@@ -201,9 +201,10 @@ TSVC_CPP_HEADER = ("/* Original C++ source for OptArena kernel {stem}. "
 #: Attribution header for every ``tsvc_cpp_emitted`` baseline. Fixed wording (per the task
 #: brief); it avoids the literal timing tokens so a grep for leaked instrumentation over the
 #: produced file stays clean.
-EMITTED_CPP_HEADER = ("/* C++ baseline reference for OptArena kernel {stem}, emitted by OptArena's NumpyToX C++ "
-                      "translator (numpyto_cpp) from the numpy reference. The v2 C-ABI carries no timer. "
-                      "Not the scoring oracle -- the numpy reference remains the correctness oracle. */")
+EMITTED_CPP_HEADER = (
+    "/* C++ baseline reference for HPCAgent-Bench kernel {stem}, emitted by HPCAgent-Bench's NumpyToX C++ "
+    "translator (numpyto_cpp) from the numpy reference. The v2 C-ABI carries no timer. "
+    "Not the scoring oracle -- the numpy reference remains the correctness oracle. */")
 
 
 @dataclass(frozen=True)
@@ -534,14 +535,14 @@ def strip_dead_chrono(text: str, stem: str) -> str:
 
 
 def emit_cpp_baseline(kernel_key: str, stem: str) -> str:
-    """Emit the C++ BASELINE for ``kernel_key`` via OptArena's NumpyToX C++ translator and
-    return the timing-stripped body. Reuses :func:`optarena.harness.agent.reference_source`
+    """Emit the C++ BASELINE for ``kernel_key`` via HPCAgent-Bench's NumpyToX C++ translator and
+    return the timing-stripped body. Reuses :func:`hpcagent_bench.harness.agent.reference_source`
     -- the same read-back the repo-level layout and the restricted-mode StubAgent use -- so
     the args are in canonical C-ABI order and the exported symbol is named canonically
     (``<short>_fp64``). A translator gap propagates as an exception (the caller records a
     skip); a leaked timing token raises out of :func:`strip_dead_chrono`."""
-    from optarena.harness.agent import reference_source
-    from optarena.harness.task import Task
+    from hpcagent_bench.harness.agent import reference_source
+    from hpcagent_bench.harness.task import Task
     return strip_dead_chrono(reference_source(Task(kernel_key, language="cpp")), stem)
 
 
@@ -645,7 +646,7 @@ def write_fetch_helper(dest: pathlib.Path, dry_run: bool) -> None:
 
 def build_report(results: Dict[str, FamilyResult], created: Dict[str, int], polybench_state: str,
                  no_original: List[Tuple[str, str]]) -> str:
-    """Render optarena/benchmarks/ORIGINAL_SOURCES.md."""
+    """Render hpcagent_bench/benchmarks/ORIGINAL_SOURCES.md."""
     total_copied = sum(created.values())
     lines: List[str] = []
     lines.append("# Original sources coverage")
@@ -665,7 +666,7 @@ def build_report(results: Dict[str, FamilyResult], created: Dict[str, int], poly
         "cloudsc": "npbench-cloudsc/.../weather_stencils/cloudsc/cloudsc_numpy.py",
         "tsvc": "TSVC_2/src/tsvc.c (per-function s<NNNN>)",
         "polybench": "PolyBench/C 4.2.1 (git fetch) <cat>/<kernel>/<kernel>.c",
-        "lulesh": "optarena/tests/ports/lulesh/baseline/lulesh_comp_kernels_original.f90",
+        "lulesh": "hpcagent_bench/tests/ports/lulesh/baseline/lulesh_comp_kernels_original.f90",
         "tsvc_cpp": "VectraArtifacts/tsvc_2{,_5}/.../<name>/<name>_d.cpp (timing removed)",
         "tsvc_cpp_emitted": "NumpyToX reference_source(Task(<kernel>, cpp)); Vectra-less foundation kernels",
     }
@@ -698,7 +699,7 @@ def build_report(results: Dict[str, FamilyResult], created: Dict[str, int], poly
         lines.append("## tsvc_cpp_emitted: NumpyToX C++ baseline (Vectra-less foundation kernels)")
         lines.append("")
         lines.append("A foundation kernel with NO Vectra microkernel gets its `<stem>_original.cpp`")
-        lines.append("emitted by OptArena's own NumpyToX C++ translator -- the baseline the score")
+        lines.append("emitted by HPCAgent-Bench's own NumpyToX C++ translator -- the baseline the score")
         lines.append("divides by -- via `reference_source(Task(<kernel>, language='cpp'))`. The v2 C-ABI")
         lines.append("carries no timer, so the emitted source holds no `time_ns` argument; numpyto_c's")
         lines.append("lone dead `#include <chrono>` is stripped and any surviving timing token is")
@@ -738,12 +739,12 @@ NO_ORIGINAL: List[Tuple[str, str]] = [
     ("gromacs_nbnxm, xsbench, lavamd, force_lj, hotspot(_3d), pathfinder, needleman_wunsch, smith_waterman, "
      "bfs, pagerank, bellman_ford, kmeans, gaussian, dfa, kmp, bitonic_sort, permute_3d, dwt2d, fft_1d/3d, "
      "hmm_forward, viterbi, nqueens, subset_sum, sparse solvers",
-     "OptArena-authored numpy ports of algorithms / mini-apps; no single vendored upstream file"),
+     "HPCAgent-Bench-authored numpy ports of algorithms / mini-apps; no single vendored upstream file"),
     ("foundation micro-kernels (argmax_*, cond_reduce_*, ext_*, and other non-TSVC foundation)",
-     "OptArena-authored translator micro-tests; the numpy reference IS the origin"),
+     "HPCAgent-Bench-authored translator micro-tests; the numpy reference IS the origin"),
     ("ICON ocean/atmosphere single-TU .f90 (velocity_advection_inlined, solve_nonhydro_inlined, "
      "ocean_veloc_adv, coriolis_pv, ppm_vflux, solve_free_sfc)",
-     "present on disk in dace-fortran/tests/icon but have NO corresponding OptArena kernel port to attach to"),
+     "present on disk in dace-fortran/tests/icon but have NO corresponding HPCAgent-Bench kernel port to attach to"),
 ]
 
 
@@ -757,7 +758,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help=f"parent dir holding the sibling source repos (default {WORK_ROOT})")
     ap.add_argument("--polybench-cache",
                     type=pathlib.Path,
-                    default=pathlib.Path(tempfile.gettempdir()) / "optarena_polybench_cache",
+                    default=pathlib.Path(tempfile.gettempdir()) / "hpcagent_bench_polybench_cache",
                     help="where to clone/find the PolyBench/C checkout")
     args = ap.parse_args(argv)
 

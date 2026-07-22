@@ -3,15 +3,15 @@
 ## Install (sudoless)
 
 ```bash
-pip install -e .                                  # optarena + the numpyto_* translators
+pip install -e .                                  # hpcagent_bench + the numpyto_* translators
 pip install -r requirements/cpu.txt               # numeric deps for the hardware target
 pip install -r requirements/optional.txt          # apache-tvm + mpi4py baselines (optional; see Platforms)
 pip install -r requirements/harbor.txt            # harbor / container tooling (only to run the benchmark)
-optarena-install-apptainer                         # Apptainer, unprivileged, into ~/.local (optional)
+hpcagent-bench-install-apptainer                         # Apptainer, unprivileged, into ~/.local (optional)
 ```
 
 Everything is pip-installable except the container runtimes. Apptainer is a
-Go binary -- `optarena-install-apptainer` runs Apptainer's official unprivileged
+Go binary -- `hpcagent-bench-install-apptainer` runs Apptainer's official unprivileged
 installer for the rootless case; `podman` is the rootless alternative, installed as a
 system package. No pip package bundles the Apptainer binary (`spython`
 only wraps the CLI).
@@ -21,7 +21,7 @@ only wraps the CLI).
 Linux and WSL2 (a real Linux kernel) run the harness as-is. macOS runs the **native,
 no-container path** -- Apptainer/Singularity have no macOS build (they run a Linux VM,
 whose timings are neither native-mac nor bare-Linux, so they are not comparable). The
-build + runtime layer is OS-aware (`optarena/osinfo.py`): the isolated native call uses
+build + runtime layer is OS-aware (`hpcagent_bench/osinfo.py`): the isolated native call uses
 `spawn` instead of `fork` (forking after numpy/BLAS/Accelerate threads aborts the child
 on macOS), `ru_maxrss` is scaled per-OS, the per-rep timeout and the `RLIMIT_AS` cap are
 Linux-only (both need POSIX facilities the mac path does not enforce reliably; the
@@ -44,23 +44,23 @@ degrades gracefully rather than taking down the sweep.
 ## Container backends (`runtime.backend`)
 
 Only **apptainer** and **podman** -- both are what CSCS launches, and both consume the ONE
-universal OCI image (`containers/optarena.Dockerfile`):
+universal OCI image (`containers/hpcagent_bench.Dockerfile`):
 
 | backend | runs the image via | rootless | notes |
 |---------|--------------------|----------|-------|
-| `apptainer` (default) | a SIF built from the OCI image | yes | `optarena-install-apptainer`; Harbor names it `singularity` |
+| `apptainer` (default) | a SIF built from the OCI image | yes | `hpcagent-bench-install-apptainer`; Harbor names it `singularity` |
 | `podman` | the OCI tag directly | yes | launched directly, not through Harbor |
 
-Select with `$OPTARENA_RUNTIME_BACKEND=apptainer|podman`. Both run an image directly via
-`optarena.containers.local_run_command` / `scripts/run_agent_in_container.sh`. Harbor (the
+Select with `$HPCAGENT_BENCH_RUNTIME_BACKEND=apptainer|podman`. Both run an image directly via
+`hpcagent_bench.containers.local_run_command` / `scripts/run_agent_in_container.sh`. Harbor (the
 Terminal-Bench orchestrator) drives `singularity` only here (`harbor_env_for` maps
 apptainer -> singularity); a podman run goes through the direct launcher.
 
 **Build the image (one OCI recipe, `--build-arg HW=cpu|nvidia|amd`):**
 ```
-podman build -f containers/optarena.Dockerfile --build-arg HW=cpu -t optarena:cpu .
+podman build -f containers/hpcagent_bench.Dockerfile --build-arg HW=cpu -t hpcagent_bench:cpu .
 # apptainer SIF from the SAME OCI (daemon-agnostic):
-podman save optarena:cpu -o optarena-cpu.tar && apptainer build optarena-cpu.sif docker-archive:optarena-cpu.tar
+podman save hpcagent_bench:cpu -o hpcagent_bench-cpu.tar && apptainer build hpcagent_bench-cpu.sif docker-archive:hpcagent_bench-cpu.tar
 ```
 Then `scripts/run_agent_in_container.sh <hw> -- <agent args>` runs it with the device passed
 through automatically: `--nv` (nvidia), `--rocm` + kfd/dri (amd), nothing for cpu. The cpu
@@ -94,7 +94,7 @@ ABI-replacement approach follows **SPCL's XaaS containers artifact**
 Copik et al.). The `bench` driver, `mpi.*` config, and both `residency: host|device` deliveries
 are wired.
 
-- **Local / CI (single sandbox).** `apptainer run optarena-cpu.sif mpirun.mpich
+- **Local / CI (single sandbox).** `apptainer run hpcagent_bench-cpu.sif mpirun.mpich
   --oversubscribe -n 4 ./bench ...` runs R ranks on a few cores -- no cluster, no Slurm.
   Oversubscription lets the distribution + launch tests run R > physical cores. Use the
   `.mpich`/`.hydra`-suffixed wrappers (`mpicc.mpich`, `mpiexec.hydra`) so a build or launch
@@ -106,7 +106,7 @@ are wired.
   with the CXI hook enabled on Alps:
 
   ```
-  # env.toml:  image = "optarena-cpu.sif"      # the apptainer SIF, or the podman OCI tag
+  # env.toml:  image = "hpcagent_bench-cpu.sif"      # the apptainer SIF, or the podman OCI tag
   #            [annotations] com.hooks.cxi.enabled = "true"   # Slingshot/CXI on Alps
   ```
 
@@ -153,24 +153,24 @@ measurement contention-free.
 
 ## Distributed run (cluster) -- static agent / judge / inference
 
-OptArena runs as **single-node containers** (apptainer or podman) wired by **static,
+HPCAgent-Bench runs as **single-node containers** (apptainer or podman) wired by **static,
 round-robin** assignment -- no container spans nodes, no MPI between containers, no dynamic
 load balancing. Each **agent worker** is bound once to one vLLM endpoint (think) and one
 judge endpoint (authoritative HTTP grade): worker `w` uses `vllm_urls[w % V]` and
 `judge_urls[w % J]`.
 
-- **judge** nodes run `optarena serve` (the HTTP oracle; each bounds concurrent grades to its
+- **judge** nodes run `hpcagent-bench serve` (the HTTP oracle; each bounds concurrent grades to its
   local device slots).
 - **inference** nodes run vLLM. A model too big for one node is a **ray cluster of single-node
   containers behind ONE URL** -- agents just see the URL.
 - **agent** reads its endpoint lists from the environment and round-robins over them:
-  `OPTARENA_VLLM_URLS`, `OPTARENA_JUDGE_URLS`, `OPTARENA_AGENT_WORKERS`.
+  `HPCAGENT_BENCH_VLLM_URLS`, `HPCAGENT_BENCH_JUDGE_URLS`, `HPCAGENT_BENCH_AGENT_WORKERS`.
 
 ```
-export OPTARENA_VLLM_URLS="http://nid002:8000/v1,http://nid005:8000/v1"
-export OPTARENA_JUDGE_URLS="http://nid003:8800,http://nid006:8800"
-export OPTARENA_AGENT_WORKERS=8
-optarena agent openai --kernels gemm,gesummv --baseline numpy --preset S
+export HPCAGENT_BENCH_VLLM_URLS="http://nid002:8000/v1,http://nid005:8000/v1"
+export HPCAGENT_BENCH_JUDGE_URLS="http://nid003:8800,http://nid006:8800"
+export HPCAGENT_BENCH_AGENT_WORKERS=8
+hpcagent-bench agent openai --kernels gemm,gesummv --baseline numpy --preset S
 ```
 
 `--pipeline auto` (default) turns the distributed path on when there is >1 endpoint on either

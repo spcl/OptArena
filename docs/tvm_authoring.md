@@ -1,4 +1,4 @@
-# Authoring TVM kernels for OptArena
+# Authoring TVM kernels for HPCAgent-Bench
 
 This is the spec for hand-writing the per-benchmark TVM implementations
 (the "TVM track", analogous to the pluto track). Every canonical
@@ -52,7 +52,7 @@ Hand-write `te.compute` only for the parts with no matching high-level op
   dynamic name use `vars(module)[name]` / `module.__dict__[name]`.
 * Absolute package imports only -- no `sys.path` edits, no filesystem paths.
 
-## The shared helper -- `optarena/frameworks/tvm_build.py`
+## The shared helper -- `hpcagent_bench/frameworks/tvm_build.py`
 
 ```python
 TvmKernel(name, build_primfunc, target_fn, device_fn)  # shape-keyed compile cache
@@ -87,7 +87,7 @@ Watch the output shape/contract:
 ```python
 import tvm
 from tvm import te
-from optarena.frameworks.tvm_build import TvmKernel, cpu_target
+from hpcagent_bench.frameworks.tvm_build import TvmKernel, cpu_target
 
 def build_primfunc(n, dtype):
     a = te.placeholder((n,), name="a", dtype=dtype)
@@ -109,8 +109,8 @@ def vpv(a, b, LEN_1D):                 # name == bench_info func_name
 
 ```python
 import tvm
-from optarena.frameworks.tvm_build import TvmKernel, gpu_target
-from optarena.benchmarks.<rel>.<module>_tvm_cpu import build_primfunc
+from hpcagent_bench.frameworks.tvm_build import TvmKernel, gpu_target
+from hpcagent_bench.benchmarks.<rel>.<module>_tvm_cpu import build_primfunc
 
 _K = TvmKernel("vpv_gpu", build_primfunc, gpu_target, lambda: tvm.cuda(0))
 
@@ -127,12 +127,12 @@ def vpv(a, b, LEN_1D):                 # identical body, GPU _K
 ```
 # CPU -- real harness numerical validation vs numpy (preset S, fp64 strict):
 # verify_tvm.py is a local-only helper (gitignored; restore locally if absent)
-OPTARENA_TVM_METASCHEDULE_TRIALS=4 python scripts/verify_tvm.py <name> [<name> ...]
+HPCAGENT_BENCH_TVM_METASCHEDULE_TRIALS=4 python scripts/verify_tvm.py <name> [<name> ...]
 # GPU -- structural build check (no GPU needed):
 python scripts/verify_tvm.py <name> --fw tvm --build-only
 ```
 A kernel is "done" only when its CPU verify prints `PASS` and its GPU
-build-check prints `PASS`. Keep `OPTARENA_TVM_METASCHEDULE_TRIALS` small (4-8)
+build-check prints `PASS`. Keep `HPCAGENT_BENCH_TVM_METASCHEDULE_TRIALS` small (4-8)
 while iterating -- correctness does not need a full tune; the env var also
 gates the real harness (`small`=64 / `full`=1024).
 

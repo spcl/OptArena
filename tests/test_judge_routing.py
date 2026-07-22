@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Judge routing: two agents on two judges must not cross-talk.
 
@@ -16,11 +16,11 @@ import urllib.request
 
 import pytest
 
-from optarena.harness import pipeline
-from optarena.harness.envelope import Submission
-from optarena.harness.runner import RunRow
-from optarena.harness.task import Task
-from optarena.harness.tools import JudgeClient
+from hpcagent_bench.harness import pipeline
+from hpcagent_bench.harness.envelope import Submission
+from hpcagent_bench.harness.runner import RunRow
+from hpcagent_bench.harness.task import Task
+from hpcagent_bench.harness.tools import JudgeClient
 
 TASK_A = Task("gemm", "restricted", "c")
 TASK_B = Task("gesummv", "restricted", "c")

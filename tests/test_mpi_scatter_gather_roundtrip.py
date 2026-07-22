@@ -1,11 +1,11 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Exhaustive scatter/gather round-trip matrix for MPI data distribution: scheme x dim x grid x dtype."""
 import numpy as np
 import pytest
 
-from optarena.harness.mpi_descriptor import (ArrayDist, AxisDist, default_distribution, factor_grid, gather, Grid,
-                                             is_partition, local_shape, owned_indices, scatter)
+from hpcagent_bench.harness.mpi_descriptor import (ArrayDist, AxisDist, default_distribution, factor_grid, gather, Grid,
+                                                   is_partition, local_shape, owned_indices, scatter)
 
 DTYPES = ["float64", "float32", "int64", "int32"]
 RANKS = [1, 2, 3, 4, 6, 8]

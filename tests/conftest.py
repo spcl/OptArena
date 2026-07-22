@@ -1,11 +1,11 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared pytest fixtures for the agent-bench tests."""
 import threading
 
 import pytest
 
-from optarena.harness.service import make_server
+from hpcagent_bench.harness.service import make_server
 
 
 def pytest_configure(config):
@@ -25,7 +25,7 @@ def _cap_fuzz_sizes(request, monkeypatch):
     draws (the fuzz machinery's own tests) opt out with ``@pytest.mark.real_fuzz``."""
     if request.node.get_closest_marker("real_fuzz"):
         return
-    monkeypatch.setenv("OPTARENA_FUZZ_SIZE_CAP", "4096")
+    monkeypatch.setenv("HPCAGENT_BENCH_FUZZ_SIZE_CAP", "4096")
 
 
 @pytest.fixture

@@ -1,16 +1,16 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The multi-node correctness oracle: a real multi-rank MPI run of `B = a*A + c` graded against numpy."""
 import numpy as np
 import pytest
 
-from optarena.harness import mpi_call
-from optarena.harness.envelope import Submission
-from optarena.harness.mpi_descriptor import Descriptor
-from optarena.harness.sandbox import Sandbox
-from optarena.harness.task import Task
-from optarena.support.bindings.contract import Arg, Binding
-from optarena.support.bindings.stubs import LANGS
+from hpcagent_bench.harness import mpi_call
+from hpcagent_bench.harness.envelope import Submission
+from hpcagent_bench.harness.mpi_descriptor import Descriptor
+from hpcagent_bench.harness.sandbox import Sandbox
+from hpcagent_bench.harness.task import Task
+from hpcagent_bench.support.bindings.contract import Arg, Binding
+from hpcagent_bench.support.bindings.stubs import LANGS
 from tests.mpi_launch_helpers import c_toolchain, cc_override_for, mpi4py_launcher
 
 # B = a*A + c on a 2-D array; M,N are size symbols (a distributed axis localises them); a,c are scalars.

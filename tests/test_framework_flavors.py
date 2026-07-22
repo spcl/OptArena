@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the OptArena authors.
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Framework flavor-grouping regression tests (pure metadata, no compile/run).
 
@@ -6,8 +6,8 @@ Pins the consolidated registry: one Framework subclass per ``base`` flavor famil
 the native backend split into its base languages, each language's autopar variant,
 and polly, vs Pluto as its own toolchain, and APPy fully removed.
 """
-from optarena.frameworks import NativeFramework, PlutoFramework
-from optarena.frameworks.framework import FRAMEWORK_META, framework_flavors, generate_framework
+from hpcagent_bench.frameworks import NativeFramework, PlutoFramework
+from hpcagent_bench.frameworks.framework import FRAMEWORK_META, framework_flavors, generate_framework
 
 
 def test_native_family_is_the_base_languages_their_autopar_and_polly():
@@ -53,5 +53,5 @@ def test_arch_families_share_one_class():
 
 def test_appy_removed():
     assert "appy" not in FRAMEWORK_META
-    import optarena.frameworks as infra
+    import hpcagent_bench.frameworks as infra
     assert "APPyFramework" not in vars(infra)

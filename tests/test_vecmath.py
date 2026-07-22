@@ -11,8 +11,8 @@ import subprocess
 
 import pytest
 
-from optarena import flags, languages, osinfo
-from optarena.languages import _load_compilers
+from hpcagent_bench import flags, languages, osinfo
+from hpcagent_bench.languages import _load_compilers
 
 #: Any libmvec entry point: _ZGV <isa> N <width> <v...> _ <fn>, e.g. _ZGVeN8v_exp.
 LIBMVEC_SYMBOL = re.compile(r"_ZGV[a-z]N\d+v+_\w+")
