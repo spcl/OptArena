@@ -22,6 +22,8 @@ import tempfile
 import numpy as np
 import pytest
 
+from optarena import languages
+
 from numpyto_common.frontend import parse_kernel
 from numpyto_common.lowering import lower
 from numpyto_c.emit import emit_c, emit_cpp  # noqa: E402
@@ -42,11 +44,12 @@ BINARY = ["arctan2", "hypot", "copysign", "fmod", "fmax", "fmin"]
 # _auto / per-compiler suffix). emit_binding(base_name="k") records "k" for every
 # language, so each backend emits its source with fn_name "k".
 _BACKENDS = {
-    "c": (emit_c, "c", "k", ["gcc", "-O2", "-std=c17", "-shared", "-fPIC"], "gcc"),
-    "cpp": (emit_cpp, "cpp", "k", ["g++", "-O2", "-std=c++20", "-shared", "-fPIC"], "g++"),
-    "fortran": (emit_fortran, "fortran", "k",
-                ["gfortran", "-O2", "-ffree-form", "-ffree-line-length-none", "-std=f2018", "-shared",
-                 "-fPIC"], "gfortran"),
+    "c": (emit_c, "c", "k", ["gcc", "-O2", languages.std_flag("c"), "-shared", "-fPIC"], "gcc"),
+    "cpp": (emit_cpp, "cpp", "k", ["g++", "-O2", languages.std_flag("cpp"), "-shared", "-fPIC"], "g++"),
+    "fortran":
+    (emit_fortran, "fortran", "k",
+     ["gfortran", "-O2", "-ffree-form", "-ffree-line-length-none",
+      languages.std_flag("fortran"), "-shared", "-fPIC"], "gfortran"),
 }
 
 

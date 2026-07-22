@@ -190,6 +190,20 @@ def baseline_flags(lang: str) -> str:
     return _resolve_baseline(block, Mode.SINGLE_CORE)
 
 
+def std_flag(lang: str) -> str:
+    """The ``-std=`` flag ``lang`` compiles with, read off its ``compilers.yaml`` block.
+
+    Test oracles and hand-rolled probe compilations call this instead of literalling a
+    standard, so an oracle can never accept or reject code at a different language
+    standard than the harness itself builds submissions with.
+    """
+    _, block = _compiler_for_lang(_load_compilers(), lang)
+    for token in block["compile"]:
+        if token.startswith("-std="):
+            return token
+    return ""
+
+
 def report_flags(lang: str, *, compiler: Optional[str] = None) -> str:
     """The optimization-report flags for ``lang`` (or an explicit ``compiler`` block).
 

@@ -55,6 +55,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 from optarena import dtypes as _dtypes  # noqa: E402
+from optarena import languages  # noqa: E402
 from optarena.spec import BenchSpec  # noqa: E402
 from optarena.initialize import auto_initialize  # noqa: E402
 from optarena.precision import Precision  # noqa: E402
@@ -79,10 +80,14 @@ def _np_dtype_for_kind(kind: str, np_float):
         return np_float
 
 
+# -std= comes from compilers.yaml via languages.std_flag: the oracle must accept
+# exactly the language standard the harness builds submissions with.
 COMPILE = {
-    "c": ["gcc", "-O2", "-std=c17", "-shared", "-fPIC"],
-    "cpp": ["g++", "-O2", "-std=c++20", "-shared", "-fPIC"],
-    "fortran": ["gfortran", "-O2", "-ffree-form", "-ffree-line-length-none", "-std=f2018", "-shared", "-fPIC"],
+    "c": ["gcc", "-O2", languages.std_flag("c"), "-shared", "-fPIC"],
+    "cpp": ["g++", "-O2", languages.std_flag("cpp"), "-shared", "-fPIC"],
+    "fortran":
+    ["gfortran", "-O2", "-ffree-form", "-ffree-line-length-none",
+     languages.std_flag("fortran"), "-shared", "-fPIC"],
 }
 BACKENDS = tuple(COMPILE)
 
