@@ -2,6 +2,7 @@
 
 import ast
 import math
+import pathlib
 import re
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
@@ -1154,13 +1155,21 @@ _C_HEADER = ("#define _USE_MATH_DEFINES\n"
              "/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n"
              " * libm ``fmax``/``fmin`` SUPPRESS NaN (return the non-NaN operand) but\n"
              " * numpy PROPAGATES it. These single-evaluation helpers return NaN when\n"
-             " * either operand is NaN, else the larger/smaller. */\n"
-             "static inline double __npb_fmax(double a, double b) {\n"
+             " * either operand is NaN, else the larger/smaller.\n"
+             " * Integer operands take the INTEGER form, dispatched on the promoted operand\n"
+             " * type exactly as int_floor is: routing them through the double helper rounds\n"
+             " * every value above 2**53 to the nearest representable double, so\n"
+             " * min(2**53 + 1, 2**53 + 2) returned 2**53 -- a value neither operand had. */\n"
+             "static inline double __npb_fmax_f(double a, double b) {\n"
              "    return (a != a) ? a : (b != b) ? b : (a > b ? a : b);\n"
              "}\n"
-             "static inline double __npb_fmin(double a, double b) {\n"
+             "static inline double __npb_fmin_f(double a, double b) {\n"
              "    return (a != a) ? a : (b != b) ? b : (a < b ? a : b);\n"
              "}\n"
+             "static inline int64_t __npb_fmax_i(int64_t a, int64_t b) { return a > b ? a : b; }\n"
+             "static inline int64_t __npb_fmin_i(int64_t a, int64_t b) { return a < b ? a : b; }\n"
+             "static inline uint64_t __npb_fmax_u(uint64_t a, uint64_t b) { return a > b ? a : b; }\n"
+             "static inline uint64_t __npb_fmin_u(uint64_t a, uint64_t b) { return a < b ? a : b; }\n"
              "/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n"
              " * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n"
              "static inline double __npb_sign(double x) {\n"
@@ -1193,6 +1202,18 @@ _C_HEADER = ("#define _USE_MATH_DEFINES\n"
              "#endif\n"
              "#define __NPB_UNSIGNED_ASSOC(fn) \\\n"
              "    unsigned int: fn, unsigned long: fn, unsigned long long: fn,\n"
+             "/* min/max dispatch (declared above): integer operands stay exact, floating ones\n"
+             " * propagate NaN. Spelled here because the type associations are. */\n"
+             "#define __npb_fmin(a, b) _Generic((a) + (b), \\\n"
+             "    __NPB_F16_ASSOC(__npb_fmin_f) \\\n"
+             "    __NPB_UNSIGNED_ASSOC(__npb_fmin_u) \\\n"
+             "    float: __npb_fmin_f, double: __npb_fmin_f, long double: __npb_fmin_f, \\\n"
+             "    default: __npb_fmin_i)((a), (b))\n"
+             "#define __npb_fmax(a, b) _Generic((a) + (b), \\\n"
+             "    __NPB_F16_ASSOC(__npb_fmax_f) \\\n"
+             "    __NPB_UNSIGNED_ASSOC(__npb_fmax_u) \\\n"
+             "    float: __npb_fmax_f, double: __npb_fmax_f, long double: __npb_fmax_f, \\\n"
+             "    default: __npb_fmax_i)((a), (b))\n"
              "#ifndef int_floor\n"
              "#define int_floor(a, b) _Generic((a) + (b), \\\n"
              "    __NPB_F16_ASSOC(__npb_floordiv_f) \\\n"
@@ -1245,139 +1266,153 @@ _C_HEADER = ("#define _USE_MATH_DEFINES\n"
              "}\n")
 
 # C++ prelude uses constexpr, not consteval (called with runtime args); <complex.h> is dropped to avoid name clashes.
-_CPP_HEADER = ('#include <cstdint>\n#include <cmath>\n'
-               '#include <type_traits>\n'
-               '#include <cstring>\n#include <cstdlib>\n'
-               '// Math constants as typed constexpr values. ``<cmath>`` may\n'
-               '// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n'
-               '// them so the names rebind to our constexpr values -- we emit no\n'
-               '// macro DEFINITION, only remove the platform ones.\n'
-               '#ifdef M_PI\n#undef M_PI\n#endif\n'
-               '#ifdef M_E\n#undef M_E\n#endif\n'
-               'constexpr double M_PI = 3.14159265358979323846;\n'
-               'constexpr double M_E  = 2.71828182845904523536;\n'
-               '// Complex support via the GCC/Clang ``double _Complex`` extension\n'
-               '// (no <complex.h>, so no name clashes). The imaginary unit and\n'
-               '// the C99-named helpers are constexpr/inline FUNCTIONS, not macros.\n'
-               'constexpr double creal(double _Complex z) { return __real__ z; }\n'
-               'constexpr double cimag(double _Complex z) { return __imag__ z; }\n'
-               'inline double _Complex __npb_make_complex(double re, double im) {\n'
-               '    double _Complex z; __real__ z = re; __imag__ z = im; return z;\n'
-               '}\n'
-               'static const double _Complex _Complex_I = __npb_make_complex(0.0, 1.0);\n'
-               'inline double cabs(double _Complex z) {\n'
-               '    return sqrt(creal(z)*creal(z) + cimag(z)*cimag(z));\n'
-               '}\n'
-               'inline double carg(double _Complex z) { return atan2(cimag(z), creal(z)); }\n'
-               '/* ``cexp(z) = exp(re) * (cos(im) + i*sin(im))``. */\n'
-               'inline double _Complex cexp(double _Complex z) {\n'
-               '    return __npb_make_complex(exp(creal(z))*cos(cimag(z)),\n'
-               '                             exp(creal(z))*sin(cimag(z)));\n'
-               '}\n'
-               '/* ``clog(z) = log(|z|) + i*arg(z)``. */\n'
-               'inline double _Complex clog(double _Complex z) {\n'
-               '    return __npb_make_complex(log(cabs(z)), carg(z));\n'
-               '}\n'
-               '/* ``csqrt(z) = exp((1/2) * log(z))`` -- principal branch. */\n'
-               'inline double _Complex csqrt(double _Complex z) {\n'
-               '    double _Complex l = clog(z);\n'
-               '    return cexp(__npb_make_complex(0.5*creal(l), 0.5*cimag(l)));\n'
-               '}\n'
-               '/* ``cpow(z, w) = exp(w * log(z))`` -- general complex pow. */\n'
-               'inline double _Complex cpow(double _Complex z, double _Complex w) {\n'
-               '    double _Complex l = clog(z);\n'
-               '    return cexp(__npb_make_complex(\n'
-               '        creal(w)*creal(l) - cimag(w)*cimag(l),\n'
-               '        creal(w)*cimag(l) + cimag(w)*creal(l)));\n'
-               '}\n'
-               '/* ``z.conjugate()`` -- complex-conjugate scalar helper. */\n'
-               'inline double _Complex __npb_conj(double _Complex z) {\n'
-               '    return __npb_make_complex(creal(z), -cimag(z));\n'
-               '}\n'
-               '/* Integer power for VLA shape bounds. */\n'
-               'constexpr int64_t __npb_int_pow(int64_t base, int64_t exp) {\n'
-               '    int64_t result = 1;\n'
-               '    while (exp > 0) {\n'
-               '        if (exp & 1) result *= base;\n'
-               '        base *= base;\n'
-               '        exp >>= 1;\n'
-               '    }\n'
-               '    return result;\n'
-               '}\n'
-               '/* Ternary-form ``max`` / ``min`` as constexpr function templates\n'
-               ' * so a mixed call like ``max(double, int)`` promotes the int\n'
-               ' * operand via the usual arithmetic conversions (``std::max``\n'
-               ' * would require both args to share a type). They PROPAGATE NaN (a\n'
-               ' * NaN in EITHER operand yields NaN): these serve the elementwise\n'
-               ' * ``np.maximum``/``np.minimum`` broadcast and the ``np.maximum.at`` /\n'
-               ' * ``np.minimum.at`` scatter folds, which follow numpy (propagate),\n'
-               ' * not Python builtin max. For finite operands the result is the\n'
-               ' * larger/smaller -- so the 3-way builtin max (needleman_wunsch,\n'
-               ' * always finite) is unchanged; integer NaN tests are dead. */\n'
-               'template <class A, class B>\n'
-               'constexpr auto max(A a, B b) { return a != a ? a : (b != b ? b : (b > a ? b : a)); }\n'
-               'template <class A, class B>\n'
-               'constexpr auto min(A a, B b) { return a != a ? a : (b != b ? b : (b < a ? b : a)); }\n'
-               '/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n'
-               ' * libm ``fmax``/``fmin`` SUPPRESS NaN but numpy PROPAGATES it. These\n'
-               ' * single-evaluation helpers return NaN when either operand is NaN. */\n'
-               'inline double __npb_fmax(double a, double b) {\n'
-               '    return (a != a) ? a : (b != b) ? b : (a > b ? a : b);\n'
-               '}\n'
-               'inline double __npb_fmin(double a, double b) {\n'
-               '    return (a != a) ? a : (b != b) ? b : (a < b ? a : b);\n'
-               '}\n'
-               '/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n'
-               ' * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n'
-               'inline double __npb_sign(double x) {\n'
-               '    return x != x ? x : (double)((x > 0) - (x < 0));\n'
-               '}\n'
-               '/* Python ``//`` floors toward -inf; C++ ``/`` truncates toward zero.\n'
-               ' * C++ has no built-in floor-division, so it is always this helper. The\n'
-               ' * INTEGRAL/floating split is decided by the operand TYPE here rather than\n'
-               ' * inferred from the source AST -- guessing it wrong emitted a no-op floor\n'
-               ' * over an already-truncated integer quotient. */\n'
-               'template <class A, class B>\n'
-               'constexpr auto int_floor(A a, B b) {\n'
-               '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
-               '        return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n'
-               '    } else {\n'
-               '        return std::floor(static_cast<double>(a) / static_cast<double>(b));\n'
-               '    }\n'
-               '}\n'
-               '/* Ceil-division counterpart (toward +inf), exact for both signs -- unlike\n'
-               ' * the ``(a + b - 1) / b`` idiom, which holds only for a positive divisor\n'
-               ' * and overflows near the integer maximum. */\n'
-               'template <class A, class B>\n'
-               'constexpr auto int_ceil(A a, B b) {\n'
-               '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
-               '        return a / b + ((a % b != 0) && ((a < 0) == (b < 0)));\n'
-               '    } else {\n'
-               '        return std::ceil(static_cast<double>(a) / static_cast<double>(b));\n'
-               '    }\n'
-               '}\n'
-               '/* Python ``%`` returns the sign of the divisor; C/C++ the dividend.\n'
-               ' * Same type-dispatch as int_floor (floating operands need npy_remainder,\n'
-               ' * which the integer form cannot express on doubles). */\n'
-               'template <class A, class B>\n'
-               'constexpr auto python_mod(A a, B b) {\n'
-               '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
-               '        return (a % b + b) % b;\n'
-               '    } else {\n'
-               '        double m = std::fmod(static_cast<double>(a), static_cast<double>(b));\n'
-               '        if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += static_cast<double>(b);\n'
-               '        return m;\n'
-               '    }\n'
-               '}\n'
-               '/* Floating-point ``%``: numpy floored modulo (sign of the divisor),\n'
-               ' * which integer ``python_mod`` cannot express on doubles. Mirrors\n'
-               ' * numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n'
-               'inline double python_fmod(double a, double b) {\n'
-               '    double m = std::fmod(a, b);\n'
-               '    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n'
-               '    return m;\n'
-               '}\n\n'
-               'extern "C" {\n')
+_CPP_ARITH = ('#include <cstdint>\n#include <cmath>\n'
+              '#include <type_traits>\n'
+              '#include <cstring>\n#include <cstdlib>\n'
+              '// Math constants as typed constexpr values. ``<cmath>`` may\n'
+              '// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n'
+              '// them so the names rebind to our constexpr values -- we emit no\n'
+              '// macro DEFINITION, only remove the platform ones.\n'
+              '#ifdef M_PI\n#undef M_PI\n#endif\n'
+              '#ifdef M_E\n#undef M_E\n#endif\n'
+              'constexpr double M_PI = 3.14159265358979323846;\n'
+              'constexpr double M_E  = 2.71828182845904523536;\n'
+              '// Complex support via the GCC/Clang ``double _Complex`` extension\n'
+              '// (no <complex.h>, so no name clashes). The imaginary unit and\n'
+              '// the C99-named helpers are constexpr/inline FUNCTIONS, not macros.\n'
+              'constexpr double creal(double _Complex z) { return __real__ z; }\n'
+              'constexpr double cimag(double _Complex z) { return __imag__ z; }\n'
+              'inline double _Complex __npb_make_complex(double re, double im) {\n'
+              '    double _Complex z; __real__ z = re; __imag__ z = im; return z;\n'
+              '}\n'
+              'static const double _Complex _Complex_I = __npb_make_complex(0.0, 1.0);\n'
+              'inline double cabs(double _Complex z) {\n'
+              '    return sqrt(creal(z)*creal(z) + cimag(z)*cimag(z));\n'
+              '}\n'
+              'inline double carg(double _Complex z) { return atan2(cimag(z), creal(z)); }\n'
+              '/* ``cexp(z) = exp(re) * (cos(im) + i*sin(im))``. */\n'
+              'inline double _Complex cexp(double _Complex z) {\n'
+              '    return __npb_make_complex(exp(creal(z))*cos(cimag(z)),\n'
+              '                             exp(creal(z))*sin(cimag(z)));\n'
+              '}\n'
+              '/* ``clog(z) = log(|z|) + i*arg(z)``. */\n'
+              'inline double _Complex clog(double _Complex z) {\n'
+              '    return __npb_make_complex(log(cabs(z)), carg(z));\n'
+              '}\n'
+              '/* ``csqrt(z) = exp((1/2) * log(z))`` -- principal branch. */\n'
+              'inline double _Complex csqrt(double _Complex z) {\n'
+              '    double _Complex l = clog(z);\n'
+              '    return cexp(__npb_make_complex(0.5*creal(l), 0.5*cimag(l)));\n'
+              '}\n'
+              '/* ``cpow(z, w) = exp(w * log(z))`` -- general complex pow. */\n'
+              'inline double _Complex cpow(double _Complex z, double _Complex w) {\n'
+              '    double _Complex l = clog(z);\n'
+              '    return cexp(__npb_make_complex(\n'
+              '        creal(w)*creal(l) - cimag(w)*cimag(l),\n'
+              '        creal(w)*cimag(l) + cimag(w)*creal(l)));\n'
+              '}\n'
+              '/* ``z.conjugate()`` -- complex-conjugate scalar helper. */\n'
+              'inline double _Complex __npb_conj(double _Complex z) {\n'
+              '    return __npb_make_complex(creal(z), -cimag(z));\n'
+              '}\n'
+              '/* Integer power for VLA shape bounds. */\n'
+              'constexpr int64_t __npb_int_pow(int64_t base, int64_t exp) {\n'
+              '    int64_t result = 1;\n'
+              '    while (exp > 0) {\n'
+              '        if (exp & 1) result *= base;\n'
+              '        base *= base;\n'
+              '        exp >>= 1;\n'
+              '    }\n'
+              '    return result;\n'
+              '}\n'
+              '/* Ternary-form ``max`` / ``min`` as constexpr function templates\n'
+              ' * so a mixed call like ``max(double, int)`` promotes the int\n'
+              ' * operand via the usual arithmetic conversions (``std::max``\n'
+              ' * would require both args to share a type). They PROPAGATE NaN (a\n'
+              ' * NaN in EITHER operand yields NaN): these serve the elementwise\n'
+              ' * ``np.maximum``/``np.minimum`` broadcast and the ``np.maximum.at`` /\n'
+              ' * ``np.minimum.at`` scatter folds, which follow numpy (propagate),\n'
+              ' * not Python builtin max. For finite operands the result is the\n'
+              ' * larger/smaller -- so the 3-way builtin max (needleman_wunsch,\n'
+              ' * always finite) is unchanged; integer NaN tests are dead. */\n'
+              'template <class A, class B>\n'
+              'constexpr auto max(A a, B b) { return a != a ? a : (b != b ? b : (b > a ? b : a)); }\n'
+              'template <class A, class B>\n'
+              'constexpr auto min(A a, B b) { return a != a ? a : (b != b ? b : (b < a ? b : a)); }\n'
+              '/* Elementwise ``np.maximum``/``np.minimum`` lower to ``fmax``/``fmin``;\n'
+              ' * libm ``fmax``/``fmin`` SUPPRESS NaN but numpy PROPAGATES it. These\n'
+              ' * single-evaluation helpers return NaN when either operand is NaN.\n'
+              ' * Integral operands take the exact integer compare (the same INTEGRAL/floating\n'
+              ' * split int_floor makes): converting them to double rounds anything above 2**53,\n'
+              ' * so min(2**53 + 1, 2**53 + 2) came back 2**53 -- a value neither operand had. */\n'
+              'template <class A, class B>\n'
+              'constexpr auto __npb_fmax(A a, B b) {\n'
+              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
+              '        return a > b ? a : b;\n'
+              '    } else {\n'
+              '        return a != a ? a : (b != b ? b : (a > b ? a : b));\n'
+              '    }\n'
+              '}\n'
+              'template <class A, class B>\n'
+              'constexpr auto __npb_fmin(A a, B b) {\n'
+              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
+              '        return a < b ? a : b;\n'
+              '    } else {\n'
+              '        return a != a ? a : (b != b ? b : (a < b ? a : b));\n'
+              '    }\n'
+              '}\n'
+              '/* ``np.sign``: numpy ``sign(nan) == nan`` and ``sign(0) == 0``. The\n'
+              ' * naive ``(x>0)-(x<0)`` gives 0 for NaN and evaluates ``x`` twice. */\n'
+              'inline double __npb_sign(double x) {\n'
+              '    return x != x ? x : (double)((x > 0) - (x < 0));\n'
+              '}\n'
+              '/* Python ``//`` floors toward -inf; C++ ``/`` truncates toward zero.\n'
+              ' * C++ has no built-in floor-division, so it is always this helper. The\n'
+              ' * INTEGRAL/floating split is decided by the operand TYPE here rather than\n'
+              ' * inferred from the source AST -- guessing it wrong emitted a no-op floor\n'
+              ' * over an already-truncated integer quotient. */\n'
+              'template <class A, class B>\n'
+              'constexpr auto int_floor(A a, B b) {\n'
+              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
+              '        return a / b - ((a % b != 0) && ((a < 0) ^ (b < 0)));\n'
+              '    } else {\n'
+              '        return std::floor(static_cast<double>(a) / static_cast<double>(b));\n'
+              '    }\n'
+              '}\n'
+              '/* Ceil-division counterpart (toward +inf), exact for both signs -- unlike\n'
+              ' * the ``(a + b - 1) / b`` idiom, which holds only for a positive divisor\n'
+              ' * and overflows near the integer maximum. */\n'
+              'template <class A, class B>\n'
+              'constexpr auto int_ceil(A a, B b) {\n'
+              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
+              '        return a / b + ((a % b != 0) && ((a < 0) == (b < 0)));\n'
+              '    } else {\n'
+              '        return std::ceil(static_cast<double>(a) / static_cast<double>(b));\n'
+              '    }\n'
+              '}\n'
+              '/* Python ``%`` returns the sign of the divisor; C/C++ the dividend.\n'
+              ' * Same type-dispatch as int_floor (floating operands need npy_remainder,\n'
+              ' * which the integer form cannot express on doubles). */\n'
+              'template <class A, class B>\n'
+              'constexpr auto python_mod(A a, B b) {\n'
+              '    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n'
+              '        return (a % b + b) % b;\n'
+              '    } else {\n'
+              '        double m = std::fmod(static_cast<double>(a), static_cast<double>(b));\n'
+              '        if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += static_cast<double>(b);\n'
+              '        return m;\n'
+              '    }\n'
+              '}\n'
+              '/* Floating-point ``%``: numpy floored modulo (sign of the divisor),\n'
+              ' * which integer ``python_mod`` cannot express on doubles. Mirrors\n'
+              ' * numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n'
+              'inline double python_fmod(double a, double b) {\n'
+              '    double m = std::fmod(a, b);\n'
+              '    if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += b;\n'
+              '    return m;\n'
+              '}\n')
+#: The kernel prologue = the arithmetic definitions plus the C-linkage opener the entry point needs.
+_CPP_HEADER = _CPP_ARITH + '\nextern "C" {\n'
 _CPP_FOOTER = '} // extern "C"\n'
 
 # Timing is owned by the harness bracket externally (abi_contract.md Sec. 6); the kernel neither self-times nor
@@ -1386,6 +1421,44 @@ _C_PRELUDE = ""
 _C_EPILOGUE = ""
 _CPP_PRELUDE = ""
 _CPP_EPILOGUE = ""
+
+#: Standalone-header filename and include guard per language, for :func:`arith_header_source`.
+ARITH_HEADER_NAME = {"c": "npb_arith.h", "cpp": "npb_arith.hpp"}
+_ARITH_GUARD = {"c": "NPB_ARITH_H", "cpp": "NPB_ARITH_HPP"}
+_ARITH_BODY = {"c": lambda: _C_HEADER, "cpp": lambda: _CPP_ARITH}
+
+
+def arith_header_source(lang: str) -> str:
+    """The arithmetic support definitions an emitted kernel compiles against, as a standalone
+    include-guarded header.
+
+    Byte-identical to what the emitter inlines above a kernel body, so code that includes (or
+    pastes) this computes what the NumPy reference does:
+
+    * ``min`` / ``max`` propagate NaN, as numpy's do -- libm ``fmin`` / ``fmax`` suppress it;
+    * ``int_floor`` / ``int_ceil`` floor and ceil toward -inf / +inf for BOTH signs, which no C
+      or C++ operator spells (``/`` truncates toward zero, so ``-7 / 2`` is -3, not -4);
+    * ``python_mod`` takes the sign of the divisor, as numpy's ``%`` does, not the dividend's.
+
+    Each dispatches on the operand type (``_Generic`` in C, ``if constexpr`` in C++), so integer
+    operands get the exact integer form and floating ones the libm form -- the caller never
+    spells a width. Write it next to the kernel with :func:`write_arith_header` and
+    ``#include`` it, or paste it inline; the two are the same text.
+    """
+    if lang not in _ARITH_BODY:
+        raise KeyError(f"no arithmetic header for {lang!r}; expected one of {sorted(_ARITH_BODY)}")
+    guard = _ARITH_GUARD[lang]
+    return (f"/* {ARITH_HEADER_NAME[lang]} -- numpy-semantics arithmetic helpers, emitted by "
+            f"numpyto_c. */\n#ifndef {guard}\n#define {guard}\n\n{_ARITH_BODY[lang]()}\n#endif /* {guard} */\n")
+
+
+def write_arith_header(out_dir, lang: str) -> pathlib.Path:
+    """Write :func:`arith_header_source` into ``out_dir`` and return the path."""
+    path = pathlib.Path(out_dir) / ARITH_HEADER_NAME[lang]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(arith_header_source(lang))
+    return path
+
 
 #: Per-fp8-format prelude (storage typedef + promote/round/demote conversions), verified bit-exact against ml_dtypes.
 _FP8_HELPERS = {

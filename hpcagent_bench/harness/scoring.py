@@ -178,9 +178,10 @@ def _verify_triad(spec, o1, o2, np_public, re_out, np_re, c_public, rtol, atol, 
 
 
 def implausible_speedup(speedup: float, above: float) -> bool:
-    """A speedup no real kernel reaches (non-finite, or over ``above``) -- the flag that sends a
-    result to the harder verify path."""
-    return (not np.isfinite(speedup)) or (speedup > float(above))
+    """A speedup no real kernel reaches (over ``above``, or non-finite) -- the flag that sends a
+    result to the harder verify path. The float compare runs first: it rejects the common case
+    without calling into numpy, and NaN fails it, so the isfinite check still catches NaN/inf."""
+    return (speedup > float(above)) or (not np.isfinite(speedup))
 
 
 def independent_verify(submission: Submission,
