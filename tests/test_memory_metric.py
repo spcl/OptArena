@@ -128,11 +128,9 @@ def _hungry_kernel(tmp_path):
 def test_child_reports_increment_below_absolute_peak(tmp_path):
     """The isolation child reports both the raw ru_maxrss peak and the kernel-attributable increment.
 
-    Driven through ``_call_isolated`` so the worker runs FORKED, the way production does. Calling
-    the worker in-process instead would measure the increment against pytest's own ru_maxrss
-    high-water mark, and any earlier test in the same worker that allocated more than the kernel
-    does would leave the increment at 0 -- an order-dependent failure that says nothing about the
-    code under test.
+    Driven through ``_call_isolated`` so the worker runs FORKED, as in production: in-process
+    the increment is measured against pytest's own high-water mark, so an earlier test that
+    allocated more would leave it at 0 -- order-dependent, unrelated to this code.
     """
     _, samples, mem = native_call._call_isolated(str(_hungry_kernel(tmp_path)),
                                                  _BINDING, {"x": np.zeros(4, dtype=np.float64)},
@@ -164,3 +162,24 @@ def test_the_legacy_queue_channel_carries_the_worker_payload(tmp_path):
     assert set(outputs) == {"y"} and len(samples) == 1
     # No increment assertion here: in-process, the baseline is pytest's own high-water mark.
     assert peak_bytes > 0 and increment_bytes >= 0
+
+
+def test_the_increment_is_per_call_not_per_batch(tmp_path):
+    """MU/NMU are per CALL, so batching must not multiply them. ``ru_maxrss`` is monotonic
+    with no reset, so reading it only at the end would charge this kernel -- which retains
+    ~32 MB per call -- up to ``reps`` x its real footprint."""
+    kernel = tmp_path / "accumulating.py"
+    kernel.write_text("import numpy as np\n"
+                      "_HELD = []\n"
+                      "def kern(x):\n"
+                      "    _HELD.append(np.ones(4_000_000, dtype=np.float64))  # ~32 MB, never freed\n"
+                      "    return x + float(_HELD[-1][0])\n")
+    common = dict(device=False, timeout=120, py_meta=("kern", ("x", ), ("y", )))
+    _, _, one = native_call._call_isolated(str(kernel), _BINDING, {"x": np.zeros(4)}, "python", reps=1, **common)
+    _, _, many = native_call._call_isolated(str(kernel), _BINDING, {"x": np.zeros(4)}, "python", reps=6, **common)
+
+    # 6 reps retain ~192 MB between them; the reported increment must still be ~one call's.
+    assert many.increment_bytes < one.increment_bytes + 32 * 1024 * 1024, (
+        f"increment grew with the rep count: {one.increment_bytes} -> {many.increment_bytes}")
+    # The raw peak is disclosure-only and DOES span the batch, so it still sees the growth.
+    assert many.peak_bytes > one.peak_bytes

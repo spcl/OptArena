@@ -57,13 +57,20 @@ _LAZY_EXPORTS: Dict[str, str] = {
     "PlutoFramework": "pluto_framework",
 }
 
+#: ``import *`` reads THIS, never ``__getattr__``; without it a star-import would bind only
+#: the eager names and each backend would be a NameError at its use site.
+__all__ = sorted({n for n in globals() if not n.startswith("_")} | set(_LAZY_EXPORTS))
+
 
 def __getattr__(name: str) -> Any:
     """Resolve a lazily-exported backend name (PEP 562), then cache it in the module."""
     module = _LAZY_EXPORTS.get(name)
     if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = vars(importlib.import_module(f"{__name__}.{module}"))[name]
+    namespace = vars(importlib.import_module(f"{__name__}.{module}"))
+    if name not in namespace:  # never a KeyError: getattr(default)/hasattr absorb only AttributeError
+        raise AttributeError(f"module {__name__!r} maps {name!r} to {module!r}, which does not define it")
+    value = namespace[name]
     globals()[name] = value  # resolved once; later lookups never reach __getattr__
     return value
 

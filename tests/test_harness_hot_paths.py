@@ -12,6 +12,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 
 import numpy as np
 import pytest
@@ -71,6 +72,27 @@ def test_the_rebindable_dtype_globals_are_not_lazily_exported():
         assert name not in frameworks._LAZY_EXPORTS
 
 
+def test_a_star_import_still_reaches_every_backend():
+    """``import *`` consults __all__, never __getattr__: without it each backend becomes a
+    NameError at its USE site, far from here."""
+    import optarena.frameworks as frameworks
+    assert set(frameworks._LAZY_EXPORTS) <= set(frameworks.__all__)
+    ns: dict = {}
+    exec("from optarena.frameworks import *", ns)  # noqa: S102 -- the behaviour under test
+    for name in ("DaceFramework", "TritonFramework", "Test", "tolerances_for"):
+        assert name in ns, f"{name} vanished from a star-import"
+
+
+def test_a_map_entry_its_module_does_not_define_raises_attribute_error(monkeypatch):
+    """getattr(..., default) and hasattr() absorb only AttributeError, so a KeyError from a
+    stale map entry blows past every caller's fallback."""
+    import optarena.frameworks as frameworks
+    monkeypatch.setitem(frameworks._LAZY_EXPORTS, "NotDefinedAnywhere", "errors")
+    with pytest.raises(AttributeError):
+        frameworks.NotDefinedAnywhere
+    assert getattr(frameworks, "NotDefinedAnywhere", "fallback") == "fallback"
+
+
 # ------------------------------ one child per measurement ------------------------------ #
 def test_a_whole_measurement_runs_in_one_child(monkeypatch):
     """The repeats used to be one fork each (~21ms round trip, plus a cdef and a dlopen), which
@@ -94,6 +116,24 @@ def test_a_whole_measurement_runs_in_one_child(monkeypatch):
                                                warmup=2)
     assert len(samples) == 8, "the child must return one sample per TIMED rep"
     assert forks == [8], f"expected a single fork carrying all 8 reps, got {forks}"
+
+
+def test_a_warmup_rep_skips_the_output_marshalling(monkeypatch):
+    """sampled_reps passes ``warming`` so the callee can drop work whose result is discarded.
+    On the device path that output map is a real D2H copy of every output, per warmup rep."""
+    from optarena.harness import grading
+    real, calls = grading.bind_kernel_outputs, []
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(grading, "bind_kernel_outputs", counting)
+    _, samples = native_call._call_python(_python_kernel(), ("kern", ("x", ), ("y", )), {"x": np.zeros(4)},
+                                          reps=3,
+                                          warmup=2)
+    assert len(samples) == 3
+    assert len(calls) == 3, f"the 2 warmup reps still marshalled their outputs ({len(calls)} calls, want 3)"
 
 
 def test_the_warmup_reps_are_discarded_not_returned(monkeypatch):
@@ -142,14 +182,14 @@ def test_every_rep_sees_the_original_inputs(tmp_path):
     assert len(samples) == 5
 
 
-def test_the_timeout_keeps_its_per_rep_meaning(monkeypatch):
-    """Batching must not shrink a kernel's allowance to timeout/reps, nor hand it reps x the
-    budget for a single call."""
+def test_the_timeout_reaches_the_child_as_a_per_rep_bound(monkeypatch):
+    """The outer bound alone would let a hang run 101x its allowance, so the per-rep one has
+    to reach the child too."""
     seen = {}
     real = native_call.run_forked
 
     def capture(fn, *args, **kwargs):
-        seen["timeout"] = kwargs.get("timeout")
+        seen.update(timeout=kwargs.get("timeout"), rep_timeout=kwargs.get("rep_timeout"))
         return real(fn, *args, **kwargs)
 
     monkeypatch.setattr(native_call, "run_forked", capture)
@@ -162,13 +202,51 @@ def test_the_timeout_keeps_its_per_rep_meaning(monkeypatch):
                                py_meta=("kern", ("x", ), ("y", )),
                                reps=4,
                                warmup=1)
-    assert seen["timeout"] == pytest.approx(2.0 * 5)  # 4 timed + 1 warmup, 2s each
+    assert seen["rep_timeout"] == pytest.approx(2.0)  # one rep's allowance, enforced in-child
+    assert seen["timeout"] == pytest.approx(2.0 * 5)  # 4 timed + 1 warmup, as the outer backstop
+
+
+@pytest.mark.skipif(not osinfo.IS_LINUX, reason="the per-rep guard uses SIGALRM, which is POSIX-only")
+def test_one_hung_rep_dies_at_the_per_rep_bound_not_the_batch_budget(tmp_path):
+    """At the defaults the batch budget is 300s x 101 = 8.4h -- a judge slot held most of a
+    day. A Python SIGALRM handler cannot fix it: it never runs inside a spinning kernel."""
+    kernel = tmp_path / "hang.py"
+    kernel.write_text("def kern(x):\n    while True:\n        pass\n")
+    start = time.perf_counter()
+    with pytest.raises(RuntimeError, match="single rep"):
+        native_call._call_isolated(str(kernel),
+                                   _BINDING, {"x": np.zeros(4)},
+                                   "python",
+                                   device=False,
+                                   timeout=2.0,
+                                   py_meta=("kern", ("x", ), ("y", )),
+                                   reps=20,
+                                   warmup=1)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 2.0 * 21 / 2, f"killed at {elapsed:.1f}s -- that is the BATCH budget, not one rep's"
+
+
+@pytest.mark.skipif(not osinfo.IS_LINUX, reason="the per-rep guard uses SIGALRM, which is POSIX-only")
+def test_a_slow_but_finite_run_is_not_killed_by_the_per_rep_guard(tmp_path):
+    """Per REP, not cumulative: a measurement whose TOTAL exceeds one rep's allowance must
+    survive, or every slow kernel is a false timeout."""
+    kernel = tmp_path / "slow.py"
+    kernel.write_text("import time\ndef kern(x):\n    time.sleep(0.05)\n    return x + 1.0\n")
+    _, samples, _ = native_call._call_isolated(str(kernel),
+                                               _BINDING, {"x": np.zeros(4)},
+                                               "python",
+                                               device=False,
+                                               timeout=1.0,
+                                               py_meta=("kern", ("x", ), ("y", )),
+                                               reps=30,
+                                               warmup=1)
+    assert len(samples) == 30  # 31 x 0.05s = 1.55s total, over the 1.0s PER-REP bound
 
 
 # ------------------------------ the memoized static inputs ------------------------------ #
 def test_the_manifest_is_parsed_once_per_kernel():
-    """133 call sites reload the same manifest; re-parsing + re-validating the YAML each time
-    cost ~3ms a call. BenchSpec is frozen, so one instance is safe to share."""
+    """133 call sites reload the same manifest at ~3ms a parse. One shared instance, so treat
+    a BenchSpec as read-only -- ``frozen`` does not freeze the dicts it holds."""
     assert spec.BenchSpec.load("gemm") is spec.BenchSpec.load("gemm")
 
 
@@ -187,11 +265,29 @@ def test_the_reference_emit_is_memoized_per_kernel_and_language():
     assert emit_reference_source("gemm", "c") is emit_reference_source("gemm", "c")
 
 
+def test_refreshing_the_registry_drops_the_reference_emit_too():
+    """The emitted reference derives from the manifest, so a cache left behind serves source
+    built from the OLD spec, with nothing about it looking stale."""
+    from optarena.harness.agent import emit_reference_source
+    first = emit_reference_source("gemm", "c")
+    spec.KERNELS.refresh()
+    assert emit_reference_source("gemm", "c") is not first
+
+
 # ------------------------------ ccache ------------------------------ #
-def test_ccache_prefixes_the_compile_step_but_not_the_link(tmp_path):
+@pytest.fixture
+def pretend_ccache(monkeypatch):
+    """Detect ccache whether or not the host has it -- skipping would leave the feature
+    untested on exactly the hosts lacking it, CI included. Only ``shutil.which`` is faked."""
+    monkeypatch.setattr(languages.shutil, "which", lambda name: "/usr/bin/ccache" if name == "ccache" else None)
+    monkeypatch.delenv("CCACHE_NAMESPACE", raising=False)
+    languages.compiler_launcher.cache_clear()
+    yield
+    languages.compiler_launcher.cache_clear()  # the next test re-detects for real
+
+
+def test_ccache_prefixes_the_compile_step_but_not_the_link(tmp_path, pretend_ccache):
     """A link is not cacheable; prefixing it would only add a process to every build."""
-    if not languages.compiler_launcher():
-        pytest.skip("ccache is not installed on this host")  # noqa: PT018 -- host capability, not a skip of the test
     compile_argv, link_argv = languages.build_shared_lib_commands("c",
                                                                   tmp_path / "k.c",
                                                                   tmp_path / "libk.so",
@@ -200,12 +296,24 @@ def test_ccache_prefixes_the_compile_step_but_not_the_link(tmp_path):
     assert "ccache" not in link_argv[0]
 
 
-def test_ccache_is_namespaced_by_cpu():
+def test_ccache_is_namespaced_by_cpu(pretend_ccache):
     """The baseline flags carry -march=native, which ccache hashes literally. Two hosts sharing
     a CCACHE_DIR would otherwise trade objects built for the wrong microarchitecture."""
-    if not languages.compiler_launcher():
-        pytest.skip("ccache is not installed on this host")
+    assert languages.compiler_launcher() == ("/usr/bin/ccache", )
     assert os.environ.get("CCACHE_NAMESPACE") == osinfo.cpu_model()
+
+
+def test_the_config_gate_turns_ccache_off(tmp_path, pretend_ccache, monkeypatch):
+    """``build.ccache: false`` must beat detection -- the escape hatch for a host where a
+    cache hit would be wrong."""
+    real_get = languages.config.get
+    monkeypatch.setattr(languages.config,
+                        "get",
+                        lambda key, default=None: False if key == "build.ccache" else real_get(key, default))
+    languages.compiler_launcher.cache_clear()
+    assert languages.compiler_launcher() == ()
+    argv = languages.build_shared_lib_commands("c", tmp_path / "k.c", tmp_path / "libk.so", mode=Mode.SINGLE_CORE)[0]
+    assert "ccache" not in argv[0]
 
 
 def test_a_language_ccache_does_not_support_compiles_directly(tmp_path):

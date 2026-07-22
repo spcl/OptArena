@@ -15,7 +15,7 @@ from optarena import paths
 from optarena.harness.envelope import Submission
 from optarena.harness.task import Task
 from optarena.harness.usage import TokenUsage
-from optarena.spec import BenchSpec
+from optarena.spec import BenchSpec, register_manifest_cache
 from optarena.websearch import post_request
 
 #: language -> glob for the NumpyToX fp64 reference source.
@@ -69,11 +69,8 @@ def budget_tokens(budget: "object", default: int) -> int:
 def emit_reference_source(kernel: str, language: str) -> str:
     """Run NumpyToX for ``(kernel, language)`` and return the emitted reference source.
 
-    Memoized: one emit costs ~0.8s, and a single task asks for the same source up to five
-    times (the prompt, the graded reference build, each autopar candidate compiler, the
-    availability probe). The emit is a pure function of the manifest plus the shipped
-    ``<module>_numpy.py``, so like the other static-input caches here (``_load_compilers``,
-    ``_scan_kernels``) it does not notice a mid-process edit to those files.
+    Memoized: one emit costs ~0.8s and a task asks for the same source up to five times.
+    Pure in the manifest + the shipped ``<module>_numpy.py``; ``KERNELS.refresh()`` drops it.
     """
     from optarena.emit_bridge import emit_kernel
     glob = _REF_GLOB.get(language)
@@ -88,6 +85,9 @@ def emit_reference_source(kernel: str, language: str) -> str:
         if rc != 0 or not hits:
             raise RuntimeError(f"emit failed for {kernel} ({language}); rc={rc}")
         return hits[0].read_text()
+
+
+register_manifest_cache(emit_reference_source.cache_clear)  # derived from the manifest
 
 
 def reference_source(task: Task) -> str:

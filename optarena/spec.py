@@ -24,7 +24,7 @@ import functools
 import pathlib
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -1172,14 +1172,27 @@ class KernelRegistry:
         return out
 
     def refresh(self) -> None:
-        """Drop the cache (after a migration writes new manifests)."""
+        """Drop every manifest-derived cache (after a migration writes new ones). A cache left
+        behind keeps serving pre-migration data with nothing to show it is stale."""
         _scan_kernels.cache_clear()
         _stem_aliases.cache_clear()
         load_spec.cache_clear()
+        for clear in _MANIFEST_DERIVED_CACHES:
+            clear()
 
 
 #: Global kernel registry. ``KERNELS[name]`` / ``in`` / ``iter`` / ``len``.
 KERNELS = KernelRegistry()
+
+#: ``cache_clear`` callbacks for data memoized on a manifest, run by :meth:`KernelRegistry.refresh`.
+_MANIFEST_DERIVED_CACHES: List[Callable[[], None]] = []
+
+
+def register_manifest_cache(cache_clear: Callable[[], None]) -> None:
+    """Register a cache to drop on :meth:`KernelRegistry.refresh`. The owner registers itself
+    so ``refresh()`` need not import it -- pulling ``harness.agent`` in here would cost 0.5s
+    and invert the layering (``harness`` imports ``spec``, not the reverse)."""
+    _MANIFEST_DERIVED_CACHES.append(cache_clear)
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -1187,8 +1200,12 @@ def load_spec(short_name: str) -> BenchSpec:
     """The parsed, validated manifest for ``short_name`` -- what :meth:`BenchSpec.load` returns.
 
     Memoized because the harness re-loads the same manifest many times per task and each
-    load re-reads and re-validates the YAML (~3ms). :class:`BenchSpec` is frozen, so callers
-    share one instance safely. ``KERNELS.refresh()`` drops this alongside the path scan.
+    load re-reads and re-validates the YAML (~3ms). ``KERNELS.refresh()`` drops this
+    alongside the path scan.
+
+    Every caller shares ONE instance, so treat it as read-only: ``frozen`` stops attribute
+    rebinding, not mutation of the dicts it holds (``parameters``, ``variants``, ``fuzz``,
+    ...). Copy before mutating, or the change hits every later consumer.
     """
     path = KERNELS.get(short_name)
     if path is None:

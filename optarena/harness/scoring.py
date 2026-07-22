@@ -567,12 +567,10 @@ def score(submission: Submission,
         # crashing or hanging agent kernel is a SCORED failure, not a death of
         # the runner.
         try:
-            # PUBLIC: collect every repeat (each call makes fresh input copies, so
-            # runs are independent; the deterministic kernel yields same outputs).
-            # The full sample list feeds the configured timing backend below.
-            # The whole rep budget runs in ONE child: _call_isolated owns the warmup discard
-            # (via timing.sampled_reps, inside the child) so the setup a repeat used to redo per
-            # fork is paid once.
+            # PUBLIC: collect every repeat; the sample list feeds the timing backend below.
+            # The whole budget runs in ONE child (_call_isolated owns the warmup discard).
+            # Reps get fresh INPUTS but share a process, so a kernel's own statics carry
+            # between them -- only suspect_above catches that. Workspace is zeroed per rep.
             actual, native_samples, _mem = _call_isolated(built.lib,
                                                           binding,
                                                           data,
@@ -1118,11 +1116,9 @@ def score_cells(submission: Submission,
     plan: ReferencePlan = reference_plan(oracle, baseline)
 
     def _run(lib, lang, data, reps, workspace_bytes=None, warmup=0):
-        # One child runs the cell's whole rep budget, so ``peak`` is that child's
-        # kernel-attributable RSS high-water mark over the measurement -- every rep runs the
-        # same kernel on the same shapes, so it is the worst-case increment either way.
-        # Captured outside timing. ``warmup`` warmup reps run first and are discarded (timed
-        # cells only, so a correctness cell -- reps=1, warmup=0 -- is never doubled).
+        # One child runs the cell's whole rep budget, but ``peak`` stays PER CALL: the child
+        # samples ru_maxrss after its first rep, so a kernel that accumulates is not charged
+        # ~reps x its footprint. Outside timing. ``warmup`` reps run first and are discarded.
         outs, samples, mem = _call_isolated(lib,
                                             binding,
                                             data,
