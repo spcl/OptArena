@@ -51,7 +51,7 @@ def build_so(force=False):
     if shutil.which("g++") is None:
         return None
     r = subprocess.run(
-        ["g++", "-O3", "-std=c++17", "-fPIC", "-shared",
+        ["g++", "-O3", "-std=c++20", "-fPIC", "-shared",
          str(CPP), "-o", str(SO), "-lfftw3"],
         capture_output=True,
         text=True)

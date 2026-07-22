@@ -37,7 +37,7 @@ def build_c_reference():
             [
                 "gcc",
                 "-O3",
-                "-std=c11",
+                "-std=c17",
                 "-shared",
                 "-fPIC",
                 str(C_SOURCE),

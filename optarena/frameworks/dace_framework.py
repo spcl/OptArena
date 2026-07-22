@@ -22,6 +22,7 @@ from dace.sdfg import propagation
 from dace.transformation.dataflow import MapCollapse, MapFusion
 from dace.transformation.interstate import LoopToMap
 
+from optarena import languages
 from optarena.frameworks import Benchmark, Framework
 from optarena.frameworks import utilities as util
 from optarena.frameworks.framework import TimingResult, Timer
@@ -29,6 +30,15 @@ from optarena.frameworks.test import tolerance_datatype, tolerances_for
 
 dc_float = None
 dc_complex_float = None
+
+
+def _pin_cpp_standard() -> None:
+    """Build dace's C++ to the standard compilers.yaml names, so a user's ~/.dace.conf cannot
+    grade a dace baseline against an agent submission compiled to a different C++."""
+    std = languages.std_flag("cpp").removeprefix("-std=c++")
+    if std and dace.Config.get("compiler", "cpp_standard") != std:
+        dace.Config.set("compiler", "cpp_standard", value=std)
+
 
 # ----- Pipeline registry: adding a new SDFG pipeline is one entry here. -----
 
@@ -211,6 +221,7 @@ class DaceFramework(Framework):
     def optimize(self, program: Any, bench: Benchmark, bdata: Dict[str, Any]) -> Any:
         """Build the three pipelines, verify + score each, and return the fastest correct compiled variant."""
         ctx = self._build_context()
+        _pin_cpp_standard()
         if self.info["arch"] == "gpu":
             if dace.Config.get('library', 'blas', 'default_implementation') != "pure":
                 dace.Config.set('library', 'blas', 'default_implementation', value='cuBLAS')

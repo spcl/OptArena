@@ -62,7 +62,7 @@ def build_cpp_reference():
             [
                 "g++",
                 "-O3",
-                "-std=c++17",
+                "-std=c++20",
                 "-shared",
                 "-fPIC",
                 str(CPP_SOURCE),
