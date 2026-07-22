@@ -46,7 +46,7 @@ the distributed static path automatically (`--pipeline auto`).
 A 4xGH200 node has ~384 GB HBM, so anything up to ~70 B dense (bf16) fits on one node;
 405 B / 671 B-class models do not. For those, an inference endpoint is a **ray cluster of
 single-node containers** exposing **one URL** -- the ray head + workers each run in their own
-single-node container and connect over the network (no container spans nodes). Agents don't
+single-node container and connect over the network (no container spans nodes). Agents do not
 know or care how many nodes back a URL -- they just call it. Standing up that ray cluster is
 the job submission's concern.
 

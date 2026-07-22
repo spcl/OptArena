@@ -159,7 +159,7 @@ selection (they measured ~=0 overfit with a separate held-out set).
 
 `r(phi, L)` is the speedup ratio over the sequential-C baseline measured at the
 **same** `(phi, L)`: `r = c_baseline_ns /
-candidate_ns`, numpy-fallback when C can't be emitted. Timing is **serialized**
+candidate_ns`, numpy-fallback when C cannot be emitted. Timing is **serialized**
 on a pinned core via the existing `timing_lock` so concurrent service requests
 cannot perturb a measurement.
 

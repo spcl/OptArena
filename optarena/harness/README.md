@@ -146,6 +146,82 @@ prompts/
   optimizations.j2, scoring.j2, feedback.j2, service_task.j2
 ```
 
+### Why the prompt is built this way
+
+The prompt is a benchmark instrument: if it misstates the task, every score measures the
+prompt rather than the model. So it is held to published prompt-engineering guidance, and
+the choices below are the ones that guidance actually decides. Each rule names its source.
+
+**No claim the harness does not honour.** The single hardest rule here, because a false
+claim is not a style problem -- it silently changes what the agent optimizes for. Every
+number the prompt states is read from the key the grader acts on, never from a display
+knob: the tolerance from `TOLERANCE_MATRIX` (`PromptConfig` deliberately has no rtol/atol
+field), the baseline from `grading.resolve_baseline` against the kernel's own track, the
+repeat-reduction sentence from `measurement.timing_backend`, and the noise-gate sentence
+from `measurement.gsd_z`. A `null` gsd_z removes the sentence rather than leaving a
+promise the metric will not keep.
+
+**Contradictions are treated as defects, not untidiness.** OpenAI reports that removing
+contradictions from a long spec is the single highest-return edit available, because a
+reasoning model spends tokens reconciling the conflict before it starts work
+([GPT-5 prompting guide](https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_prompting_guide)).
+Ones that had accumulated here and are now gone: the response section said to omit
+`workspace_bytes` while its own example showed the field; the reference section offered a
+translation "on request" through a channel that does not exist; the scoring section said an
+incorrect submission scores zero while the metric credits `1.0`; the timing section promised
+best-of-k regardless of the configured backend; and the native (no-container) framing pointed
+at a `signature.json` that only the Harbor container layout writes.
+
+**One worked example, and it pins format -- not strategy.** The ABI section carries a single
+worked example of the argument-ordering rule. That is deliberate and it is where the evidence
+is sharpest: [KernelBench](https://arxiv.org/pdf/2502.10517) §4.1 uses exactly this
+one-shot-for-format pattern, and §5.2.1 found that adding *optimization* exemplars made
+things worse -- `fast_1` fell, models attempted more aggressive rewrites, and execution
+failures rose. So the prompt shows how to shape a reply and never shows a tuned kernel.
+§5.2.2 likewise found dumping hardware specs into context does not help, which is why the
+resources section is two lines of discovered toolchain rather than a machine datasheet.
+
+**Prohibitions carry their reason.** Anthropic's guidance is to say what to do rather than
+what not to do, and to give the motivation, because a reason generalizes to cases the rule
+did not anticipate ([prompt engineering
+overview](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering)). The
+hard contract violations stay as explicit `do NOT` lines -- they are checkable and the cost
+of a miss is a zero -- but each is paired with its cause: the kernel takes no timer argument
+*because* the harness brackets the call from outside, and optimization flags may not be
+hardcoded *because* the exact compile command is shown two lines above.
+
+**The body is rendered once per run.** `RunPrompt` renders the static body a single time and
+`attempt()` appends only that round's feedback, so every repair round shares one prompt
+identity and one finishing path (`strip_host_paths`). This also keeps the round-to-round
+prefix byte-stable, which is the precondition for provider prefix caching
+([Anthropic](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
+[OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching),
+[vLLM](https://docs.vllm.ai/en/stable/features/automatic_prefix_caching/)) -- all three match
+exact prefixes only, so a per-round rewrite of the body would cost a full re-read every time.
+
+**Repair feedback carries the verbatim failure.** `runner._feedback` passes the compiler or
+runtime text through unedited rather than summarising it. KernelBench §5.1 got DeepSeek-R1
+from 36% to 72% on Level 2 with execution feedback over ten turns, and beat repeated sampling
+at equal budget; it also found models self-correct well on build errors and poorly on
+correctness failures, precisely because correctness feedback is less granular. That asymmetry
+is a known gap here: a numeric failure still reaches the agent as a short label
+(`compare_arrays` returns e.g. `"integer mismatch"`) without the achieved error, the
+tolerance, or the first offending index.
+
+**Known open items.** The prompt is ~17k characters, and two different kernels share 98.5%
+of it byte for byte -- but only 50 characters of shared *prefix*, because the kernel name
+appears in the first line. Each kernel legitimately needs its own prompt; the question is only
+whether the invariant half sits before or after the variable half. Putting it first would make
+that shared text a cache prefix across a sweep, and Anthropic measures up to +30% response
+quality from putting the query last on long inputs. Separately, the agent is asked to return
+its kernel inside a JSON string, which measurably degrades generated code
+([aider](https://aider.chat/2024/08/14/code-in-json.html), [Format
+Tax](https://arxiv.org/pdf/2604.03616)) and is worst on the self-hosted vLLM path; native
+structured output for the metadata plus a fenced block for the code is the documented fix.
+Neither is changed yet, because both alter what every model sees and so need an A/B, not an
+edit. The `minimal` variant (`optimization_guidance: false`) exists to run the first such
+comparison and has not been used.
+
 ## Running
 
 ```sh

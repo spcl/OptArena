@@ -4,10 +4,10 @@
 versioned **HF Dataset** of optimization tasks, plus a **Harbor adapter** that runs
 an agent against them and scores it -- both driven by one server-side judge.
 
-**Status.** The scoring core is **built and tested**
-(`optarena/harness/metric.py`, 7/7 in `tests/test_metric.py`). The two
-front-ends (`export-hf`, the Harbor adapter) and the optional reporting enrichment
-(Sec. 4.3) are the remaining work; both consume the same `SuiteScore`.
+**Status.** Built. The scoring core (`optarena/harness/metric.py`), both front-ends
+(`optarena export-hf` Sec. 2.4, the Harbor adapter Sec. 3) and the dispersion
+enrichment (Sec. 4.3) have all landed; they consume the same `SuiteScore`. What
+remains is the "still open" list in Sec. 8.
 
 **Precedent.** Harbor's **`algotune`** adapter is the same shape -- *"algorithm
 optimization, 154 tasks, binary pass/fail on performance thresholds, score =
@@ -122,7 +122,7 @@ in the repo, so a new benchmark is reflected by re-running it.
   (or jsonl, dependency-free) -> optional `datasets` push, tagged by commit.
 - **Auto-update = three layers:** the regenerator (above) + a *completeness guard*
   test (`tests/test_hf_export.py`, in the main CI's structure step -- a kernel that
-  can't export turns the PR red) + an auto-publish step in that same workflow
+  cannot export turns the PR red) + an auto-publish step in that same workflow
   (`.github/workflows/tests.yml`, republishes on push to `main`, gated on
   `HF_TOKEN`/`vars.HF_DATASET_REPO`).
 - `datasets.load_dataset("spcl/optarena", "hpc")` -> rows, consumed by the Harbor
@@ -228,7 +228,7 @@ else **`S_i = 1.0`**.
 |---|---|
 | **Renormalization-consistent** (the only correct mean for ratios -- Fleming & Wallace) | geomean at both levels; rebasing rescales all `r` by a constant, leaving *rankings* invariant |
 | **Monotonic** in correctness & speed | more solved => fewer 1.0 floors => higher; faster solved kernels => higher |
-| **Ungameable** | declining or failing a task = a 1.0 factor dragging the geomean toward 1, so cherry-picking can't help; `C_max` + `suspect` remove timing-noise leverage; `independent_verify` removes wrong-but-fast |
+| **Ungameable** | declining or failing a task = a 1.0 factor dragging the geomean toward 1, so cherry-picking cannot help; `C_max` + `suspect` remove timing-noise leverage; `independent_verify` removes wrong-but-fast |
 | **Robust** | one failure is neutral (1.0), not catastrophic (a naive geomean-with-0 collapses); one outlier is capped |
 | **Distribution not hidden** | one rankable number, **always** reported with Sec. 4.4 |
 
@@ -246,7 +246,7 @@ is best-of-N min, no variance/CI). The seeded sweep already pays for the fix:
 - **Minimum-detectable-speedup gate** -- credit a win only when it clears the noise
   floor: treat `S_i` as `1.0` unless the lower bound `geomean / gsd^z` exceeds `1.0`
   (small `z`, e.g. 1). A 1.03x win with `gsd` 1.10 is noise -> no credit; with `gsd`
-  1.01 it's real -> counts. This converts "low-magnitude speedup may be noise" from
+  1.01 it is real -> counts. This converts "low-magnitude speedup may be noise" from
   an *accepted gap* into a *disclosed, enforced rule*.
 - **Suite-level confidence** -- report the share of solved tasks clearing the gate,
   alongside the score, so the headline is never read without its reliability.

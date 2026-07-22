@@ -42,7 +42,7 @@
 
 ## 2. Data structures -- AVOID
 
-| Don't use | Reason |
+| Do not use | Reason |
 |---|---|
 | Tuples (multi-value return, tuple-unpack) | No tuple emit |
 | Lists (Python list) | No list emit; use a flat numpy array |
@@ -190,7 +190,7 @@ Key fields:
   required for arrays not covered by `_shapes_from_initialize`.
 * `init.dtypes` -- explicit per-array dtype override; wins over the
   initialize-source harvest. Use this when the initialize source
-  uses helpers NumpyToC can't introspect (e.g. `rng_complex`).
+  uses helpers NumpyToC cannot introspect (e.g. `rng_complex`).
 * `init.scalars` -- default values for non-array scalar args.
   Integer defaults => integer C type (subscript-safe); float
   defaults => double.
@@ -203,7 +203,7 @@ Key fields:
 
 ## 6. Side-file variant for non-pure-numpy kernels
 
-If the canonical `<short>_numpy.py` uses features the pipeline can't
+If the canonical `<short>_numpy.py` uses features the pipeline cannot
 ingest (dynamic shape, `.shape =`, tuple returns, scipy imports),
 write a sibling **`<short>_numpytoc_numpy.py`** with the same
 function name but a static-shape / buffer-form rewrite. The emit

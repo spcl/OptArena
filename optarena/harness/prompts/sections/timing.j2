@@ -5,5 +5,5 @@ brackets the *pure* call to `{{ symbol }}` with its own clock:
   is read immediately before and after the call.
 - GPU device residency: CUDA/HIP events bracket the launch and the harness
   synchronizes before reading, so async work cannot hide.
-The call is repeated several times and the fastest run is kept. The measurement
-lives entirely in harness code outside your kernel, so it cannot be moved or faked.
+{{ timing_phrase }} The measurement lives entirely in harness code outside your kernel,
+so it cannot be moved or faked.

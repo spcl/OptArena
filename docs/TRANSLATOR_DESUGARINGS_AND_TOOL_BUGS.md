@@ -12,8 +12,8 @@ Living ledger for the numpy->{C, C++, Fortran, numba, pythran, jax, pluto} trans
 The e2e gate (`tests/test_e2e_numerical.py`) translates each kernel to every backend and
 compares against the kernel's own numpy. It is **strict-green**: `ok` passes, `skip:*` skips,
 `FAIL:*` reds the build. There is **no** xfail-tolerance file any more -- `tests/e2e_known_failures.txt`
-and its loader were removed. A pair that legitimately can't pass must therefore be classified as a
-`skip:*` (a backend/tool that genuinely can't express the kernel), never left as a `FAIL:*`. This
+and its loader were removed. A pair that legitimately cannot pass must therefore be classified as a
+`skip:*` (a backend/tool that genuinely cannot express the kernel), never left as a `FAIL:*`. This
 doc is the *why* behind each such disposition.
 
 > Rule of thumb: **we never paper over a tool miscompile with a tuning flag** (see
@@ -40,7 +40,7 @@ Status legend: **landed** = merged + unit-tested; **in-progress** = agent buildi
 | inline-hoist output shape for `roll`/`cholesky`/`tril`/`triu`/`reshape(-1)` | poisson, laplacian | `_CallHoister._derive_output_shape` branches | `numpyto_common/lib_nodes.py` | landed |
 | `np.diag` (1-D->matrix w/ k offset; 2-D->delegate `expand_diagonal`) | ls3df_scf (Lanczos tridiagonal) | `expand_diag` zero-then-write; shape via `_iter_extent_of` | `numpyto_common/lib_nodes.py` | landed |
 | `np.fft.fftfreq(N, d=)` | ls3df_scf | `expand_fftfreq`; even/odd neg-freq wrap; real output | `numpyto_common/lib_nodes.py` | landed |
-| `np.einsum` with non-Name operand (`psi_frag[f]`) | fragment_patch_density, ls3df_scf | materialize operand to fresh scratch buffer, then expand | `numpyto_common/lib_nodes.py` `expand_einsum` | landed (caveat: Subscript operand nested *inside a BinOp* still won't hoist) |
+| `np.einsum` with non-Name operand (`psi_frag[f]`) | fragment_patch_density, ls3df_scf | materialize operand to fresh scratch buffer, then expand | `numpyto_common/lib_nodes.py` `expand_einsum` | landed (caveat: Subscript operand nested *inside a BinOp* still will not hoist) |
 | `np.linalg.eigvalsh(A)` (eigenvalues-only) | ls3df_scf (`_upper_bound`) | extend eigh cyclic-Jacobi, eigenvalues-only single-Name target | `numpyto_common/numpy_desugar.py` | landed |
 | reduction method on a Call receiver (`np.abs(...).sum()`) | ls3df_scf | hoist Call receiver into temp before method rewrite | `numpyto_common/lowering.py` | landed |
 | computed index in subscript (`U[np.argmax(...), j]`) | rayleigh_ritz_rotation | hoist non-trivial Call index into temp Name | `numpyto_common/lowering.py` | landed |
@@ -61,7 +61,7 @@ kernel to a **bit-identical** translator-friendly form (verified `max|Delta|=0`)
 | ls3df_scf | `b_frag=[None]*n` None-cache | `np.zeros(n)` + boolean valid-mask (preserves freeze-on-first-iter; NOT eager recompute -- the bound is intentionally frozen while V_tot drifts) | landed |
 
 > Open follow-up: `np.diag(alphas[:na])` uses a runtime-counter slice (early break on
-> `beta<1e-12`). If the runtime-length slice won't lower to static C/Fortran, switch to
+> `beta<1e-12`). If the runtime-length slice will not lower to static C/Fortran, switch to
 > always running the full `_NLANC` steps -> static `_NLANCx_NLANC` tridiagonal; the zero
 > tail decouples so `eigvalsh(...).max()` is numerically identical.
 
@@ -113,7 +113,7 @@ backend. All **landed**.
 - **method-form `.reshape` / `.T` on a non-Name base** (`A[f].T`, `expr.reshape(...)`).
 - **`np.eye` inline hoist** (identity materialized as a fresh local).
 - **per-call-unique `linalg.inv` buffer** -- each `inv(...)` gets its own scratch so two live
-  inverses don't alias.
+  inverses do not alias.
 - **`expand_copy` allocation marker** -- a whole-array copy target auto-declares its local.
 - **mutated-`__inl*`-counter exclusion** -- an inlined-call counter that is mutated is not treated
   as a foldable constant.
@@ -158,9 +158,9 @@ an emit-shape fix (Sec. 1c) remain flagged there; landing one turns the skip bac
 Each `(kernel, backend)` pair resolves to exactly one of:
 
 - **`ok`** -- translated + bit-exact vs the kernel's numpy -> passes.
-- **`skip:*`** -- the backend/tool legitimately can't express this kernel -> skipped, not counted
+- **`skip:*`** -- the backend/tool legitimately cannot express this kernel -> skipped, not counted
   against the gate. Sub-reasons: `skip:not-installed` (tool absent), `skip:unsupported:*` (an op /
-  scop the backend can't express), `skip:too-long` (jax compile-time perf, Sec. 1d), and
+  scop the backend cannot express), `skip:too-long` (jax compile-time perf, Sec. 1d), and
   `skip:unsupported:pluto-miscompile:*` (polycc miscompiled an affine scop our `c` proves correct --
   Sec. 2).
 - **`FAIL:*`** -- a real codegen/correctness gap -> **reds the build**.

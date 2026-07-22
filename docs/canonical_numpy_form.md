@@ -361,7 +361,7 @@ With CNF guaranteed, these `lowering.py` mechanisms can be retired:
   reassigned with a new shape. Invariant 1 means a name never changes shape, so there
   is nothing to rename.
 - **`_LiftFreshArrayFromSlices`** (lowering.py:1774) -- lifted a fresh array out of
-  slice expressions when a buffer's shape didn't match its slice writes; its own
+  slice expressions when a buffer's shape did not match its slice writes; its own
   comment notes it *"bails on the shape mismatch."* Declare-then-fill (Inv. 3)
   removes the mismatch.
 - **Chained-subscript heroics in `_emit_subscript`** (emit.py:364, the

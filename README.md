@@ -225,7 +225,7 @@ so results match the NumPy reference):
   CuPy . Pythran. Native sources are precision-monomorphic (`<short>[_<sparse>]_<fptype>.<ext>`,
   symbol == file stem), generated on demand and gitignored -- the repo commits none. Compiler
   variants (Polly, Pluto, `-O` levels) are build flags on that one source, not separate files.
-- **Hand-written** (NumPy->X can't do them well): JAX . Triton . TVM -- the only non-NumPy
+- **Hand-written** (NumPy->X cannot do them well): JAX . Triton . TVM -- the only non-NumPy
   implementations kept in the tree.
 
 **Override** a generated impl by dropping a file with its canonical name next to the kernel -- if
@@ -314,7 +314,7 @@ scored by the judge.
   your_time` -- **maximize it.** A submission that fails the oracle scores **zero**: correctness
   gates speed.
 - **Correctness oracle** -- your output must match the reference on **5 fuzzed input sizes**, each
-  run **once** (so you can't special-case one shape).
+  run **once** (so you cannot special-case one shape).
 - **Performance oracle** -- **median** runtime on **3 large fuzzed shapes per config**
   (`perf.n_large_shapes`), over the **baseline** on those same shapes (computed once, reused).
   The prompt states the RANGE each size is drawn from -- never the seed or the sampled

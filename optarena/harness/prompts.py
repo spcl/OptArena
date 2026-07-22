@@ -501,17 +501,48 @@ _REF_PHRASE = {
     "multi-core with gfortran auto-parallelization)",
 }
 
+#: How each ``measurement.timing_backend`` reduces the repeats, in the prompt's own words.
+_TIMING_PHRASE = {
+    "min_of_k":
+    "The call is repeated several times and the FASTEST run is kept, on your side and the "
+    "baseline's alike.",
+    "mannwhitney_delta":
+    "The call is repeated several times on your side and the baseline's, and a Mann-Whitney U "
+    "test decides whether your distribution is genuinely faster. A win that does not clear the "
+    "significance threshold is not credited, and the speed-up that is credited is a pessimistic "
+    "lower bound, not the best-case ratio -- so noise cannot pass as a speed-up.",
+}
+
+
+def _timing_phrase() -> str:
+    """How the repeats collapse to one number, named from the backend actually configured."""
+    backend = config.get("measurement.timing_backend", "min_of_k")
+    return _TIMING_PHRASE.get(backend, _TIMING_PHRASE["min_of_k"])
+
+
+def _gsd_phrase() -> str:
+    """The dispersion gate sentence, or empty when the gate is off (``measurement.gsd_z`` <= 0)."""
+    z = float(config.get("measurement.gsd_z", 1.0))
+    if z <= 0:
+        return ""
+    return ("A win that sits inside the run-to-run noise earns no credit: the speed-up must "
+            "still exceed 1 after being divided by the spread of your own timings, so a margin "
+            "of a few percent on a noisy kernel scores the same as no speed-up at all. ")
+
 
 def build_context(task: Task,
                   *,
                   oracle: str = "numpy",
-                  baseline: str = "numpy",
+                  baseline: str = "auto",
                   feedback: dict = None,
                   prompt_config: "PromptConfig" = None) -> dict:
     """Public, leak-free context for the prompt template.
 
     ``oracle`` / ``baseline`` tell the agent which reference grades correctness
-    and which is the speedup denominator (numpy | c | both). ``feedback`` (when a
+    and which is the speedup denominator. ``baseline`` defaults to ``auto`` so a
+    prompt built without one names the kernel's real per-track denominator; naming
+    ``numpy`` by default told every hpc agent it was racing NumPy when it was
+    racing auto-parallelized C. ``feedback`` (when a
     repair round) carries ``{round, error, source}`` from the previous attempt so
     the model can fix a build/numeric failure rather than start over.
     ``prompt_config`` (defaulting to :meth:`PromptConfig.from_config`) supplies
@@ -673,6 +704,11 @@ def build_context(task: Task,
         # precision so the prompt states the tolerance the grade will actually use.
         "rtol": disp_rtol,
         "atol": disp_atol,
+        # How the repeats become one number, and whether a noise-band win earns credit. Read
+        # from the SAME keys timing.py / metric.py act on, so the prompt cannot promise a
+        # reduction or a gate the grade does not apply.
+        "timing_phrase": _timing_phrase(),
+        "gsd_phrase": _gsd_phrase(),
         # How the TIMED performance shapes are sampled: the rule and the range only --
         # never the seed or the concrete sizes. See :func:`perf_sampling`.
         "perf_sampling": perf_sampling(spec),
@@ -749,7 +785,7 @@ class RunPrompt:
 def build_run_prompt(task: Task,
                      *,
                      oracle: str = "numpy",
-                     baseline: str = "numpy",
+                     baseline: str = "auto",
                      prompt_config: "PromptConfig" = None) -> RunPrompt:
     """Render one run's static prompt body -- call ``.attempt(feedback)`` for each attempt."""
     if prompt_config is None:
@@ -767,7 +803,7 @@ def build_prompt(task: Task,
                  template_dir=None,
                  generator: str = None,
                  oracle: str = "numpy",
-                 baseline: str = "numpy",
+                 baseline: str = "auto",
                  feedback: dict = None,
                  prompt_config: "PromptConfig" = None) -> str:
     """Render the leak-free agent prompt for ``task`` (one build, one attempt).

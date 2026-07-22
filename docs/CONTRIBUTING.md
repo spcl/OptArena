@@ -113,7 +113,7 @@ now an *override* the regenerator never touches.
   backend can reproduce it, and list that buffer in `output_args`.
 - *`input(s) [...] are undeclared`* -- every input needs a home: array -> `init.arrays`,
   scalar -> `init.scalars`, size symbol -> `parameters`.
-- *shape mismatch at validation* -- an `init.arrays` expression doesn't match what the
+- *shape mismatch at validation* -- an `init.arrays` expression does not match what the
   kernel writes; fix the shape.
 
 ### (Optional) a custom initializer -- `<kernel>.py`

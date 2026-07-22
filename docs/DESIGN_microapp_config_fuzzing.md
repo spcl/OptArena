@@ -7,7 +7,7 @@ iteration into a concrete valid sample, and how the oracle tests across it.
 
 A kernel's input space is `config x shape` under constraints. One seeded resolver
 turns an `iteration` into a concrete **valid** sample; `initialize` is the
-**adapter** that derives or repairs whatever isn't a clean declarative rule.
+**adapter** that derives or repairs whatever is not a clean declarative rule.
 
 - **Declarative** in yaml where validity is a rule (intervals, sets, derivations,
   divisibility, ordering).
@@ -120,7 +120,7 @@ Placement & rules:
 - **Structural** validity is declarative (yaml: `configs`/`constraints`/derive/
   construct). **Data** validity is imperative in `initialize` (the single-source-
   of-truth adapter) because preconditions need kernel knowledge -- with a
-  declarative *distribution* hint where it's just a shape (positive -> lognormal,
+  declarative *distribution* hint where it is just a shape (positive -> lognormal,
   bounded -> uniform[a,b]).
 - Init is **config-aware**: the resolved config can change the precondition
   (okvan needs `qvan` tables; noncolin needs 2-component spinors), so the

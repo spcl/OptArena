@@ -135,14 +135,14 @@ By default the harness **AOT-compiles each kernel before running it** --
 program, so the polybench stencils and TSVC loops run *fast* instead of
 dispatching every eager op separately. Scalar/dim args are baked in as
 constants (so `range(N)` traces); a kernel whose control flow is genuinely
-data-dependent (mandelbrot2's compaction, gmres's break) can't be traced and
+data-dependent (mandelbrot2's compaction, gmres's break) cannot be traced and
 **falls back to eager execution** -- the `(aot)`/`(eager)` classification of a
 kernel says which happened.
 
 Python's `float()` builtin would otherwise force the fallback: the TSVC argmax
 kernels close with `result = maxv + float(index)`, and in the rolled body
 `index` is a *traced* carry -- `float()` must return a host Python
-float, which a tracer can't provide, so the whole kernel would drop to eager.
+float, which a tracer cannot provide, so the whole kernel would drop to eager.
 The emitter rewrites `float(x)` to a traceable `jnp.asarray(x, jnp.float64)`
 (safe because a float result only ever feeds arithmetic, never a `range`/shape
 that needs a concrete int), so those kernels AOT-compile as `(aot-jit)`. `int()`
@@ -152,7 +152,7 @@ concrete value.
 The flip side: AOT-compiling a *huge* unrolled loop (seidel/adi-style
 `TSTEPS x N^2`) can take a long time and a lot of memory. The
 rolled (`jit=True`) emission already lowers such loops to `lax.fori_loop` so
-they don't unroll; the eager-AOT *fallback* (taken only when the rolled
+they do not unroll; the eager-AOT *fallback* (taken only when the rolled
 emission is unavailable) is guarded by the time-step symbol heuristic:
 
 * a `for _ in range(... TSTEPS ...)` loop is, by

@@ -9,7 +9,7 @@ large subset of numpy and pure-Python loops; the translation is:
 
 Numba caveats:
 
-* Some numpy idioms (e.g. fancy indexing with bool arrays) aren't
+* Some numpy idioms (e.g. fancy indexing with bool arrays) are not
   supported. We emit them anyway; if numba refuses we surface the
   error at first call.
 * `@njit(parallel=True)` rewrites `range` loops via `prange` when

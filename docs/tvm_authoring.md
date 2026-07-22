@@ -133,7 +133,7 @@ python scripts/verify_tvm.py <name> --fw tvm --build-only
 ```
 A kernel is "done" only when its CPU verify prints `PASS` and its GPU
 build-check prints `PASS`. Keep `OPTARENA_TVM_METASCHEDULE_TRIALS` small (4-8)
-while iterating -- correctness doesn't need a full tune; the env var also
+while iterating -- correctness does not need a full tune; the env var also
 gates the real harness (`small`=64 / `full`=1024).
 
 ## Reference patterns (all verified)

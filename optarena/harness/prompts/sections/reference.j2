@@ -4,8 +4,9 @@
 {{ reference }}
 ```
 {% else %}
-Read the reference at `{{ kernel_path }}`. It defines the semantics you must reproduce;
-its signature is described in `signature.json` beside it.
+Read the reference at `{{ kernel_path }}`. It defines the semantics you must reproduce.
+{% if not native %}Its signature is described in `signature.json` beside it.
+{% endif %}
 {% endif %}
 {% if can_translate %}
 You start from this NumPy reference. A mechanical **{{ language | upper }} translation** of
@@ -16,8 +17,8 @@ own from scratch:
 ```{{ language }}
 {{ translation }}
 ```
-{% else %}Use it as a starting point (it can be added to this prompt on request), or write
-your own from scratch -- your choice.{% endif %}
+{% else %}That translation is not reproduced here, so write your {{ language | upper }} from
+the NumPy reference above.{% endif %}
 {% endif %}
 {% if include_original and has_original %}
 
