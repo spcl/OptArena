@@ -131,8 +131,10 @@ comes from the single registry (`numpyto_common.dtypes`).
 
 ## 8. Binding JSON (the machine artifact)
 
-`<short>_binding_auto.json` is generated from this contract and is what the
-agent/implementer reads. Canonical shape:
+The binding is generated from this contract and is what the agent/implementer reads.
+An `any`-mode prompt carries it inline (`Binding.to_json`); the emitters additionally
+write it beside the generated sources as `<short>[_<layout>]_<precision>_binding.json`
+(a build artifact -- generated on demand, not tracked). Canonical shape:
 
 ```json
 {

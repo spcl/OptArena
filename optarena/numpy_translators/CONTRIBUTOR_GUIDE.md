@@ -226,9 +226,9 @@ Examples in the tree:
 | Category | Use freely | Avoid |
 |---|---|---|
 | Scalars | `int`, `float`, `bool` params + locals | Python `complex` (use `1j` literals if needed) |
-| Arrays | `np.zeros / empty / ones / mgrid / linspace / arange`, `np.ndarray((shape,))` | Dynamic-resize: `np.append`, `np.concatenate` |
+| Arrays | `np.zeros / empty / ones / mgrid / linspace / arange`, `np.ndarray((shape,))`, `np.concatenate / stack / pad` | Dynamic-resize: `np.append` |
 | Shape | `np.reshape`, `arr.shape[i]`, `arr.T` | `arr.shape = N` is auto-rewritten but discouraged |
-| Math | All `np.<op>` elementwise + reductions listed in 3. | `np.fft`, `np.random`, `scipy.*` |
+| Math | All `np.<op>` elementwise + reductions listed in 3., plus `np.fft.fft / ifft / fftn / ifftn / fftfreq`, `einsum`, `tensordot` | `np.random`, `scipy.*` |
 | Linalg | `cholesky / inv / solve / lstsq / norm / dot / @` (2-D) | Higher-rank `@` (write explicit loop) |
 | Indexing | Int, slice (incl. step), boolean mask (when consumed by reduction), fancy gather | Multi-dim fancy index (`arr[ix, iy]`), advanced indexing combinators |
 | Control | `if / else / while / for (+ negative step)`, `break`, `continue` | Generators, comprehensions (write explicit loops) |
@@ -237,4 +237,4 @@ Examples in the tree:
 
 When unsure: start with the simplest explicit `for` loop and only
 reach for numpy intrinsics where the gain is real. The same shape of
-code emits in all three targets.
+code emits in every target.

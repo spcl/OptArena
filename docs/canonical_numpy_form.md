@@ -1,7 +1,7 @@
 # Canonical NumPy Form (CNF)
 
 A specification for authoring OptArena kernels that are guaranteed to lower through
-the `optarena/NumpyToC/` translator (and its C++/Fortran siblings).
+the `optarena/numpy_translators/` translators (`numpyto_c` and its C++/Fortran siblings).
 
 ---
 

@@ -69,7 +69,7 @@ service:
 # so the two measurement paths cannot drift.
 measurement:
   baseline: auto           # speedup denominator (mirrors service.baseline). auto = the per-track
-                           #   default (foundation -> c-autopar, ml/hpc -> numpy); numpy | c |
+                           #   default (foundation/hpc -> c-autopar, ml -> numpy); numpy | c |
                            #   c-autopar | cpp-autopar | fortran-autopar. A compiled baseline falls
                            #   back to numpy per-kernel when it cannot be emitted/built.
   repeat: 100              # timed reps kept per measurement (>= 20; 100 for a stable mean)

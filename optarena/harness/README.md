@@ -76,8 +76,10 @@ Task --> build_prompt --> Agent.solve --> Submission --> Sandbox.build --> score
 - **Metric** (`metric.py`) -- the suite-level **OptArena Score**: a two-level geomean over each
   kernel's configurations x shapes (correctness over configs x edge union fuzzed shapes graded vs
   NumPy; performance over configs x *large* shapes graded vs the fast compiled C reference).
-  Per task `S_i = clamp(geomean speed-up, 1, c_max)` if solved else `1.0`; OptArena Score =
-  `geomean_i S_i`. `timing.py` is the pluggable timing backend (`min_of_k` / `mannwhitney_delta`).
+  Per task `S_i = clamp(geomean speed-up, 1, c_max)` if solved else `1.0`, then floored back to
+  `1.0` when the win sits inside the timing noise (`S_i / gsd^z <= 1`, `z` = `measurement.gsd_z`).
+  OptArena Score = `geomean_i` of that GATED value (`TaskScore.score`), not of the raw `S_i`.
+  `timing.py` is the pluggable timing backend (`min_of_k` / `mannwhitney_delta`).
 
 ## Benchmark categories
 
@@ -101,8 +103,9 @@ Every kernel has a **track**, and the prompt states its category up front:
 - `restricted` -- the agent returns **source**; the harness writes it to `<symbol>.<ext>`
   and compiles it with the exact commands shown in the prompt.
 - `any` -- the agent returns a prebuilt **shared library**: a plain C-ABI `.so` loaded by
-  `cffi` (not nanobind/pybind), exporting the canonical symbol. The machine-readable ABI
-  is the per-kernel `cpp_backend/<short>_binding_auto.json` plus `docs/abi_contract.md`.
+  `cffi` (not nanobind/pybind), exporting the canonical symbol. The machine-readable ABI is
+  the kernel's binding, serialised into the prompt itself (`Binding.to_json`), plus
+  `docs/abi_contract.md`.
 
 ## The prompt
 
@@ -113,30 +116,34 @@ reference file (`kernel_path`) for the agent to open rather than pasting the sou
 inlining costs tokens every attempt and can go stale; set `prompt.inline_kernel: true` to embed
 it instead. **One prompt per run:** the body is rendered once and reused verbatim across
 attempts -- only the per-attempt feedback block (`RunPrompt.attempt`, `feedback.j2`) changes.
-Sections:
+Sections, in the order `task.j2` includes them:
 
-1. benchmark identity + the `run_benchmark.py -b ...` selector
-2. problem (NumPy reference)
-3. required signature (call-stub) + canonical C-ABI argument order
-4. delivery -- restricted (file name + real compile commands) or any (where to read the ABI)
-5. memory residency (GPU host vs device)
-6. **available resources** -- compilers + numeric libraries discovered on the host
+1. `intro` -- benchmark identity + the `run_benchmark.py -b ...` selector
+2. `benchmark` / `reference` -- the problem and the NumPy reference
+3. `mpi` -- distributed-track contract (distributed residency only)
+4. `api` -- required signature (call-stub) + canonical C-ABI argument order
+5. `delivery` -- restricted (file name + real compile commands) or any (where to read the ABI)
+6. `residency` -- memory residency (GPU host vs device)
+7. `resources` -- compilers + numeric libraries discovered on the host
    (`optarena/harness/discover_tools.py`), which the agent may link via the `build` field
-7. timing -- the harness times the pure call externally (CPU monotonic clock / GPU
+8. `timing` -- the harness times the pure call externally (CPU monotonic clock / GPU
    events); the agent never times
-8. correctness, goal, and the JSON response envelope
+9. `correctness` + `fuzzing` -- the tolerance gate and the public fuzz ranges
+10. `scoring` / `skills` / `optimizations` -- how the speedup is credited, agent tool access,
+    and the policy-gated optimization hint
+11. `response` -- the JSON response envelope
 
 ### Fragment tree
 
-`task.j2` pulls optional per-dimension fragments via `{% include "<dim>/<value>.j2" ignore
-missing %}` -- an absent fragment is a no-op, so coverage can grow incrementally:
-
 ```
 prompts/
-  task.j2                 # the skeleton
-  lang/<lang>.j2          # language gotchas      (seeded: fortran)
-  dwarf/<dwarf>.j2        # dwarf-specific advice  (add as needed)
-  optimization/<opt>.j2   # foundation hint, policy-gated (seeded: vectorize)
+  task.j2            # the skeleton: it includes every section unconditionally
+  sections/*.j2      # the numbered sections above (each self-gates on its own {% if %})
+  lang/<lang>.j2     # language gotchas, pulled by sections/api.j2 via
+                     # {% include "lang/" ~ language ~ ".j2" ignore missing %} -- the one
+                     # optional include, so a language with no fragment is a no-op
+  skills/, tools/    # agent tool-access fragments
+  optimizations.j2, scoring.j2, feedback.j2, service_task.j2
 ```
 
 ## Running

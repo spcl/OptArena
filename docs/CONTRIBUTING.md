@@ -14,7 +14,7 @@ baselines are generated from it (see [Frameworks](../README.md#frameworks)); you
 Drop `<kernel>_numpy.py` into a track folder (the folder picks the track):
 
 ```
-optarena/benchmarks/foundation/<kernel>_numpy.py              (foundation -- flat)
+optarena/benchmarks/foundation/<kernel>/<kernel>_numpy.py     (foundation)
 optarena/benchmarks/hpc/<dwarf>/<kernel>/<kernel>_numpy.py    (hpc)
 optarena/benchmarks/ml/<kernel>/<kernel>_numpy.py             (ml)
 ```
@@ -202,6 +202,7 @@ Example -- adding **Rust** (`cdylib` -> a plain C-ABI `.so`):
 ```yaml
 # optarena/envs/compilers.yaml
 rust:
+  lang: rust                   # REQUIRED -- the per-language block lookup keys on it
   install: {apt: rustc}
   cc: rustc
   # baseline_ref names a constant in optarena/flags.py -- never a literal -O3.
@@ -210,7 +211,7 @@ rust:
 ```
 ```python
 # optarena/languages.py
-LANG_EXT = { ..., "rust": ".rs" }
+LANG_EXT = { ..., "rust": "rs" }     # no leading dot
 ```
 
 The kernel then exports the canonical C symbol with `#[no_mangle] pub extern "C"`,

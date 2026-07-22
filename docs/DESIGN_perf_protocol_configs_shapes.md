@@ -1,6 +1,10 @@
 # Design -- performance protocol over configs x shapes
 
-**Status.** Design, not yet implemented. Agreed in chat 2026-06-29. Builds on the
+**Status.** SHIPPED. Agreed in chat 2026-06-29, implemented since -- see `fuzz.edge_shapes` /
+`fuzz.large_shapes`, `metric.py`, both `timing.py` backends, and the `perf.*` block in
+`config.yaml`. This file is kept as the rationale record; `config.yaml` is the authority on
+which knobs exist, and Sec. 6 below still lists proposed key names that were never adopted.
+Builds on the
 seeded-fuzz metric (`metric.score_task_fuzzed`), `fuzz.sample_params`, the
 sequential-C baseline, and the micro-app config/shape model
 (`docs/DESIGN_microapp_config_fuzzing.md`).

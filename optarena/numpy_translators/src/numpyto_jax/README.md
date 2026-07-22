@@ -8,7 +8,7 @@ It raises `EmitError` (rather than emitting something wrong) on what it cannot
 lower.
 
 ```python
-from optarena.NumpyToJAX import emit_jax, EmitError
+from numpyto_jax import emit_jax, EmitError
 jax_src = emit_jax(open("gemm_numpy.py").read(), "kernel")            # eager (default)
 jax_src = emit_jax(open("gemm_numpy.py").read(), "kernel", jit=True)  # jit/compiled
 ```
@@ -118,19 +118,14 @@ ragged CSR slices `A_col[A_row[i]:A_row[i+1]]` masked to full width
 
 ## Verifying
 
-`scripts/emit_jax_check.py` emits each kernel, runs it, and compares -- *first*
-against the hand-written `*_jax.py` on identical JAX inputs (`[vs-hand]`, the
-authoritative "does it match the existing kernel?" signal), else the numpy
-reference (`[vs-numpy]`, used for the whole foundation track, which has no hand
-JAX). Sparse inputs are converted to `BCOO` like the real `jax_framework`.
+Unit coverage lives in `optarena/numpy_translators/tests/` --
+`test_jax_inplace_helpers.py` and `test_jax_semantics_fixes.py` emit a kernel and
+execute both the numpy source and the emitted JAX source, asserting they agree.
 
-```
-python scripts/emit_jax_check.py                 # representative set
-python scripts/emit_jax_check.py --all            # the 62 legacy benches
-python scripts/emit_jax_check.py --foundation     # the 213 TSVC foundation puzzles
-python scripts/emit_jax_check.py --everything     # both
-SHOW=1 python scripts/emit_jax_check.py polybench/gemm   # print emitted source
-```
+End to end, the emitter is exercised through the harness: `optarena.autogen` calls
+`emit_jax` on demand and `jax_framework` runs the result, so a `jax` sweep over the
+corpus (`optarena run-framework -f jax`) is the integration check. Sparse inputs are
+converted to `BCOO` there, as in the real framework.
 
 ### AOT compilation (default)
 
@@ -141,8 +136,8 @@ program, so the polybench stencils and TSVC loops run *fast* instead of
 dispatching every eager op separately. Scalar/dim args are baked in as
 constants (so `range(N)` traces); a kernel whose control flow is genuinely
 data-dependent (mandelbrot2's compaction, gmres's break) can't be traced and
-**falls back to eager execution** -- the `(aot)`/`(eager)` tag on each result
-line says which happened. `--no-aot` runs everything eagerly.
+**falls back to eager execution** -- the `(aot)`/`(eager)` classification of a
+kernel says which happened.
 
 Python's `float()` builtin would otherwise force the fallback: the TSVC argmax
 kernels close with `result = maxv + float(index)`, and in the rolled body
@@ -158,55 +153,13 @@ The flip side: AOT-compiling a *huge* unrolled loop (seidel/adi-style
 `TSTEPS x N^2`) can take a long time and a lot of memory. The
 rolled (`jit=True`) emission already lowers such loops to `lax.fori_loop` so
 they don't unroll; the eager-AOT *fallback* (taken only when the rolled
-emission is unavailable) is guarded against the blow-up two ways:
+emission is unavailable) is guarded by the time-step symbol heuristic:
 
-* **Time-step symbol heuristic** -- a `for _ in range(... TSTEPS ...)` loop is, by
+* a `for _ in range(... TSTEPS ...)` loop is, by
   OptArena convention, a *time-march* loop: it must stay rolled, never unrolled,
   no matter how small the preset's value is. The check is a curated, extendable
   list of bound symbols (`TIMESTEP_SYMBOLS` = `TSTEPS`, `TSTEP`, `TMAX`,
-  `NITER`, `NSTEPS`, ... -- matched case-insensitively as a substring of a
+  `NITER`, `NSTEPS`, ... in `numpyto_common.parallelism` -- matched
+  case-insensitively as a substring of a
   loop-bound name; add a suite's own spelling there). Any kernel with such a
   loop skips eager-AOT and runs eagerly -- the size-independent signal.
-* **Trip-count estimate** -- `_unroll_estimate` resolves each `range()` bound
-  against the concrete preset sizes (and array shapes) and multiplies the
-  loop nest; a product over the budget (`UNROLL_LIMIT`, 20 k) likewise skips
-  eager-AOT. The RSS watchdog below is the hard backstop for whatever slips
-  through.
-
-### Robust sweeps (memory- and time-bounded)
-
-Each bench runs in a **forked child watched by the parent**: the parent polls
-the child's RSS and wall-clock and `SIGKILL`s it on breach, recording
-`[OOM ]`/`[SLOW]` and moving on -- a runaway compile takes down only that child,
-never the sweep or the machine (via the kernel OOM-killer).
-
-* `--mem G` -- per-bench RSS cap in GB (**default 2.0**; a non-zero cap
-  auto-enables isolation). The watchdog measures real RSS, so it doesn't
-  false-trip on XLA's large virtual reservations the way `RLIMIT_AS` would.
-* `--timeout S` -- per-bench compile+run budget (inner `SIGALRM`, **default
-  300**).
-
-The harness also forces **single-threaded** XLA before `import jax`
-(`XLA_FLAGS=--xla_cpu_multi_thread_eigen=false ...` + `OMP/MKL/OPENBLAS_NUM_THREADS=1`)
-so a parallel compile/execution doesn't fan out across cores and inflate peak
-memory.
-
-### Coverage
-
-`--everything` (62 legacy + 213 foundation, `--mem 2.0 --timeout 45`): **273
-pass / 0 fail / 2 skip** -- zero wrong answers. Legacy **60/62**: polybench
-**32/32**, deep-learning, weather, sparse solvers (cg/bicg/bicgstab/minres),
-spmv, stockham_fft, cavity/channel, nbody, scattering, crc16, contour_integral.
-Foundation **213/213** (the whole TSVC track). The loop-heavy kernels that used
-to land in SLOW -- the polybench stencils (seidel/adi/heat_3d/jacobi),
-durbin/syrk/correlation/covariance/trisolv, azimint, and channel_flow's
-data-dependent CFD convergence `while` (now a compiled `lax.while_loop`) -- now
-AOT-compile and **pass fast** (the `(aot-jit)`/`(aot)` tag). Eager additionally
-*emits and runs* the kernels the `jit` path refuses -- mandelbrot2's
-shrinking-array compaction (`Z = Z[I]`) executes faithfully and verifies within
-budget.
-
-The 2 non-passes are benign: **1 SLOW** (spmm, whose SpGEMM densifies past the
-budget) and **1 EMIT** (banded_mmt -- a packed-banded hand-algorithm with `map`/
-`lambda`, chained-subscript stores and ragged data-dependent slices, which the
-emitter cleanly refuses rather than mis-translate).

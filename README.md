@@ -20,8 +20,8 @@ pip install -r requirements/cpu.txt && pip install -e .
 export ANTHROPIC_API_KEY=sk-...          # the agent calls Claude
 
 # 1) one kernel: Claude writes C, the harness compiles + validates + times it and
-#    scores the speedup over the per-track baseline (default: foundation -> auto-parallelized
-#    C, ml/hpc -> numpy; override with --baseline; --native = in-process, no container):
+#    scores the speedup over the per-track baseline (default: foundation/hpc -> auto-parallelized
+#    C, ml -> numpy; override with --baseline; --native = in-process, no container):
 optarena agent claude --kernels gemm --native
 
 # 2) a whole HPC sub-track at level 2 (the structured-grids dwarf), default prompt:
@@ -83,15 +83,15 @@ tests, the reference, and the timer); they talk over HTTP, so the agent can neve
 tests or tamper with the clock. Three things make up a run:
 
 - **the corpus** (`optarena/benchmarks/`) -- one NumPy reference + a small manifest per kernel,
-  co-located, and the **path is the ID**: `ml/<kernel>/` and `hpc/<dwarf>/<kernel>/` are
-  per-kernel directories, while `foundation/` is flat (`<kernel>_numpy.py` + `<kernel>.yaml`
-  side by side). Every other-language implementation is generated from that reference.
+  co-located, and the **path is the ID**: `foundation/<kernel>/`, `ml/<kernel>/` and
+  `hpc/<dwarf>/<kernel>/` are all per-kernel directories. Every other-language implementation
+  is generated from that reference.
 - **the frameworks** (`optarena/frameworks/`) -- the per-language optimizers
   (dace . numba . tvm . triton . ...) an automatic (no-agent) run grades; see [Frameworks](#frameworks).
 - **grading** rests on two references: the **oracle** is the correctness reference (your output
   must match it) and the **baseline** is the speedup denominator (you are timed against it). The
-  baseline default is the `auto` per-track boundary token (foundation -> `c-autopar`, ml/hpc ->
-  `numpy`); see [The optimizer loop & scoring](#the-optimizer-loop--scoring).
+  baseline default is the `auto` per-track boundary token (foundation/hpc -> `c-autopar`, ml ->
+  `numpy`, any other track -> `c`); see [The optimizer loop & scoring](#the-optimizer-loop--scoring).
 
 An agent reaches its model over an **inference endpoint** (a hosted API -- Claude, OpenAI -- or a
 self-hosted vLLM server) and grades over the **judge** (`optarena serve`). On a cluster the three
@@ -133,10 +133,9 @@ optarena/
 |   `-- agent-{anthropic,aider,local}.txt   opt-in model backends (install on top)
 +-- optarena/
 |   +-- benchmarks/               THE CORPUS -- co-located kernel + manifest
-|   |   +-- foundation/<kernel>.yaml + <kernel>_numpy.py        (flat)
+|   |   +-- foundation/<kernel>/
 |   |   +-- hpc/<dwarf>/<kernel>/  (kernel dir + cpp_backend/)
 |   |   `-- ml/<kernel>/
-|   +-- taxonomy/                 controlled vocabularies (dwarfs)
 |   +-- harness/                  the optimize -> compile -> score loop + judge service
 |   |   `-- prompts/              Jinja prompt fragments (the agent-facing prompt)
 |   +-- frameworks/               per-language framework bindings (dace . tvm . triton . numba . ...)
@@ -294,14 +293,15 @@ optarena run --benchmark hpc  --framework all          # a whole track, every fr
 
 Each kernel has four size presets -- **`S`** (smoke/CI), **`M`**, **`L`** (the publication size),
 and **`XL`**. `S`/`M`/`L` target ~=10/100/1000 ms under NumPy; **`XL`** is the GPU-scale point: its
-arrays occupy **>= 4 GB** at fp64 (out of cache, DRAM/HBM-bound). Default is `S`; choose with `-p`:
+arrays occupy **>= 4 GB** at fp64 (out of cache, DRAM/HBM-bound). Choose with `-p`:
 
 ```sh
 python scripts/run_benchmark.py -b gemm -f numpy -p XL
 ```
 
-A fifth preset, **`fuzzed`**, samples sizes in `[L, XL]` and cycles input distributions -- **opt
-in with `optarena run --preset fuzzed`** (it is not run by default).
+A fifth preset, **`fuzzed`**, samples sizes in `[L, XL]` and cycles input distributions. It is
+the **default** for `optarena run`, `run-benchmark`, `run-framework` and the judge
+(`service.preset`); pass `-p S` for a smoke-size run. `fuzzed:<seed>` pins the RNG.
 
 ---
 
@@ -356,9 +356,9 @@ The judge's behaviour -- and therefore what the prompt tells the agent -- is con
 | Setting | Values | Effect |
 |---|---|---|
 | `oracle` | `numpy` \| `c` \| `both` | which reference correctness is checked against |
-| `baseline` | `auto` (default) \| `numpy` \| `c` \| `c-autopar` \| `cpp-autopar` \| `fortran-autopar` | the speedup denominator (always ONE reference). **`auto`** resolves per track (foundation -> `c-autopar`, ml/hpc -> `numpy`) via `optarena.harness.grading.resolve_baseline`; `c` = sequential C reference; a **`*-autopar`** kind = the compiled reference built multi-core with auto-parallelization (clang+Polly for c/cpp, gfortran autopar). A compiled baseline falls back to `numpy` per-kernel when it cannot be built. |
+| `baseline` | `auto` (default) \| `numpy` \| `c` \| `c-autopar` \| `cpp-autopar` \| `fortran-autopar` | the speedup denominator (always ONE reference). **`auto`** resolves per track (foundation/hpc -> `c-autopar`, ml -> `numpy`, any other track -> `c`) via `optarena.harness.grading.resolve_baseline`; `c` = sequential C reference; a **`*-autopar`** kind = the compiled reference built multi-core with auto-parallelization (clang+Polly for c/cpp, gfortran autopar). A compiled baseline falls back to `numpy` per-kernel when it cannot be built. |
 | `input_mode` | `py-binding` \| `source` \| `library` \| `any` | **`py-binding`**: an interpreted Python callable, run directly. **`source`**: agent sends code, judge compiles it (agent never picks flags). **`library`**: agent sends a prebuilt `.so` (ABI-only), exporting the canonical C symbol. **`any`**: accept any of the above. |
-| `preset` | `S`/`M`/`L`/`XL` | the size the judge scores at |
+| `preset` | `S`/`M`/`L`/`XL`/`fuzzed` (default `fuzzed`) | the size the judge scores at |
 
 `config.yaml` is the permanent source. For one process, the typed singleton is the
 programmatic surface -- assigning to it wins over `$OPTARENA_*` and the file:
@@ -392,8 +392,12 @@ kernel's **configurations x shapes**.
     established by the correctness gate). Per task,
     `S_i = clamp(geomean of the credited speed-ups, 1, c_max)` if solved, else `1.0` -- a failure
     falls back to the reference, never a catastrophic zero.
-- **OptArena Score** `= geomean_i S_i` over all tasks; the suite also reports solve-rate, a
-  per-dwarf geomean, and a token-cost axis.
+  - **Dispersion gate** -- a win inside the timing noise earns nothing. With `gsd` the geometric
+    standard deviation of the task's speed-up samples, `S_i` is floored back to `1.0` unless
+    `S_i / gsd^z > 1` (`z` = `measurement.gsd_z`, default 1.0). The ranked per-task value is that
+    gated one (`TaskScore.score`), not the raw `S_i`, which is still reported for disclosure.
+- **OptArena Score** `= geomean_i` of the gated per-task scores; the suite also reports solve-rate,
+  a per-dwarf geomean, and a token-cost axis.
 
 The fuzz **ranges and flag sets are public** (shipped with the task) so an agent optimizes for the
 distribution; the sampling **seeds** are server-side, so the realized draw stays hidden --

@@ -80,7 +80,8 @@ class PackedGroup:
 @dataclass(frozen=True, slots=True)
 class Binding:
     """The canonical binding for one (kernel, configuration) pair; ``args`` already in canonical order
-    (Sec. 4), serialised by :meth:`to_json` to ``<short>_binding_auto.json`` (Sec. 8)."""
+    (Sec. 4), serialised by :meth:`to_json` into the ``any``-mode prompt and, by the emitters,
+    to ``<short>[_<layout>]_<precision>_binding.json`` beside the generated sources (Sec. 8)."""
     kernel: str
     config: str
     args: Tuple[Arg, ...]

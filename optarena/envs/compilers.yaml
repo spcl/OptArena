@@ -1,18 +1,18 @@
 # Flat per-compiler table -- the single data source for BOTH
-#   (a) RESTRICTED single-source compilation (optarena/envs/compilers.py), and
+#   (a) RESTRICTED single-source compilation (optarena/languages.py), and
 #   (b) the per-tier container toolchains (each entry's `install.apt` /
 #       `install.spack` describes how to provision the compiler).
 #
-# Adding a NEW language = one block here + one `languages:` line in each
-# one extension in optarena/languages.py:LANG_EXT.
-# NOTHING under optarena/NumpyTo*/ changes.
+# Adding a NEW language = two edits: one block here (with its `lang:` key) and one
+# extension in optarena/languages.py:LANG_EXT. Nothing under
+# optarena/numpy_translators/ changes.
 #
-# Template placeholders resolved by compilers.py at build time:
+# Template placeholders resolved by optarena/languages.py at build time:
 #   {cc}   compiler invocation            {src}  source file
 #   {obj}  object file       {objs} space-joined objects   {lib}  output .so
 #   {baseline} resolved from `baseline_ref` (a constant NAME in optarena/flags.py,
-#              looked up via getattr -- keeps the no-literal-"-O3" invariant and
-#              flows through flags.compose_autopar / compose_cuda).
+#              looked up via vars(flags)[ref] -- keeps the no-literal-"-O3" invariant
+#              and flows through flags.compose_autopar / compose_cuda).
 
 gcc:
   lang: c

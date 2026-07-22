@@ -83,7 +83,7 @@ dataset = tasks, scoring = held-out tests).
 | `parameters` | `BenchSpec.parameters` (JSON) | preset sizes incl. `fuzzed` ranges/sets |
 | `datatypes` | spec | allowed precisions |
 | `source_mode` | `restricted` (adapter default) | source vs prebuilt `.so` |
-| `baseline` | judge policy | what `speedup` is measured against; per-track default (`auto` boundary token -> foundation `c-autopar`, ml/hpc `numpy`), or an explicit `numpy` / `c` / `*-autopar` override -- always ONE reference (see Sec. 4.5) |
+| `baseline` | judge policy | what `speedup` is measured against; per-track default (`auto` boundary token -> foundation/hpc `c-autopar`, ml `numpy`, other `c`), or an explicit `numpy` / `c` / `*-autopar` override -- always ONE reference (see Sec. 4.5) |
 | `commit`, `warnings` | export run | provenance pin; per-row export warnings (`[]` when clean) |
 
 **Never in the dataset:** hidden tests, reference *outputs*, timing, **or the fuzz
@@ -122,8 +122,8 @@ in the repo, so a new benchmark is reflected by re-running it.
   (or jsonl, dependency-free) -> optional `datasets` push, tagged by commit.
 - **Auto-update = three layers:** the regenerator (above) + a *completeness guard*
   test (`tests/test_hf_export.py`, in the main CI's structure step -- a kernel that
-  can't export turns the PR red) + an auto-publish workflow
-  (`.github/workflows/export-hf.yml`, republishes on push to `main`, gated on
+  can't export turns the PR red) + an auto-publish step in that same workflow
+  (`.github/workflows/tests.yml`, republishes on push to `main`, gated on
   `HF_TOKEN`/`vars.HF_DATASET_REPO`).
 - `datasets.load_dataset("spcl/optarena", "hpc")` -> rows, consumed by the Harbor
   adapter, the local judge, and a future leaderboard Space.
@@ -153,7 +153,6 @@ adapters/optarena/tasks/ # GENERATED (gitignored): one task dir per kernel:
   optarena-<kernel>/
     task.toml            # schema 1.3; [environment].docker_image = optarena:cpu; metadata
     instruction.md       # leak-free: numpy reference + C-ABI signature + objective
-    solution/solve.sh    # oracle: emits the NumpyToX C reference (correct ~1x solution)
     tests/test.sh        # verifier: harbor_grade -> /logs/verifier/reward.json (= S_i)
 ```
 
@@ -331,7 +330,7 @@ extras):
 3. **Dual metric** -- geomean (headline) *and* harmonic/total-time speedup (==
    AlgoTune) *and* per-dwarf breakdown. Never one number that hides the spread.
 4. **Honest baseline** -- speedup vs the resolved per-track denominator (`auto` ->
-   foundation `c-autopar`, ml/hpc `numpy`; overridable to a concrete kind), always
+   foundation/hpc `c-autopar`, ml `numpy`; overridable to a concrete kind), always
    ONE reference, so a "speedup" is never read against a strawman.
 5. **Disclosed coverage** -- publish the task-set histogram over dwarf/domain/scale;
    flag skew. Relevance is only as good as coverage.
@@ -343,7 +342,7 @@ extras):
 | Phase | Scope | State |
 |---|---|---|
 | **0 -- Score backbone** | `metric.py` (`score_task_fuzzed`, `aggregate`) + `fuzz_iteration` threading in `scoring.py`; 7/7 in `tests/test_metric.py`, no regression in `test_agent_bench.py`. | [x] **done** |
-| 0.5 -- Dispersion enrichment (Sec. 4.3) | `gsd` field + min-detectable-speedup gate; ~10 lines over samples already collected. | optional, ready |
+| **0.5 -- Dispersion enrichment (Sec. 4.3)** | `gsd` field + min-detectable-speedup gate, live: `TaskScore.gsd_gated` floors a noise-band win to 1.0, knob `measurement.gsd_z`. | [x] **done** |
 | **1 -- export** | `optarena export-hf` (all tracks) -> parquet/jsonl; pure regenerator + completeness guard + auto-publish workflow. **One row per sub-benchmark** (353 rows, per-layout ABI, 1:1 with the judge); all export clean; `tests/test_hf_export.py` 13/13 (+1 parquet skip). | [x] **done** |
 | 2 -- MVP adapter | `adapters/optarena` for `foundation`, mirroring `algotune`; one agent e2e on ~5 kernels. | |
 | 3 -- Parity + scale | validate parity vs the native judge on a sample; extend to `hpc`/`ml` + preset/datatype sweeps; push the full Dataset. | |

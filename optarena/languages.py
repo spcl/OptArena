@@ -1,7 +1,7 @@
 """Language registry + single-source compilation (Workstream F).
 
 Adding a new native language to OptArena is, by design, two local edits and
-nothing under ``optarena/NumpyTo*/`` (see the header of
+nothing under ``optarena/numpy_translators/`` (see the header of
 ``optarena/envs/compilers.yaml``):
 
 1. one compiler block in ``compilers.yaml`` (with a ``baseline_ref`` naming a
@@ -39,8 +39,8 @@ from optarena.spec import BenchSpec
 #: Repo-relative location of the flat per-compiler table.
 COMPILERS_YAML: pathlib.Path = paths.ROOT / "optarena" / "envs" / "compilers.yaml"
 
-#: Language token -> source-file extension (no leading dot). The fourth edit
-#: when adding a language. Mirrors the per-language rendering in
+#: Language token -> source-file extension (no leading dot). The second of the two
+#: edits that add a language. Mirrors the per-language rendering in
 #: ``abi_contract.md`` Sec. 7.
 LANG_EXT: Dict[str, str] = {
     "c": "c",

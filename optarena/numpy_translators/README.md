@@ -12,20 +12,19 @@ A Python -> C99 / C++ / Pluto-input emitter, deliberately narrow:
   loop nest in ``#pragma scop`` / ``#pragma endscop`` and survives
   ``polycc --pet --tile`` for the affine subset.
 
-The tool is one of a planned family. Each target lives in its own
-top-level directory so the dependency surface stays per-target:
+One family, one package. Each target lives in its own directory under
+`src/` so the dependency surface stays per-target, and the shared
+front-end / IR / lowering sits in `numpyto_common`:
 
-| Tool          | Folder         | Status        |
-|---------------|----------------|---------------|
-| **NumpyToC**  | `NumpyToC/`    | this package  |
-| NumpyToDaCe   | `NumpyToDaCe/` | future        |
-| NumpyToCuPy   | `NumpyToCuPy/` | future        |
-| NumpyToPythran| `NumpyToPythran/` | future     |
-| NumpyToNumba  | `NumpyToNumba/`| future        |
-
-When the second target lands we lift the shared front-end / IR into
-a small ``numpyto_common`` library; for the single-target version
-they live inline.
+| Target          | Folder                |
+|-----------------|-----------------------|
+| shared frontend | `src/numpyto_common/` |
+| C / C++ / Pluto | `src/numpyto_c/`      |
+| Fortran         | `src/numpyto_fortran/`|
+| JAX             | `src/numpyto_jax/`    |
+| Numba           | `src/numpyto_numba/`  |
+| CuPy            | `src/numpyto_cupy/`   |
+| Pythran         | `src/numpyto_pythran/`|
 
 ## Why a new tool
 

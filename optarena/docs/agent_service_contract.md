@@ -47,10 +47,14 @@ reason in `detail`); only malformed requests are 4xx.
 | Key | Values | Meaning |
 |---|---|---|
 | `oracle`     | `numpy` \| `c` \| `both` | correctness reference |
-| `baseline`   | `numpy` \| `c` \| `both` | speedup denominator |
-| `input_mode` | `source` \| `library` \| `either` | what `/oracle` accepts (the "oracle requires code, or the .so" knob) |
-| `preset`     | `S`/`M`/`L`/`paper` | data size scored at |
-| `repeat`     | int | timed reps; best (min) kept |
+| `input_mode` | `py-binding` \| `source` \| `library` \| `any` | what `/oracle` accepts (the "oracle requires code, or the .so" knob) |
+| `preset`     | `S`/`M`/`L`/`XL`/`fuzzed` (default `fuzzed`) | data size scored at |
+| `datatype`   | a numpy dtype name | the precision scored at |
+
+The speedup denominator and the timed-rep count are deliberately NOT `service:` keys --
+they are the shared `measurement.baseline` and `measurement.repeat`, read by the judge,
+the Harbor grader and the API alike so the measurement paths cannot drift. Setting
+`service.baseline` or `service.repeat` does nothing.
 
 ## Running it
 

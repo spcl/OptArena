@@ -143,7 +143,7 @@ srun ... apptainer exec --nv "$SIF" \
     optarena agent openai --kernels gemm,gesummv --preset S
 ```
 
-`--baseline` defaults to `auto` (the per-track denominator: foundation -> `c-autopar`, ml / hpc ->
+`--baseline` defaults to `auto` (the per-track denominator: foundation / hpc -> `c-autopar`, ml ->
 `numpy`); `--preset S` is a small fixed size -- drop it for the default `fuzzed`. Smoke-test the
 whole flow with no cluster first -- `optarena agent openai --native --kernels gemm --preset S`
 runs the agent + an in-process judge on one box (zero containers, zero endpoints). The worked

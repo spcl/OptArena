@@ -11,6 +11,7 @@ asserts no hidden-test content can leak into a prompt.
 """
 import dataclasses
 import importlib
+import json
 import pathlib
 import posixpath
 import re
@@ -520,7 +521,7 @@ def build_context(task: Task,
         prompt_config = PromptConfig.from_config()
     spec = BenchSpec.load(task.kernel)
     # Resolve the baseline against the kernel's track (the ``track`` sentinel / ``None`` -> the
-    # per-track default: foundation -> c-autopar, ml/hpc -> numpy), so the prompt names the CONCRETE
+    # per-track default: foundation/hpc -> c-autopar, ml -> numpy), so the prompt names the CONCRETE
     # reference the submission is timed against, not the "track" selector.
     from optarena.harness.grading import resolve_baseline
     baseline = resolve_baseline(baseline, spec)
@@ -656,9 +657,10 @@ def build_context(task: Task,
         # FP-relaxation set), publicly exposed so a self-compiled ("any") submission can
         # match them and so the FP semantics are auditable.
         "compile_flags": _baseline_flags(task.language),
-        # any delivery: where the machine-readable C-ABI can be read.
-        "binding_path": (f"optarena/benchmarks/{spec.relative_path}/cpp_backend/"
-                         f"{spec.short_name}_binding_auto.json"),
+        # any delivery: the machine-readable C-ABI, INLINED. The on-disk
+        # <base>_binding.json is a generated, gitignored artifact that nothing on the agent
+        # path emits, so pointing at its path handed the agent a file that was not there.
+        "binding_json": json.dumps(binding.to_json(), indent=2),
         "abi_doc": "optarena/docs/abi_contract.md",
         # What the host actually offers (compilers + numeric libraries) so the
         # agent knows what it may use / link. Pre-joined to one line each (avoids

@@ -3,9 +3,11 @@
 Return a prebuilt shared library `{{ lib_name }}` that exports `{{ symbol }}` -- a plain
 C-ABI `.so` opened with `cffi` (ABI mode), NOT a Python extension (no nanobind / pybind /
 `PyInit`). Export exactly the C symbol above with C linkage. The full machine-readable ABI
-(argument order, dtypes, shapes, const-ness, sparse packing) is here:
-- `{{ binding_path }}`  -- the per-kernel binding JSON
-- `{{ abi_doc }}`  -- the normative ABI contract
+(argument order, dtypes, shapes, const-ness, sparse packing) is this binding:
+```json
+{{ binding_json }}
+```
+`{{ abi_doc }}` is the normative ABI contract.
 
 Communication is via the shared folder `{{ shared_dir }}`: put `{{ lib_name }}` there and
 set the response `library` field to that path -- that is how your library reaches the
