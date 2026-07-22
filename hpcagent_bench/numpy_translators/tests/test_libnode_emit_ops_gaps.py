@@ -18,18 +18,34 @@ All four are NATIVE lowerings (the ufunc-reduce rewrite is wired only into
 runs on C / C++ / Fortran and is compared bit-exact-ish vs numpy. Fortran
 auto-skips when gfortran is absent -- an accepted skip, not a failure.
 """
+import shutil
+
 import numpy as np
+
 from _op_oracle import run_op
 
 # The ops under test are native-only lowerings, so restrict to the compiled
 # backends; a legitimately skipping fortran (no gfortran) is accepted.
 _NATIVE = ("c", "cpp", "fortran")
 
+#: The only skip a first-party backend may report. c/cpp/fortran are OUR emitters, so
+#: "unsupported" from one is a gap in the translator, not an environment fact -- the single
+#: legitimate reason one does not run is that its compiler is not installed.
+NO_COMPILER = "skip:no-compiler"
+
 
 def _ok(res):
     """True iff every backend either ran ``ok`` or legitimately skipped (never a
     FAIL / compile / emit error) AND at least one backend actually ran -- an
-    all-skip result validates nothing and must not pass."""
+    all-skip result validates nothing and must not pass.
+
+    A c/cpp/fortran backend is held to the stricter rule above: ``skip:unsupported:*``
+    from one of them used to read as a pass, which is how a translator regression could
+    ship green."""
+    for backend in ("c", "cpp", "fortran"):
+        status = res.get(backend)
+        if status is not None and status != "ok" and status != NO_COMPILER:
+            return False, res
     return (all(v == "ok" or v.startswith("skip") for v in res.values()) and any(v == "ok" for v in res.values())), res
 
 
@@ -227,5 +243,11 @@ def test_scatter_conflict_check_tagcount():
                      "cnt": "int64"
                  },
                  backends=_NATIVE)
+    # This guard exists ONLY for the Fortran int-reduction accumulator (a real accumulator
+    # makes the running-max `merge(int, real)` a kind mismatch); c/cpp promote silently and
+    # would pass either way. So where gfortran exists, Fortran must actually have run --
+    # otherwise the one backend the test is about never compiled and nothing says so.
+    if shutil.which("gfortran"):
+        assert res.get("fortran") == "ok", res
     ok, r = _ok(res)
     assert ok, r

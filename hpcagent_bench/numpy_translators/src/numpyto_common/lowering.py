@@ -38,6 +38,7 @@ from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 import sympy
 
+from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR
 from numpyto_common.numpy_desugar import _np_linalg_attr
 from numpyto_common.lib_nodes import (MESHGRID_AXIS_KW, _iter_extent_of, _scalarize_at_iters, expand_meshgrid)
@@ -6136,7 +6137,7 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # declared from the ABI signature (not ``local_dtypes``), so tagging them here
     # never redeclares them.
     for arr in ctx.kir.arrays:
-        if arr.dtype.startswith(("int", "uint")):
+        if dtypes.is_integer(arr.dtype):
             ctx.local_dtypes.setdefault(arr.name, arr.dtype)
     # Library-node expansion -- reductions, matmul, etc. -- runs before
     # ``_ZerosRewriter`` so any matmul temps the rewriter introduces are picked up
@@ -6456,7 +6457,7 @@ def _lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
     for _nm in _idx_locals:
         if (_nm in shapes or _nm in ctx.local_dtypes):
             _dt = ctx.local_dtypes.get(_nm)
-            if not (_dt and _dt.startswith(("int", "uint"))):
+            if not (_dt and dtypes.is_integer(_dt)):
                 ctx.local_dtypes[_nm] = "int64"
     # Resolve any ``arr.shape[i]`` token left in the malloc / stride tables against
     # the now-fully-known LOCAL shapes (M => (k, k)), so eigh temps aliased off a
@@ -6732,7 +6733,7 @@ def _detect_output_and_index_arrays(kir: KernelIR) -> None:
         # original ``dace.int32`` annotation). Only auto-promote arrays
         # still at a float default, so the heuristic stays a safety net
         # for undeclared kernels without overriding a declared width.
-        if str(vars(a).get("dtype") or "").startswith(("int", "uint")):
+        if dtypes.is_integer(str(vars(a).get("dtype") or "")):
             continue
         a.dtype = "int64"  # type: ignore[misc]
 

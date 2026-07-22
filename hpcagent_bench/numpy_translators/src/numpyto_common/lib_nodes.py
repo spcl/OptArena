@@ -18,6 +18,8 @@ import ast
 import copy
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
+from numpyto_common import dtypes
+
 
 def _name(n: str) -> ast.Name:
     return ast.Name(id=n, ctx=ast.Load())
@@ -906,7 +908,7 @@ def _is_integer_expr(node: ast.AST, local_dtypes: Dict[str, str], array_names: S
     if isinstance(node, ast.Name):
         dt = local_dtypes.get(node.id)
         if dt is not None:
-            return dt.startswith(("int", "uint"))
+            return dtypes.is_integer(dt)
         return node.id not in array_names  # untagged array -> float default
     if isinstance(node, ast.Subscript):
         # An element/gather of an integer-typed array is itself integer
@@ -915,7 +917,7 @@ def _is_integer_expr(node: ast.AST, local_dtypes: Dict[str, str], array_names: S
         base = node.value
         if isinstance(base, ast.Name):
             dt = local_dtypes.get(base.id)
-            return dt is not None and dt.startswith(("int", "uint"))
+            return dt is not None and dtypes.is_integer(dt)
         return _is_integer_expr(base, local_dtypes, array_names)
     if isinstance(node, ast.BinOp):
         if not isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Mod, ast.FloorDiv)):
@@ -6766,7 +6768,7 @@ class _CallHoister(ast.NodeTransformer):
             # even from an int input.
             elif (key[1] in {"max", "min", "sum", "prod"} and node.args and isinstance(node.args[0], ast.Name)):
                 src_dt = self.local_dtypes.get(node.args[0].id)
-                if src_dt and src_dt.startswith(("int", "uint")):
+                if src_dt and dtypes.is_integer(src_dt):
                     self.local_dtypes[temp] = src_dt
         # Emit a ``__cb<n> = __hpcagent_bench_zeros__()`` marker first so the emit
         # walker can inline-declare the temp at the marker site -- required

@@ -2092,7 +2092,9 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
             _pre_logical_arr_locals.add(tgt.id)
     body_emitter._logical_array_locals = _pre_logical_arr_locals
     # Int-typed PARAMETER arrays cannot be re-typed (C ABI); wrap their 0/1-flag
-    # use with /= 0 at the condition site instead.
+    # use with /= 0 at the condition site instead. NOT dtypes.is_integer: the question here
+    # is what Fortran EMITS, and fp8 is stored as integer(c_int8_t) though its dtype is a
+    # float -- those arrays need the same treatment as a genuinely integer one.
     body_emitter._int_array_names = {a.name for a in kir.arrays if _fortran_type(a.dtype).startswith("integer")}
     # NOTE: the body is emitted further down, after every body_emitter side-table
     # (especially inline_alloc_locals) is populated, so a np.zeros marker for a
