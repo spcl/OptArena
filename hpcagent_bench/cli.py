@@ -133,14 +133,15 @@ def _run_cell(short_name: str, framework_name: str, precision: Precision, varian
         # JSONL stays flat and downstream tools can group as they wish.
         if not timings:
             return dict(status="ok")
-        rows: Dict[str, Any] = dict(status="ok", impls={})
-        for impl_name, t in timings.items():
-            rows["impls"][impl_name] = {
+        impls = {
+            impl_name: {
                 "time_python": t.get("python"),
                 "time_native": t.get("native"),
                 "validated": t.get("validated", True),
             }
-        return rows
+            for impl_name, t in timings.items()
+        }
+        return dict(status="ok", impls=impls)
     except Exception as exc:
         return dict(status="error", reason=str(exc))
 
@@ -190,8 +191,8 @@ def cmd_run(args) -> int:
     return 0
 
 
-#: Available agents for the ``agent`` subcommand (auto-tuner implementations).
 def _agent_registry() -> Dict[str, Any]:
+    """Available agents for the ``agent`` subcommand (auto-tuner implementations)."""
     # An "agent" is any optimizer: an LLM backend OR a non-AI optimizer, all sharing
     # the Agent.solve(task) contract. LLM: stub (deterministic CI baseline), claude
     # (Anthropic SDK), local (in-process Qwen-Coder), ollama (local server). Non-AI:
@@ -344,7 +345,7 @@ def cmd_agent(args) -> int:
     if args.agent not in registry:
         raise SystemExit(f"unknown agent {args.agent!r}; choices: {sorted(registry)}")
     agent = registry[args.agent]()
-    args.preset = resolve_preset(args.preset)  # 'fuzzed:seed' -> base 'fuzzed' + a seeds.fuzz override
+    args.preset = resolve_preset(args.preset)
     # One grading-param set, splatted into BOTH the pipeline and the serial path so the two
     # can never drift on which knobs the grade sees.
     grade_params = dict(preset=args.preset,
@@ -688,7 +689,7 @@ def cmd_export_hf(args) -> int:
 def cmd_run_benchmark(args) -> int:
     """Run a kernel selection under one framework, sequentially (writes hpcagent_bench.db)."""
     from hpcagent_bench.support.collect.sweep import run_benchmark_sweep
-    preset = resolve_preset(args.preset)  # 'fuzzed:seed' -> base 'fuzzed' + a seeds.fuzz override
+    preset = resolve_preset(args.preset)
     run_benchmark_sweep(args.benchmark,
                         args.framework,
                         preset,
@@ -705,7 +706,7 @@ def cmd_run_benchmark(args) -> int:
 def cmd_run_framework(args) -> int:
     """Run a kernel selection under one framework, forking EACH kernel (writes hpcagent_bench.db)."""
     from hpcagent_bench.support.collect.sweep import run_framework_sweep
-    preset = resolve_preset(args.preset)  # 'fuzzed:seed' -> base 'fuzzed' + a seeds.fuzz override
+    preset = resolve_preset(args.preset)
     run_framework_sweep(args.benchmark,
                         args.framework,
                         preset,
@@ -724,7 +725,7 @@ def cmd_run_framework(args) -> int:
 def cmd_run_sparse(args) -> int:
     """Sweep every (sparse kernel, storage/distribution variant), each forked (writes hpcagent_bench.db)."""
     from hpcagent_bench.support.collect.sweep import run_sparse_sweep
-    preset = resolve_preset(args.preset)  # 'fuzzed:seed' -> base 'fuzzed' + a seeds.fuzz override
+    preset = resolve_preset(args.preset)
     return run_sparse_sweep(args.framework, preset, args.validate, args.repeat, args.timeout, args.datatype,
                             args.benchmark, args.variant, args.ignore_errors)
 

@@ -1,23 +1,15 @@
 """Schema-validated kernel descriptor.
 
-:class:`BenchSpec` mirrors the existing ``bench_info/<name>.json``
-shape but with two improvements:
+:class:`BenchSpec` is the parsed form of a kernel's ``<stem>.yaml`` manifest, which sits next to the
+kernel's sources and is its single source of truth (:meth:`BenchSpec.from_yaml`). Kernels stay
+data-described rather than registered by a Python decorator, which keeps the contribution barrier
+low: no import side effects, and language-agnostic introspection.
 
-* Typo detection at load time -- :meth:`BenchSpec.from_dict` raises a
-  :class:`ValueError` naming the offending field and the kernel,
-  instead of letting the typo propagate into an ``exec`` frame and
-  surface as an opaque :class:`NameError` deep in the harness.
-* Forward-compatible fields for the AgentBench expansion
-  (``track``,
-  ``precisions``, per-precision ``rtol`` / ``atol`` overrides) all
-  default to back-compatible values so the existing 60-kernel corpus
-  continues to load unchanged.
-
-The class deliberately stops short of replacing the JSON with a
-Python registration decorator: kernels remain JSON-described,
-which keeps the contribution barrier low (no Python import side
-effects, JSON Schema validation in IDEs, language-agnostic
-introspection).
+* Typo detection at load time -- :meth:`BenchSpec.from_dict` raises a :class:`ValueError` naming the
+  offending field and the kernel, instead of letting the typo surface as an opaque
+  :class:`NameError` deep in the harness.
+* Derivable fields (``level`` from ``kind``, the per-precision ``rtol`` / ``atol`` band) resolve
+  from what the manifest states, so a manifest declares intent and not bookkeeping.
 """
 import ast
 import functools

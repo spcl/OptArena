@@ -169,6 +169,11 @@ def fail_row(task: Task,
                   tokens=tokens)
 
 
+def feedback_source(submission: Submission) -> str:
+    """The source the next-round prompt shows the agent -- a library submission has none to show."""
+    return submission.source or "(prebuilt library)"
+
+
 def _feedback(submission: Submission, result: Score, next_round: int) -> Dict:
     """The repair message for the next round of a FAILED attempt: the failure + the
     source to fix (``correct=False`` marks it the failure-framed branch of task.j2)."""
@@ -181,7 +186,7 @@ def _feedback(submission: Submission, result: Score, next_round: int) -> Dict:
                  f"{result.detail or 'numeric mismatch on hidden sizes'}. Make it general.")
     else:
         error = result.detail or "did not pass"
-    return {"round": next_round, "correct": False, "error": error, "source": submission.source or "(prebuilt library)"}
+    return {"round": next_round, "correct": False, "error": error, "source": feedback_source(submission)}
 
 
 def _improve_feedback(submission: Submission, best_speedup: float, next_round: int) -> Dict:
@@ -193,7 +198,7 @@ def _improve_feedback(submission: Submission, best_speedup: float, next_round: i
         "round": next_round,
         "correct": True,
         "speedup": best_speedup,
-        "source": submission.source or "(prebuilt library)",
+        "source": feedback_source(submission),
     }
 
 

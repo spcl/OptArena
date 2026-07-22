@@ -364,14 +364,6 @@ def _mpi_binding(kt: KernelTask):
     return spec, binding_from_spec(spec)
 
 
-def _mpi_distribution_json(kt: KernelTask, ranks: int) -> str:
-    """The ``distribution.json`` starter shipped with a distributed task: the kernel's default
-    1-D block layout over ``ranks`` (via :func:`distribution_for_kernel`, the SAME builder the
-    no-op MPI optimizer submits, so the starter is always a valid, gradeable layout)."""
-    spec, binding = _mpi_binding(kt)
-    return json.dumps(distribution_for_kernel(spec.mpi, binding, ranks), indent=2)
-
-
 def _mpi_instruction_md(task_id: str, kt: KernelTask, language: str, ranks: int, mode: str) -> str:
     """The leak-free distributed (MPI) prompt: point at the on-disk NumPy reference + the Sec. 12
     ``kernel_mpi`` stub the agent fills, and tell it to declare its data layout in
@@ -654,11 +646,13 @@ def write_task(task_id: str,
         (env_kdir / "reference.py").write_text(ref_text)
         (env_kdir / "signature.json").write_text(sig_text)
         if distributed:
-            # The starter is the Sec. 12 kernel_mpi signature to fill (never a solution) + a valid
-            # default 1-D block distribution the agent may keep or replace.
-            _spec, binding = _mpi_binding(kt)
+            # The starter is the Sec. 12 kernel_mpi signature to fill (never a solution) + the
+            # default 1-D block distribution, built by the SAME builder the no-op MPI optimizer
+            # submits, so it is always valid and gradeable. The agent may keep or replace it.
+            spec, binding = _mpi_binding(kt)
             (env_kdir / f"submission.{_ext(language)}").write_text(gen_kernel_mpi_stub(binding))
-            (env_kdir / "distribution.json").write_text(_mpi_distribution_json(kt, ranks))
+            (env_kdir / "distribution.json").write_text(
+                json.dumps(distribution_for_kernel(spec.mpi, binding, ranks), indent=2))
         else:
             (env_kdir / f"submission.{_ext(language)}").write_text(_stub(kt.row, language))
 
@@ -746,10 +740,10 @@ def generate(out_dir: str,
     commit = hf_export.repo_commit() if commit is None else commit
     base = pathlib.Path(out_dir)
     base.mkdir(parents=True, exist_ok=True)
-    pairs = _kernel_rows(selector, commit)
+    triples = _kernel_rows(selector, commit)
     if distributed:
-        pairs = _mpi_kernel_rows(pairs)
-    tasks = _plan_tasks(pairs, group, max_bundle)
+        triples = _mpi_kernel_rows(triples)
+    tasks = _plan_tasks(triples, group, max_bundle)
     _assert_unique_layout(tasks)  # never ship two tasks/kernels that would overwrite each other's files
     dirs: List[pathlib.Path] = []
     skipped = 0

@@ -177,6 +177,42 @@ def _render_argv(tokens: List[str], subst: Dict[str, str], *, cacheable_lang: Op
     return out
 
 
+def subst_map(cc: str,
+              *,
+              baseline: str = "",
+              src: str = "",
+              obj: str = "",
+              objs: str = "",
+              lib: str = "",
+              exe: str = "") -> Dict[str, str]:
+    """The token map a compile/link template renders against. Every key is always present:
+    :func:`_render_argv` does a plain ``str.format``, so a template naming ``{exe}`` on a
+    path that has none must still get an (empty) value rather than a ``KeyError``."""
+    return {
+        "cc": cc,
+        "baseline": baseline,
+        "src": str(src),
+        "obj": str(obj),
+        "objs": str(objs),
+        "lib": str(lib),
+        "exe": str(exe),
+    }
+
+
+#: Link-driver priority: the first language present wins, because its driver is the one that
+#: pulls in the runtime the others do not (nvcc/hipcc their device runtime, gfortran libgfortran,
+#: g++ libstdc++). A C driver links none of them, so it is the fallback.
+LINK_LANG_ORDER = ("cuda", "hip", "fortran", "cpp", "c")
+
+
+def link_lang_for(langs) -> str:
+    """The link driver for a set of compiled languages (see :data:`LINK_LANG_ORDER`)."""
+    for lang in LINK_LANG_ORDER:
+        if lang in langs:
+            return lang
+    return "c"
+
+
 def baseline_flags(lang: str) -> str:
     """The resolved single-core baseline compile-flag string for ``lang`` -- the value
     the ``{baseline}`` token expands to (e.g. ``-O3 -march=native -fopenmp
@@ -275,14 +311,7 @@ def compile_variant(
     obj = src.with_suffix(".o")
     lib = _backend_dir(spec) / f"lib{spec.short_name}.so"
 
-    subst = {
-        "cc": block["cc"],
-        "baseline": baseline,
-        "src": str(src),
-        "obj": str(obj),
-        "objs": str(obj),
-        "lib": str(lib),
-    }
+    subst = subst_map(block["cc"], baseline=baseline, src=src, obj=obj, objs=obj, lib=lib)
 
     return _render_argv(block["compile"], subst, cacheable_lang=lang)
 
@@ -337,7 +366,7 @@ wrap_kernel` dlopens. Flags resolve from :mod:`hpcagent_bench.flags` via
 
     cmds: List[List[str]] = []
     objs: List[str] = []
-    has_cpp = has_fortran = False
+    langs_present = set()
     for lang, src in sources:
         if lang not in LANG_EXT:
             raise KeyError(f"unknown language {lang!r}; expected one of {sorted(LANG_EXT)}")
@@ -345,36 +374,23 @@ wrap_kernel` dlopens. Flags resolve from :mod:`hpcagent_bench.flags` via
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
         baseline = _resolve_baseline(block, mode)
-        subst = {
-            "cc": block["cc"],
-            "baseline": f"{baseline} {extra_flags}".strip() if extra_flags else baseline,
-            "src": str(src),
-            "obj": str(obj),
-            "objs": str(obj),
-            "lib": str(out_so),
-        }
+        subst = subst_map(block["cc"],
+                          baseline=f"{baseline} {extra_flags}".strip() if extra_flags else baseline,
+                          src=src,
+                          obj=obj,
+                          objs=obj,
+                          lib=out_so)
         cmds.append(_render_argv(block["compile"], subst, cacheable_lang=lang))
         objs.append(str(obj))
-        has_cpp = has_cpp or lang == "cpp"
-        has_fortran = has_fortran or lang == "fortran"
+        langs_present.add(lang)
 
-    # Pick the link driver that pulls in the right runtime: a forced compiler
-    # wins (Polly/Pluto link with clang); else gfortran for Fortran objects
-    # (libgfortran), else the C++ driver
-    # when any C++ object is present, else the C driver.
+    # A forced compiler wins the link driver too (Polly/Pluto link with clang); else the
+    # runtime-priority order.
     if forced is not None:
         link_block = forced
     else:
-        link_lang = "fortran" if has_fortran else ("cpp" if has_cpp else "c")
-        _, link_block = _compiler_for_lang(compilers, link_lang)
-    link_subst = {
-        "cc": link_block["cc"],
-        "baseline": "",
-        "src": "",
-        "obj": "",
-        "objs": " ".join(objs),
-        "lib": str(out_so),
-    }
+        _, link_block = _compiler_for_lang(compilers, link_lang_for(langs_present))
+    link_subst = subst_map(link_block["cc"], objs=" ".join(objs), lib=out_so)
     link_argv = _render_argv(link_block["link"], link_subst)
     link_argv.extend(link_block.get("link_extra") or [])
     if extra_flags:  # Polly/Pluto need -fopenmp -lgomp at link too
@@ -460,43 +476,21 @@ def build_mpi_executable_commands(
         _, block = _compiler_for_lang(compilers, lang, mpi=True)
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
-        subst = {
-            "cc": cc_override.get(lang, block["cc"]),
-            "baseline": _resolve_baseline(block, mode),
-            "src": str(src),
-            "obj": str(obj),
-            "objs": str(obj),
-            "lib": "",
-            "exe": str(out_exe),
-        }
+        subst = subst_map(cc_override.get(lang, block["cc"]),
+                          baseline=_resolve_baseline(block, mode),
+                          src=src,
+                          obj=obj,
+                          objs=obj,
+                          exe=out_exe)
         argv = _render_argv(block["compile"], subst)
         argv.extend(extra_compile)  # -I/-D dependency tokens on the compile step
         cmds.append(argv)
         objs.append(str(obj))
         langs_present.add(lang)
 
-    # Link with the block whose runtime must be pulled: a GPU family (nvcc/hipcc auto-link their
-    # own runtime) when a device driver/kernel is present, else Fortran > C++ > C.
-    if "cuda" in langs_present:
-        link_lang = "cuda"
-    elif "hip" in langs_present:
-        link_lang = "hip"
-    elif "fortran" in langs_present:
-        link_lang = "fortran"
-    elif "cpp" in langs_present:
-        link_lang = "cpp"
-    else:
-        link_lang = "c"
+    link_lang = link_lang_for(langs_present)
     _, link_block = _compiler_for_lang(compilers, link_lang, mpi=True)
-    link_subst = {
-        "cc": cc_override.get(link_lang, link_block["cc"]),
-        "baseline": "",
-        "src": "",
-        "obj": "",
-        "objs": " ".join(objs),
-        "lib": "",
-        "exe": str(out_exe),
-    }
+    link_subst = subst_map(cc_override.get(link_lang, link_block["cc"]), objs=" ".join(objs), exe=out_exe)
     link_argv = _render_argv(link_block["link"], link_subst)
     link_argv.extend(link_block.get("link_extra") or [])
     link_argv.extend(extra_link)  # -l/-L dependency tokens on the link step
@@ -554,14 +548,7 @@ def build_shared_lib_commands(
     # sharing a stem in one workdir do not clobber each other's object.
     obj = src.with_name(src.name + ".o")
     baseline = _resolve_baseline(block, mode)
-    subst = {
-        "cc": block["cc"],
-        "baseline": baseline,
-        "src": str(src),
-        "obj": str(obj),
-        "objs": str(obj),
-        "lib": str(out_so),
-    }
+    subst = subst_map(block["cc"], baseline=baseline, src=src, obj=obj, objs=obj, lib=out_so)
 
     cmds: List[List[str]] = [_render_argv(block["compile"], subst, cacheable_lang=lang)]
     if extra_compile:

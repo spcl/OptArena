@@ -138,8 +138,7 @@ class SuiteScore:
     overall_speedup: float  # harmonic mean of S_i over solved (time-weighted)
     per_dwarf: Dict[str, float]  # dwarf -> geomean S_i within that dwarf
     n_tasks: int
-    n_solved: int
-    verified_count: int  # tasks correct+verified across all iterations
+    n_solved: int  # TaskScore.solved already means correct AND verified, so this IS the verified count
     suspect_count: int
     total_tokens: int = 0  # tokens spent across all tasks (the cost axis)
     score_per_mtoken: float = 0.0  # hpcagent_bench_score per million tokens (speedup-per-token)
@@ -456,7 +455,6 @@ def aggregate(task_scores: Sequence[TaskScore]) -> SuiteScore:
                       per_dwarf=per_dwarf,
                       n_tasks=n,
                       n_solved=len(solved),
-                      verified_count=len(solved),
                       suspect_count=sum(t.suspect_count for t in ts),
                       total_tokens=total_tokens,
                       score_per_mtoken=(hpcagent_bench_score / (total_tokens / 1.0e6) if total_tokens else 0.0),

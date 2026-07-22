@@ -232,6 +232,12 @@ def blockcyclic_distribution_from_shapes(array_shapes: Dict[str, Sequence[str]],
     return {"grid": list(grid.dims), "arrays": arrays}
 
 
+def binding_shapes(binding: "Binding") -> Dict[str, Sequence[str]]:
+    """The declarative shape of every pointer that has one -- the array_shapes map the
+    distribution builders take."""
+    return {p.name: p.shape for p in binding.pointers if p.shape is not None}
+
+
 def distribution_over_symbol(binding: "Binding",
                              axis_symbols: Sequence[str],
                              ranks: int,
@@ -239,8 +245,7 @@ def distribution_over_symbol(binding: "Binding",
                              scheme: str = "block",
                              block_size: int = 1) -> dict:
     """A submission-style distribution dict splitting, over a 1-D grid, each array axis named by axis_symbols."""
-    shapes = {p.name: p.shape for p in binding.pointers if p.shape is not None}
-    return distribution_from_shapes(shapes, axis_symbols, ranks, scheme=scheme, block_size=block_size)
+    return distribution_from_shapes(binding_shapes(binding), axis_symbols, ranks, scheme=scheme, block_size=block_size)
 
 
 def distribution_for_kernel(mpi_block: Optional[dict],
@@ -260,7 +265,7 @@ def distribution_for_kernel(mpi_block: Optional[dict],
         # A multi-dim block-cyclic decomposition deals array-axis-d over grid-dim-d, so it needs
         # each array's rank (axis count), not a named split axis. Read shapes from the manifest
         # map or the binding's declarative shapes.
-        shapes = manifest_shapes or {p.name: p.shape for p in binding.pointers if p.shape is not None}
+        shapes = manifest_shapes or binding_shapes(binding)
         return blockcyclic_distribution_from_shapes(shapes, ranks, grid_ndim=grid_ndim, block_size=block_size)
     # 1-D grid: thread block_size, else a block_cyclic decomposition degrades to unit-block cyclic
     if manifest_shapes:

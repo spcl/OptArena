@@ -6,7 +6,7 @@ import importlib
 import pathlib
 import time
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -37,20 +37,27 @@ def _data_seeded(kernel: str,
                                       params_override=params_override)
 
 
-def _grade(spec: BenchSpec, expected: Dict, actual: Dict, rtol: float, atol: float) -> Tuple[bool, float, str]:
-    """Compare actual to expected on every output (rtol/atol); returns (ok, max_rel_error, detail)."""
+def combine_grades(graded: Iterable[Tuple[bool, float, str]]) -> Tuple[bool, float, str]:
+    """Fold per-item ``(ok, err, detail)`` into one verdict: correct requires ALL, the error is the
+    worst seen, and the detail is the FIRST failure's (later ones would bury it)."""
     ok = True
     max_err = 0.0
     detail = ""
-    for name in spec.output_args:
-        # complex-aware, NaN/+-Inf-aware; shared with the judge
-        good, err, det = compare_arrays(expected[name], actual[name], rtol=rtol, atol=atol)
+    for good, err, det in graded:
         max_err = max(max_err, err)
         if not good:
             ok = False
             if not detail:
-                detail = f"{name}: {det}"
+                detail = det
     return ok, max_err, detail
+
+
+def _grade(spec: BenchSpec, expected: Dict, actual: Dict, rtol: float, atol: float) -> Tuple[bool, float, str]:
+    """Compare actual to expected on every output (rtol/atol); returns (ok, max_rel_error, detail)."""
+    # compare_arrays is complex-aware, NaN/+-Inf-aware; shared with the judge
+    per_output = ((name, compare_arrays(expected[name], actual[name], rtol=rtol, atol=atol))
+                  for name in spec.output_args)
+    return combine_grades((good, err, f"{name}: {det}") for name, (good, err, det) in per_output)
 
 
 def _import_reference(spec: BenchSpec):
@@ -250,17 +257,9 @@ def build_reference_lib(root: pathlib.Path, spec: BenchSpec, task: Task, binding
 def _grade_against(spec: BenchSpec, references: Dict[str, Dict], actual: Dict, rtol: float,
                    atol: float) -> Tuple[bool, float, str]:
     """Grade actual against every selected reference; correct requires a match against ALL of them."""
-    ok = True
-    max_err = 0.0
-    detail = ""
-    for ref_name, expected in references.items():
-        good, err, det = _grade(spec, expected, actual, rtol, atol)
-        max_err = max(max_err, err)
-        if not good:
-            ok = False
-            if not detail:
-                detail = f"vs {ref_name}: {det or 'numeric mismatch'}"
-    return ok, max_err, detail
+    per_ref = ((ref_name, _grade(spec, expected, actual, rtol, atol)) for ref_name, expected in references.items())
+    return combine_grades(
+        (good, err, f"vs {ref_name}: {det or 'numeric mismatch'}") for ref_name, (good, err, det) in per_ref)
 
 
 def run_compiled_reference(spec: BenchSpec,

@@ -33,7 +33,7 @@ class Agent(ABC):
 
     name: str = "agent"
 
-    def solve(self, task: Task, prompt: str = "", budget: "Optional[object]" = None) -> Submission:
+    def solve(self, task: Task, prompt: str = "", budget: Optional[object] = None) -> Submission:
         """Build the prompt if needed, run complete_fn or _backend, and parse the reply into a Submission."""
         if not prompt:
             from hpcagent_bench.harness.prompts import build_prompt
@@ -41,7 +41,7 @@ class Agent(ABC):
         reply = self._complete_fn(prompt) if self._complete_fn is not None else self._backend(prompt, budget)
         return Submission.from_response(reply, default_language=task.language)
 
-    def _backend(self, prompt: str, budget: "Optional[object]") -> str:
+    def _backend(self, prompt: str, budget: Optional[object]) -> str:
         """The model call for a model agent. Non-model agents override solve() and never reach here."""
         raise NotImplementedError
 
@@ -55,7 +55,7 @@ class Agent(ABC):
         self.__dict__["_usage"] = self.usage + TokenUsage(input_tokens, output_tokens, cached_tokens)
 
 
-def budget_tokens(budget: "object", default: int) -> int:
+def budget_tokens(budget: object, default: int) -> int:
     """Resolve an agent token ceiling from the unified budget: OptimizeBudget.cost, a bare int, or default."""
     from hpcagent_bench.optimize import OptimizeBudget
     if isinstance(budget, OptimizeBudget):

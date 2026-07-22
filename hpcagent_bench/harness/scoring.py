@@ -177,6 +177,12 @@ def _verify_triad(spec, o1, o2, np_public, re_out, np_re, c_public, rtol, atol, 
     return determinism_ok, reverify_ok, True, False
 
 
+def implausible_speedup(speedup: float, above: float) -> bool:
+    """A speedup no real kernel reaches (non-finite, or over ``above``) -- the flag that sends a
+    result to the harder verify path."""
+    return (not np.isfinite(speedup)) or (speedup > float(above))
+
+
 def independent_verify(submission: Submission,
                        task: Task,
                        score_result: "Score",
@@ -206,7 +212,7 @@ def independent_verify(submission: Submission,
     device = task.residency == "device"
     timeout = float(config.get("timeouts.kernel_s", 300))
     memory_gb = float(config.get("limits.kernel_memory_gb", 10))
-    suspect = (not np.isfinite(score_result.speedup)) or (score_result.speedup > float(suspect_above))
+    suspect = implausible_speedup(score_result.speedup, suspect_above)
 
     # Distributed submissions re-verify through their own MPI path, which sizes at the scored
     # (weak-grown) base preset rather than this single-node verify preset (see _verify_distributed).
@@ -704,13 +710,8 @@ def _verify_distributed(submission: Submission, task: Task, spec: BenchSpec, bin
                                        workspace_bytes=submission.workspace_bytes)
                 return outs
 
-            # ONE comparator: cross-rank determinism (o1 vs o2, tolerant) AND correctness vs the
-            # whole-domain NumPy oracle (np_public vs o1), then the fresh-seed re-verify -- each the
-            # same rtol/atol allclose _grade applies on the single-node path.
             o1, o2 = _run(data), _run(data)
-            # bitwise=False: a cross-rank float reduction is not bit-reproducible, so
-            # determinism uses the tolerant _grade (via _verify_triad); dual-oracle N/A
-            # (the reference is already the whole-domain NumPy oracle).
+            # bitwise=False: a cross-rank reduction is not bit-reproducible (see the docstring).
             determinism_ok, reverify_ok, _, _ = _verify_triad(spec,
                                                               o1,
                                                               o2,
@@ -1327,7 +1328,7 @@ def score_cells(submission: Submission,
                 speedup, suspect = 0.0, False
                 if timed and correct and native_samples and base_samples:
                     speedup = timing.reduce(native_samples, base_samples).speedup
-                    suspect = (not np.isfinite(speedup)) or (speedup > float(suspect_above))
+                    suspect = implausible_speedup(speedup, suspect_above)
                 results.append(
                     CellScore(label,
                               timed,

@@ -216,15 +216,16 @@ class JudgeHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _task(self, parts) -> Tuple[Optional[str], str]:
+    def _task(self, parts, qs) -> Tuple[Optional[str], str]:
         """(kernel, language) from ``/<verb>/<kernel>?language=`` -- or (None, ...)."""
-        qs = parse_qs(urlparse(self.path).query)
         language = (qs.get("language") or ["c"])[0]
         kernel = parts[1] if len(parts) > 1 and parts[1] else None
         return kernel, language
 
     def do_GET(self):
-        parts = urlparse(self.path).path.strip("/").split("/")
+        url = urlparse(self.path)
+        parts = url.path.strip("/").split("/")
+        qs = parse_qs(url.query)
         route = parts[0]  # str.split("/") is never empty, so parts[0] is always safe
         if route == "health":
             return self._send(
@@ -235,7 +236,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
                     "input_mode": self.cfg.input_mode.value
                 })
         if route == "task":
-            kernel, language = self._task(parts)
+            kernel, language = self._task(parts, qs)
             if not kernel:
                 return self._send(400, {"error": "usage: GET /task/<kernel>?language=c"})
             try:
@@ -243,8 +244,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001 -- unknown kernel etc. -> 404
                 return self._send(404, {"error": f"no task for {kernel!r}: {exc}"})
         if route == "baseline":
-            kernel, language = self._task(parts)
-            qs = parse_qs(urlparse(self.path).query)
+            kernel, language = self._task(parts, qs)
             preset = (qs.get("preset") or [self.cfg.preset])[0]
             if not kernel:
                 return self._send(400, {"error": "usage: GET /baseline/<kernel>?language=c&preset=S"})
