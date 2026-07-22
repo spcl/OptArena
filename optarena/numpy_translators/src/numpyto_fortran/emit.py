@@ -10,7 +10,7 @@ from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.emitter import BaseEmitter
-from numpyto_common.frontend import pure_int_arith
+from numpyto_common.frontend import _names_used_as_int
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -2557,57 +2557,6 @@ def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
                 out.append((node.target.id, _classify(node.target.id)))
                 seen.add(node.target.id)
     return out
-
-
-def _names_used_as_int(tree: ast.AST) -> Set[str]:
-    """Names that flow into an integer-only position (subscript/range arg), walking BinOps/UnaryOps/Call args."""
-    int_uses: Set[str] = set()
-
-    def collect(node):
-        if node is None:
-            return
-        if isinstance(node, ast.Name):
-            int_uses.add(node.id)
-        elif isinstance(node, ast.BinOp):
-            collect(node.left)
-            collect(node.right)
-        elif isinstance(node, ast.UnaryOp):
-            collect(node.operand)
-        elif isinstance(node, ast.Call):
-            for arg in node.args:
-                collect(arg)
-        elif isinstance(node, ast.Subscript):
-            collect(node.value)
-            sl = node.slice
-            elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
-            for e in elts:
-                collect(e)
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Subscript):
-            sl = node.slice
-            elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
-            for e in elts:
-                collect(e)
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range"):
-            for arg in node.args:
-                collect(arg)
-    # Fixed-point propagation: when X is int-typed and X = expr assigns from
-    # another Name Y, Y is also int-typed. Bounded by pure_int_arith so the
-    # closure never propagates BACKWARD across a float divide/sqrt or an
-    # int(...) truncation (else e.g. ri = int(rs) would mistype the whole
-    # real-valued rs expression chain as integer).
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id in int_uses and pure_int_arith(node.value)):
-                before = len(int_uses)
-                collect(node.value)
-                if len(int_uses) > before:
-                    changed = True
-    return int_uses
 
 
 def _collect_for_targets(stmts: List[ast.stmt]) -> Set[str]:
