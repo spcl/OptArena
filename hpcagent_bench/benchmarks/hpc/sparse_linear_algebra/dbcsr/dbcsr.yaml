@@ -3,6 +3,7 @@
 name: DBCSR block-sparse matrix multiply
 short_name: dbcsr
 kind: microkernel
+level: 2
 parameters:
   S:
     n_block_rows: 8

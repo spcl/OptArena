@@ -185,7 +185,7 @@ of the shape.
   a hint can branch on `{{ language }}`, `{{ precision }}`, `{{ subtrack }}`, `{{ residency }}`.
   A hint whose body gates off renders empty and is dropped, so a `{% if language == "fortran" %}`
   hint costs nothing for a C task.
-- **Variants** set `PromptConfig.hints` to their own filename (say `hints_gpu.j2`); each level
+- **Variants** set `PromptConfig.hints` to their own filename (`hints_<variant>.j2`); each level
   that does not carry one falls back to the plain `hints.j2`, so a variant overrides the levels
   it cares about and inherits the rest. `hints: ""` disables the chain -- that is the built-in
   `no_hints` variant, the ablation control against `default`.

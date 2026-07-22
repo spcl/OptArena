@@ -3,6 +3,7 @@
 name: 2D Matrix Row-Major Reduction
 short_name: reduce_2d
 kind: microbench
+level: 1
 parameters:
   S:
     N: 1024

@@ -3,6 +3,7 @@
 name: SRAD
 short_name: srad
 kind: microapp
+level: 3
 parameters:
   S:
     rows: 256

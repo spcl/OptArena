@@ -3,6 +3,7 @@
 name: ExaMiniMD Lennard-Jones force kernel
 short_name: examinimd
 kind: microapp
+level: 3
 parameters:
   S:
     cells_per_dim: 4

@@ -24,7 +24,9 @@ from tests import macrokernel_oracle as mo
 
 _HERE = pathlib.Path(__file__).resolve().parent
 _BENCH = _HERE.parent / "hpcagent_bench" / "benchmarks" / "hpc" / "unstructured_grids" / "velocity_tendencies"
-_CPP = _BENCH / "baseline" / "velocity_tendencies_generated.cpp"
+#: The emitted C++ travels with the port test, not the benchmark tree -- 55c3e0aa moved
+#: baseline/ under tests/ports/ and this path was left behind.
+_CPP = _HERE / "ports" / "velocity_tendencies" / "baseline" / "velocity_tendencies_generated.cpp"
 _KERNEL = "velocity_tendencies"
 
 pytestmark = pytest.mark.skipif(not mo.have_oracle_toolchain(), reason="c++ compiler or dace headers absent")

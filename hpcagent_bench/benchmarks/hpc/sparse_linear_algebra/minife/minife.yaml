@@ -3,6 +3,7 @@
 name: MiniFE conjugate-gradient sparse matrix kernel
 short_name: minife
 kind: microapp
+level: 3
 parameters:
   S:
     nx: 8

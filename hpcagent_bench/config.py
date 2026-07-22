@@ -149,6 +149,7 @@ class PromptSettings(Section):
     optimization_guidance: bool = True
     language_track: bool = False
     native: bool = False
+    hints: str = "hints.j2"
     # No rtol/atol: the tolerance comes from the precision matrix the scorer grades with.
 
 

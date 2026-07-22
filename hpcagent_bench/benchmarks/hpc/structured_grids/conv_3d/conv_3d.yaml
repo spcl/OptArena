@@ -3,6 +3,7 @@
 name: 125-point 3D Stencil
 short_name: conv_3d
 kind: microbench
+level: 1
 parameters:
   S:
     N: 64

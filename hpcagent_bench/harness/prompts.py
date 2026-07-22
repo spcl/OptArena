@@ -62,7 +62,7 @@ class PromptConfig:
     include_original: bool = False  # offer the original ported source when one is present
     strategy: str = "default"  # named optimization strategy (see STRATEGIES)
     # Filename collected at each level of the hint chain (see :func:`collect_hints`). A variant
-    # names its own file (e.g. "hints_gpu.j2") and each level that lacks one falls back to the
+    # names its own file (e.g. "hints_<variant>.j2") and each level that lacks one falls back to the
     # plain "hints.j2", so a variant overrides one level without restating the rest. Empty
     # disables the chain.
     hints: str = "hints.j2"
