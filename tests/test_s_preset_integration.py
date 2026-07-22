@@ -52,7 +52,10 @@ pytestmark = pytest.mark.skipif(not os.environ.get("OPTARENA_RUN_INTEGRATION"),
 
 # Load errors that mean "this kernel/framework pairing has no implementation"
 # (vs. a real build/validation failure, which must surface).
-_NO_IMPL = (FileNotFoundError, ImportError, ModuleNotFoundError, AttributeError)
+# A framework simply has no implementation for this kernel: the file is absent, or its
+# module needs a package this environment does not have. NOT AttributeError -- that is the
+# adapter reaching for something that does not exist, i.e. a bug, and it used to skip.
+_NO_IMPL = (FileNotFoundError, ImportError, ModuleNotFoundError)
 
 
 def _benchmark_names():

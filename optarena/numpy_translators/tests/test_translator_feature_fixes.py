@@ -378,10 +378,7 @@ def _oracle():
     p = str(repo / "tests")
     if p not in sys.path:
         sys.path.insert(0, p)
-    try:
-        import numerical_oracle as no
-    except Exception:  # noqa: BLE001
-        pytest.skip("numerical_oracle unavailable")
+    import numerical_oracle as no  # ships in this repo -- an import failure is a real break
     import shutil
     if not (shutil.which("gcc") and shutil.which("gfortran")):
         pytest.skip("gcc/gfortran needed for the native e2e check")

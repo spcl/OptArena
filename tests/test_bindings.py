@@ -1,7 +1,6 @@
 # Copyright 2021 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Canonical C-ABI binding generation: pins the load-bearing guarantees of abi_contract.md."""
-import pytest
 
 from optarena.support.bindings import (
     PackedGroup,
@@ -12,19 +11,11 @@ from optarena.support.bindings import (
 from optarena.support.bindings.stubs import LANGS
 from optarena.spec import BenchSpec
 
-
-def _load(name):
-    try:
-        return BenchSpec.load(name)
-    except Exception as exc:  # pragma: no cover - environment-dependent
-        pytest.skip(f"{name} spec unavailable: {exc}")
-
-
 # --- Dense kernel: gemm --- #
 
 
 def test_gemm_canonical_order_and_constness():
-    spec = _load("gemm")
+    spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
 
     ptr_names = [a.name for a in b.args if a.kind == "ptr"]
@@ -55,7 +46,7 @@ def test_gemm_canonical_order_and_constness():
 
 
 def test_gemm_has_no_timer_arg():
-    spec = _load("gemm")
+    spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
     # timing is harness-owned externally (Sec. 6): no timer in the args or the JSON.
     assert all(a.name != "time_ns" for a in b.args)
@@ -66,7 +57,7 @@ def test_gemm_has_no_timer_arg():
 
 
 def test_gemm_stub_has_signature_and_todo_not_reference():
-    spec = _load("gemm")
+    spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
     for lang in LANGS:
         stub = gen_call_stub(b, lang)
@@ -91,7 +82,7 @@ def test_gemm_stub_has_signature_and_todo_not_reference():
 
 
 def test_gemm_host_glue_forwards_pure():
-    spec = _load("gemm")
+    spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
     glue = gen_host_glue(b)
     assert "gemm_pure" in glue
@@ -100,7 +91,7 @@ def test_gemm_host_glue_forwards_pure():
 
 
 def test_gemm_json_round_trip():
-    spec = _load("gemm")
+    spec = BenchSpec.load("gemm")
     b = binding_from_spec(spec)
     j = b.to_json()
     assert j["kernel"] == "gemm"
@@ -121,9 +112,8 @@ def test_gemm_json_round_trip():
 
 
 def test_spmv_packed_group_and_order():
-    spec = _load("spmv")
-    if not spec.configurations:
-        pytest.skip("spmv has no sparse configurations")
+    spec = BenchSpec.load("spmv")
+    assert spec.configurations, "spmv declares its sparse configurations in-repo; losing them is the bug"
     b = binding_from_spec(spec, config="csr")
 
     # Sec. 3: A is a packed group with ordered member buffers.
@@ -156,9 +146,8 @@ def test_spmv_packed_group_and_order():
 
 
 def test_spmv_host_glue_unpacks_handle():
-    spec = _load("spmv")
-    if not spec.configurations:
-        pytest.skip("spmv has no sparse configurations")
+    spec = BenchSpec.load("spmv")
+    assert spec.configurations, "spmv declares its sparse configurations in-repo; losing them is the bug"
     b = binding_from_spec(spec, config="csr")
     glue = gen_host_glue(b)
     # The wrapper documents the unpack of the logical handle into members (Sec. 3).
