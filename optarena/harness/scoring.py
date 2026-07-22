@@ -522,7 +522,7 @@ def score(submission: Submission,
     # as the denominator. A missing compiler / a kernel that won't build under it is skipped; if
     # none build, fall back to numpy.
     if plan.bl_is_autopar:
-        label, lang, compilers, _mode = plan.compiled
+        label, lang, compilers, bl_mode = plan.compiled
         best_samples = None
         for compiler in compilers:
             try:
@@ -534,7 +534,7 @@ def score(submission: Submission,
                                                                 timeout,
                                                                 memory_gb,
                                                                 language=lang,
-                                                                mode=Mode.MULTI_CORE,
+                                                                mode=bl_mode,
                                                                 compiler=compiler or None,
                                                                 warmup=timing.warmup_count())
             except RuntimeError:
@@ -1183,7 +1183,7 @@ def score_cells(submission: Submission,
                                                         task,
                                                         binding,
                                                         language=plan.bl_lang,
-                                                        mode=Mode.MULTI_CORE,
+                                                        mode=plan.compiled[3],
                                                         compiler=(compiler or None))
                 except Exception:  # noqa: BLE001 -- this candidate is unavailable / won't build
                     ok, lib = False, None

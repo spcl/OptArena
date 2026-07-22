@@ -192,7 +192,9 @@ of the shape.
 
 **Adding one is one file, no code and no registration:** write a sentence or two of Markdown
 into `hints.j2` in the directory whose kernels it applies to. `optarena prompt <kernel>` shows
-the result immediately.
+the result immediately, and `optarena prompt <kernel> --hints` prints the chain itself -- every
+directory searched and the file picked up there -- so a hint that lands in the wrong directory,
+or under a misspelled name, shows up as a `-` instead of silently never rendering.
 
 ### Why the prompt is built this way
 
