@@ -18,39 +18,31 @@ parameters:
     np_particles: 512
     ncells: 16
     depos_order: 3
-    geom: 3
-    n_rz_azimuthal_modes: 1
-    do_ionization: 0
-    enable_reduced_shape: 0
-    seed: 0
   M:
     np_particles: 8192
     ncells: 24
     depos_order: 3
-    geom: 3
-    n_rz_azimuthal_modes: 1
-    do_ionization: 0
-    enable_reduced_shape: 0
-    seed: 0
   L:
     np_particles: 65536
     ncells: 32
     depos_order: 3
-    geom: 3
-    n_rz_azimuthal_modes: 1
-    do_ionization: 0
-    enable_reduced_shape: 0
-    seed: 0
   XL:
     np_particles: 1048576
     ncells: 48
     depos_order: 3
+init:
+  # Config knobs, constant across the size presets (not dimensions): the geometry
+  # selector (3 = 3D), the number of RZ azimuthal modes, the ionization and
+  # reduced-shape (embedded-boundary) toggles, and the RNG seed. ``parameters``
+  # above keeps only the size symbols that appear in the shape expressions
+  # (np_particles / ncells / depos_order); these knobs are merged into the
+  # initializer/kernel call by name.
+  scalars:
     geom: 3
     n_rz_azimuthal_modes: 1
     do_ionization: 0
     enable_reduced_shape: 0
     seed: 0
-init:
   shapes:
     Jx: (ncells + 2 * depos_order + 6, ncells + 2 * depos_order + 6, ncells + 2 * depos_order + 6, 1)
     Jy: (ncells + 2 * depos_order + 6, ncells + 2 * depos_order + 6, ncells + 2 * depos_order + 6, 1)

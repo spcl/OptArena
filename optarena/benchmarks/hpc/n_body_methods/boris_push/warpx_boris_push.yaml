@@ -9,25 +9,21 @@ level: 3
 parameters:
   S:
     np_particles: 4096
-    dt: 1.0e-13
-    momentum_push_type: 0
-    seed: 0
   M:
     np_particles: 262144
-    dt: 1.0e-13
-    momentum_push_type: 0
-    seed: 0
   L:
     np_particles: 4194304
-    dt: 1.0e-13
-    momentum_push_type: 0
-    seed: 0
   XL:
     np_particles: 67108864
+init:
+  # Config knobs, constant across the size presets (not dimensions): the timestep,
+  # the MomentumPushType branch selector (0=Full / 1=FirstHalf / 2=SecondHalf), and
+  # the RNG seed. Kept out of ``parameters`` (which holds only size symbols) and
+  # merged into the initializer/kernel call by name.
+  scalars:
     dt: 1.0e-13
     momentum_push_type: 0
     seed: 0
-init:
   shapes:
     Bx: (np_particles,)
     By: (np_particles,)
