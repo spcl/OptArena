@@ -1,6 +1,5 @@
 # Copyright 2026 ETH Zurich and the OptArena authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 """Numerical validation for the standalone CP2K TRS4 density-matrix extraction."""
 
 import ctypes
@@ -13,10 +12,11 @@ import pytest
 
 from optarena import paths
 from optarena.benchmarks.hpc.sparse_linear_algebra.cp2k_density_matrix_trs4.cp2k_density_matrix_trs4 import (
-    initialize,
-)
+    initialize, )
 from optarena.benchmarks.hpc.sparse_linear_algebra.cp2k_density_matrix_trs4.cp2k_density_matrix_trs4_numpy import (
-    STATE_SIZE, blocked_csr_multiply, cp2k_density_matrix_trs4,
+    STATE_SIZE,
+    blocked_csr_multiply,
+    cp2k_density_matrix_trs4,
 )
 from optarena.frameworks import Benchmark
 from optarena.frameworks.test import tolerances_for
@@ -62,13 +62,8 @@ def fortran_reference(tmp_path_factory):
     if compiler is None:
         pytest.skip("gfortran is not installed")
 
-    fortran_source = (
-        paths.BENCHMARKS
-        / "hpc"
-        / "sparse_linear_algebra"
-        / "cp2k_density_matrix_trs4"
-        / "cp2k_density_matrix_trs4_original.f90"
-    )
+    fortran_source = (paths.BENCHMARKS / "hpc" / "sparse_linear_algebra" / "cp2k_density_matrix_trs4" /
+                      "cp2k_density_matrix_trs4_original.f90")
     build_dir = tmp_path_factory.mktemp("cp2k_density_matrix_trs4_fortran")
     library = build_dir / "libcp2k_density_matrix_trs4_ref.dylib"
     subprocess.run(
