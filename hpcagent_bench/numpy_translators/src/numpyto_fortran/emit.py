@@ -776,14 +776,16 @@ class _FortranBodyEmitter(BaseEmitter):
 
     def emit_expr(self, node: ast.AST) -> str:
         """Emit an expression, rounding a float BinOp result back to the fp8 grid when the kernel computes in fp8,
-        and re-wrapping a narrow-int +/-/* result back to its element width. INT(x, narrow_kind) two's-complement
-        wraps (verified: INT(200, c_int8_t) == -56), matching numpy's wrap; the wide compute otherwise would not."""
+        and re-wrapping a narrow-int +/-/* result back to its element width. The inner INT(x, narrow_kind)
+        two's-complement wraps (verified: INT(200, c_int8_t) == -56), matching numpy's wrap; the outer INT
+        re-widens to the int64 ABI kind the emitter computes narrow reads in, so the wrapped value still composes
+        with its int64 siblings (nussinov's ``max(table, a + b)`` mixes the two, and gfortran rejects mixed kinds)."""
         text = self._emit_expr_inner(node)
         if isinstance(node, ast.BinOp):
             text = self._fp8_round(node, text)
         wrap = narrow_int.wrap_dtype(node, self._wrap_name_dtype)
         if wrap is not None:
-            text = f"INT(({text}), {self._int_kind_selector(self._int_tag(wrap))})"
+            text = f"INT(INT(({text}), {self._int_kind_selector(self._int_tag(wrap))}), {self._int_kind_selector()})"
         return text
 
     def _wrap_name_dtype(self, name: str) -> Optional[str]:
