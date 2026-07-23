@@ -153,7 +153,17 @@ class _NanAwareMinMaxSign(ast.NodeTransformer):
             a, b = node.args
             cond = ast.BinOp(left=self._is_nan(a), op=ast.BitOr(), right=self._is_nan(b))
             asum = ast.BinOp(left=copy.deepcopy(a), op=ast.Add(), right=copy.deepcopy(b))
-            return ast.copy_location(self._where(cond, asum, node), node)
+            # Materialize the result with np.array(). A loop-carried running max/min
+            # (max_filter's ``h = np.maximum(h, p[:, d:d+W])`` over a slice window) becomes
+            # ``h = np.where(cond(h), h + .., np.maximum(h, ..))`` -- SELF-REFERENTIAL: h is in the
+            # condition and both branches. pythran compiles that as a LAZY expression template and
+            # reads h while rebuilding it, so the next iteration folds a stale/aliased h and the
+            # result is silently wrong (bit-exact under pure numpy; wrong only once pythran
+            # compiles it). Forcing an eager copy breaks the lazy self-reference. Verified: fixes
+            # max_filter and still propagates NaN (the reason this rewrite exists).
+            where = self._where(cond, asum, node)
+            materialized = ast.Call(func=self._np_attr("array"), args=[where], keywords=[])
+            return ast.copy_location(materialized, node)
         if f.attr == "sign" and len(node.args) == 1:
             a = node.args[0]
             return ast.copy_location(self._where(self._is_nan(a), copy.deepcopy(a), node), node)
@@ -408,16 +418,27 @@ def emit_pythran(numpy_source: str, kir: KernelIR) -> str:
 
     # ``_clean_for_pythran`` may rename a reserved param, but never reorders or
     # drops one, so the ORIGINAL names still index the kir type maps positionally.
+    # Params carrying a DEFAULT are OPTIONAL. The frontend types only the manifest's
+    # ``input_args``, and the oracle likewise calls with exactly those -- a prefix of the def
+    # params -- so a trailing optional the manifest omits is never passed and simply keeps its
+    # Python default in the body (the native path folds those ``if x is None`` branches away
+    # instead). Exporting it would demand a dtype nothing ever resolved: QE vexx_k declares 15
+    # such kwargs (coulomb_fac_q, qgm_q, ...) after its manifest args and tripped the guard
+    # below. Truncate the export at the first unclassified OPTIONAL param; a REQUIRED one with
+    # no dtype is still a loud failure, which is what the guard is for.
+    n_required = len(kfn.args.args) - len(kfn.args.defaults)
     types: List[str] = []
-    for arg in def_params:
+    for idx, arg in enumerate(def_params):
         if arg in sym_by_name:
             types.append("int")
         elif arg in arr_by_name:
             types.append(_pythran_array_type(arr_by_name[arg]))
         elif arg in sca_by_name:
             types.append(_pythran_scalar_type(sca_by_name[arg].dtype, f"scalar {arg!r}"))
+        elif idx >= n_required:
+            break  # optional + untyped -> stop exporting here; the body keeps its default
         else:
-            # A def param the frontend did not classify as symbol / array / scalar
+            # A REQUIRED def param the frontend did not classify as symbol / array / scalar
             # has no known dtype. Defaulting to float64 (the old behaviour) silently
             # type-puns a bool / int argument in the oracle's positional call --
             # exactly the miscompile this emitter must never produce. Fail loudly.

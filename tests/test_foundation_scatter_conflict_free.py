@@ -5,7 +5,7 @@
 Every foundation index-array scatter (``dst[idx[i]] = ...``) is graded on data
 whose scatter-target index is INJECTIVE, so a parallel scatter is always the
 correct/preferred lowering (no two iterations write the same cell -> no atomics,
-no serialization). This is not opt-in per manifest: ``initialize._fill_index_array``
+no serialization). This is not opt-in per manifest: ``initialize.fill_index_array``
 already makes every 1-D integer index a permutation of ``[0, N)`` by default. This
 test guards that property across seeds, fuzz iterations, and presets.
 

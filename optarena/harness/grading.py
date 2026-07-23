@@ -169,16 +169,22 @@ def _numpy_reference(spec: BenchSpec, data: Dict) -> Dict[str, np.ndarray]:
 ORACLE_CHOICES = ("numpy", "c", "both")
 
 #: The per-language auto-parallelizing baselines: ``label -> (reference language,
-#: compilers.yaml block)``. Each is the compiled reference in ``language``, built
-#: :attr:`~optarena.flags.Mode.MULTI_CORE` with that compiler's autopar delta --
-#: clang / clang++ + LLVM Polly (:data:`~optarena.flags.POLLY_PAR`) for c / cpp,
-#: gfortran + GCC autopar (:data:`~optarena.flags.GCC_AUTOPAR`) for fortran (flang
-#: has no Polly). The compiler is forced (not the language's first block) so c/cpp
-#: get Polly rather than gcc's ``-ftree-parallelize-loops``.
-AUTOPAR_BASELINES: Dict[str, Tuple[str, str]] = {
-    "c-autopar": ("c", "clang"),
-    "cpp-autopar": ("cpp", "clangpp"),
-    "fortran-autopar": ("fortran", "gfortran"),
+#: ordered candidate compilers.yaml blocks)``. Each candidate is the compiled reference
+#: in ``language``, built :attr:`~optarena.flags.Mode.MULTI_CORE` with that compiler's
+#: autopar delta -- clang / clang++ + LLVM Polly (:data:`~optarena.flags.POLLY_PAR`)
+#: and gcc / g++ + GCC autopar (:data:`~optarena.flags.GCC_AUTOPAR`) for c / cpp;
+#: gfortran + GCC autopar for fortran (flang / ifx have no autopar).
+#:
+#: The denominator is the STRONGEST (fastest) of the *available* candidates: the timing
+#: path builds + times each installed candidate and keeps the min wall-clock, so an agent
+#: is scored against the best auto-parallelizer the runner can produce, not one hard-wired
+#: choice. A candidate whose compiler is missing or fails to build is skipped; if none
+#: build the baseline degrades to numpy. The compilers are forced (not the language's first
+#: block) so c / cpp genuinely try Polly, not only gcc's ``-ftree-parallelize-loops``.
+AUTOPAR_BASELINES: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "c-autopar": ("c", ("clang", "gcc")),
+    "cpp-autopar": ("cpp", ("clangpp", "gpp")),
+    "fortran-autopar": ("fortran", ("gfortran", )),
 }
 
 #: Concrete speedup-denominator kinds the timing path understands: ``numpy`` (always
@@ -198,12 +204,13 @@ AUTO_BASELINE = "auto"
 BASELINE_OPTIONS = BASELINE_CHOICES + (AUTO_BASELINE, )
 
 #: Per-track DEFAULT speedup baseline, applied when the user does not override the
-#: baseline. Foundation kernels (single-op vectorization puzzles) are timed against
-#: an auto-parallelized C reference; ml / hpc default to the numpy reference.
+#: baseline. Foundation and hpc kernels are timed against an auto-parallelized C
+#: reference (the strongest available CPU autopar compiler; see :data:`AUTOPAR_BASELINES`);
+#: ml defaults to the numpy reference.
 TRACK_DEFAULT_BASELINE: Dict[str, str] = {
     "foundation": "c-autopar",
     "ml": "numpy",
-    "hpc": "numpy",
+    "hpc": "c-autopar",
 }
 
 #: Neutral fallback baseline for a track absent from :data:`TRACK_DEFAULT_BASELINE`
@@ -236,20 +243,22 @@ def baseline_uses_numpy(baseline: str) -> bool:
     return baseline == "numpy"
 
 
-def baseline_compiled(baseline: str) -> Optional[Tuple[str, str, str, Mode]]:
+def baseline_compiled(baseline: str) -> Optional[Tuple[str, str, Tuple[str, ...], Mode]]:
     """The compiled reference a resolved ``baseline`` times, as
-    ``(label, language, compilers.yaml block, mode)`` -- or ``None`` for a
+    ``(label, language, candidate compilers.yaml blocks, mode)`` -- or ``None`` for a
     numpy-only baseline.
 
     ``c`` -> the sequential C reference (single-core, the language's default compiler,
-    so ``block`` is ``""``); a ``*-autopar`` kind -> its language's forced compiler +
-    :attr:`~optarena.flags.Mode.MULTI_CORE` (the autopar flags).
+    so the single candidate is ``""``); a ``*-autopar`` kind -> its language's forced
+    candidate compilers + :attr:`~optarena.flags.Mode.MULTI_CORE` (the autopar flags).
+    The candidate tuple is ORDERED but the denominator is the fastest that builds -- the
+    timing path tries each available compiler and keeps the min (see :data:`AUTOPAR_BASELINES`).
     """
     if baseline == "c":
-        return ("c", "c", "", Mode.SINGLE_CORE)
+        return ("c", "c", ("", ), Mode.SINGLE_CORE)
     if baseline in AUTOPAR_BASELINES:
-        lang, compiler = AUTOPAR_BASELINES[baseline]
-        return (baseline, lang, compiler, Mode.MULTI_CORE)
+        lang, compilers = AUTOPAR_BASELINES[baseline]
+        return (baseline, lang, compilers, Mode.MULTI_CORE)
     return None
 
 
@@ -267,10 +276,10 @@ class ReferencePlan:
 
     Derives, from an ORACLE choice and a RESOLVED baseline, which compiled
     reference(s) apply -- with no timing, build, or I/O. ``compiled`` is
-    ``(label, language, compiler, mode)`` or ``None`` (see :func:`baseline_compiled`);
+    ``(label, language, candidate compilers, mode)`` or ``None`` (see :func:`baseline_compiled`);
     ``bl_label`` / ``bl_lang`` default to ``""`` / ``"c"`` when there is no compiled
     baseline; ``need_seq_c`` is true whenever the single-core C reference must be built."""
-    compiled: Optional[Tuple[str, str, str, Mode]]
+    compiled: Optional[Tuple[str, str, Tuple[str, ...], Mode]]
     oracle_wants_c: bool
     bl_is_seq_c: bool
     bl_is_autopar: bool

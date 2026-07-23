@@ -1,14 +1,15 @@
 name: CI
 
-# Five parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
+# Seven parallel CPU runners, each a self-contained slice of the pipeline (was one ~200-min
 # sequential runner). Shared toolchain + base pip come from ./.github/actions/setup; each job
 # adds only the extra it needs, so ONLY frameworks-pluto pays for the Pluto build, ONLY
 # translators pays for gt4py, and ONLY mpi pays for the MPICH + mpi4py source build.
 #
 # The e2e sweep (tests/test_e2e_numerical.py) is partitioned by BACKEND via
 # OPTARENA_E2E_BACKENDS so no single runner carries all ~80 min of it and Pluto stays isolated:
-# numba+jax on unit, pluto on frameworks-pluto, c+cpp+fortran+pythran on e2e-container -- all
-# seven backends covered exactly once. Unset (a local run) still sweeps the full set.
+# numba+jax on unit, pluto on frameworks-pluto, c+cpp+fortran on e2e-native, pythran on
+# e2e-pythran (pythran isolated -- it is the memory/time pig) -- all seven backends covered
+# exactly once. Unset (a local run) still sweeps the full set.
 #
 # Within a job every phase after setup carries ``if: ${{ !cancelled() }}`` so one phase failing
 # still surfaces the rest (the job stays red). Phase 0 (format) and setup stay hard gates.
@@ -17,7 +18,9 @@ name: CI
 #   unit             format + structure + native emit + agent-bench + hf + e2e[numba,jax]
 #   translators      numpyto op suite + ports + benchmark refs (gt4py)
 #   frameworks-pluto codegen frameworks + fp16 + e2e[pluto]            (ONLY Pluto build)
-#   e2e-container    e2e[c,cpp,fortran,pythran] + agent-bench container image
+#   e2e-native       e2e[c,cpp,fortran]   (native heavy-compile slice, -n auto)
+#   e2e-pythran      e2e[pythran]         (pythran isolated -- ~7 GB/compile, -n 2)
+#   container-image  build + smoke-launch the agent-bench cpu container image
 #   mpi              the whole MPI/distributed track (descriptor + driver codegen + launch +
 #                    scoring + halo + sizing) on MPICH + a source-built mpi4py (ONLY MPI build)
 #
@@ -172,11 +175,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python -m pytest -q -p no:cacheprovider -rs --import-mode=importlib --timeout=600 \
-            optarena/benchmarks/hpc/dense_linear_algebra/seissol_batched_gemm/test_reference.py \
-            optarena/benchmarks/hpc/dense_linear_algebra/seissol_tensor_contraction/test_reference.py \
-            optarena/benchmarks/hpc/structured_grids/cloudsc/test_reference.py \
-            optarena/benchmarks/hpc/structured_grids/fv3_dycore/test_reference.py \
-            optarena/benchmarks/hpc/structured_grids/fv3_xppm/test_reference.py
+            optarena/benchmarks/hpc/dense_linear_algebra/seissol_batched_gemm/test_seissol_batched_gemm_reference.py \
+            optarena/benchmarks/hpc/dense_linear_algebra/seissol_tensor_contraction/test_seissol_tensor_contraction_reference.py \
+            optarena/benchmarks/hpc/structured_grids/cloudsc/test_cloudsc_reference.py \
+            optarena/benchmarks/hpc/structured_grids/fv3_dycore/test_fv3_dycore_reference.py \
+            optarena/benchmarks/hpc/structured_grids/fv3_xppm/test_fv3_xppm_reference.py
 
   # ===========================================================================================
   # frameworks-pluto -- the ONLY runner that builds Pluto. Codegen frameworks (cc/llvm/tvm/pluto)
@@ -265,12 +268,94 @@ jobs:
           python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
 
   # ===========================================================================================
-  # e2e-container -- the native + pythran slice of the e2e sweep (the heavy-compile backends),
-  # plus building and smoke-launching the agent-bench container image.
+  # e2e-native -- the c/cpp/fortran slice of the e2e sweep (heavy-compile, but bounded). Split off
+  # from pythran: ubuntu-latest is 4 vCPU / 16 GB and the old combined job died at exit 143 ("runner
+  # has received a shutdown signal" -- the runner VM was reclaimed). c/cpp/fortran compiles each peak
+  # at a few hundred MB (vs a single pythran compile at ~7 GB / 11 min), so with pythran gone this
+  # slice runs at full -n auto (4) well under 16 GB. tests/test_e2e_numerical.py reads
+  # OPTARENA_E2E_BACKENDS and run_kernel(only_backends=...) emits ONLY the requested backends, so a
+  # job that omits pythran never invokes a pythran compile.
   # ===========================================================================================
-  e2e-container:
+  e2e-native:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: e2e[c,cpp,fortran,pythran] + container image
+    name: e2e[c,cpp,fortran]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
+      - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran] @ S, fp64
+        if: ${{ !cancelled() }}
+        # pythran removed -> peak a few GB -> full -n auto (4) safe under 16 GB.
+        timeout-minutes: 60
+        env:
+          OPTARENA_E2E_BACKENDS: "c,cpp,fortran"
+        run: |
+          python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
+
+      - name: Phase 5b -- e2e numerical sweep [c, cpp, fortran] @ S, fp32
+        # The SAME corpus at fp32. Not redundant with the fp64 phase above: fp64 emits with an empty
+        # precision string, which makes numpyto_common.ir.apply_precision a no-op, so the phase above
+        # never exercises the precision-lowering path at ALL -- the float dtype remap over arrays /
+        # scalars / locals, KernelIR.float_precision (the emitter's default for a temp missing from
+        # local_dtypes), and each backend's narrow-float spelling (C ``float``, Fortran ``real(4)``,
+        # whose kind matching -std=f2018 enforces strictly). This runner has the headroom: the fp64
+        # phase is ~8 min of the job's 75.
+        # fp32 ONLY: fp16 keeps ~3 decimal digits, so a whole-corpus fp16 sweep would fail on honest
+        # numeric drift rather than emit bugs -- fp16 stays a targeted, fp16-safe kernel list in
+        # tests/test_fp16.py. Verified green over all 349 kernels x c/cpp/fortran before gating.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60
+        env:
+          OPTARENA_E2E_BACKENDS: "c,cpp,fortran"
+          OPTARENA_E2E_PRECISION: "fp32"
+        run: |
+          python -m pytest -q -p no:cacheprovider -n auto --timeout=600 tests/test_e2e_numerical.py
+
+  # ===========================================================================================
+  # e2e-pythran -- the pythran slice of the e2e sweep, isolated because pythran is the memory/time
+  # pig: a single pythran compile peaks ~7 GB / 11 min while c/cpp/fortran compiles are hundreds of
+  # MB. Folding it into the native job overran the 16 GB runner (exit 143). Same partition mechanism
+  # as e2e-native: OPTARENA_E2E_BACKENDS="pythran" so run_kernel(only_backends=...) emits pythran only.
+  # ===========================================================================================
+  e2e-pythran:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: e2e[pythran]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup
+
+      - name: Phase 5 -- e2e numerical sweep [pythran] @ S
+        if: ${{ !cancelled() }}
+        # -n 1: pythran ALONE at -n 2 STILL got the runner VM reclaimed ("runner has received a
+        # shutdown signal", exit 143) -- two concurrent ~7 GB template instantiations exhaust the
+        # 16 GB box, so isolating pythran was necessary but not sufficient. One compile at a time,
+        # paired with the oracle's COMPILE_MEMORY_CAP_GB rlimit on the compiler, keeps a runaway
+        # compile a per-kernel skip:unsupported:compile instead of a dead runner. One backend at
+        # -n 1 still fits the cap (the four-backend job did ~1000 items at -n 2 in under 4 min).
+        timeout-minutes: 60
+        env:
+          OPTARENA_E2E_BACKENDS: "pythran"
+        run: |
+          python -m pytest -q -p no:cacheprovider -n 1 --timeout=600 tests/test_e2e_numerical.py
+
+  # ===========================================================================================
+  # container-image -- build + smoke-launch the agent-bench CPU container image (docker build ->
+  # docker save -> apptainer build -> exec). Split off from the sweep so the heavy docker+apptainer
+  # build neither contends for the pythran runner's RAM nor serializes behind the native sweep.
+  # ===========================================================================================
+  container-image:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: agent-bench container image (build + launch)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -301,13 +386,6 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
-      - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran, pythran] @ S
-        if: ${{ !cancelled() }}
-        env:
-          OPTARENA_E2E_BACKENDS: "c,cpp,fortran,pythran"
-        run: |
-          python -m pytest -q -p no:cacheprovider -n auto tests/test_e2e_numerical.py
-
       - name: Phase 6a -- build + smoke-test the cpu agent-bench image (unified OCI -> SIF, gating)
         # GATES now. UNIFIED build: one OCI Dockerfile (containers/optarena.Dockerfile, HW=cpu) is the
         # single recipe; apptainer builds the SIF FROM that OCI image, no .def, no --fakeroot (the
@@ -319,16 +397,29 @@ jobs:
         # optarena-cpu.sif containers/cpu.def`.
         if: ${{ !cancelled() }}
         run: |
+          # Reclaim disk FIRST. The unified image (torch + dace + jax + the HPC stack) is multi-GB
+          # and this step keeps THREE copies live at once -- the docker layers, the `docker save`
+          # tar, and the converted SIF -- while a stock runner has only ~14 GB free. Without this
+          # the build itself succeeds and `docker save` dies on "no space left on device". These
+          # preinstalled toolchains are never used by this job.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
+          df -h / | tail -1
           docker build -f containers/optarena.Dockerfile --build-arg HW=cpu -t optarena:cpu .
           docker save optarena:cpu -o optarena-cpu.tar
+          # The docker layers are dead once the tar exists; drop them before the SIF (a third copy).
+          docker image rm optarena:cpu >/dev/null 2>&1 || true
+          docker builder prune -af >/dev/null 2>&1 || true
           apptainer build optarena-cpu.sif docker-archive:optarena-cpu.tar
+          # ...and the tar is dead once the SIF exists; Phase 6b only needs the SIF.
+          rm -f optarena-cpu.tar
+          df -h / | tail -1
           # The cpu image must import its numeric deps and carry the CPU-only torch build: a
           # bare ``torch`` would drag in the ~2 GB CUDA stack (see cpu.def). Assert the ``+cpu``
           # local version.
           apptainer exec optarena-cpu.sif python3 -c "import numpy, scipy, dace, jax, numba, pythran, xgboost, h5py, netCDF4; import torch; assert '+cpu' in torch.__version__, 'cpu image has non-CPU torch: ' + torch.__version__; print('cpu image OK: deps import, torch', torch.__version__)"
           # The agent-linkable numeric libs (containers/LIBRARIES.md) must be present: HPTT is
           # SOURCE-built (build-hptt.sh, the fragile step -- guard header + .so), the rest are apt.
-          apptainer exec optarena-cpu.sif sh -c 'set -e; test -e /usr/local/include/hptt.h; test -e /usr/local/lib/libhptt.so; for l in libhwy libsleef libhwloc liblapacke; do ldconfig -p | grep -q "$l" || { echo "missing $l"; exit 1; }; done; echo "cpu image native libs OK: hptt (src) + hwy + sleef + hwloc + lapacke"; for b in perf numactl heaptrack likwid-topology papi_avail strace pprof objdump; do command -v $b >/dev/null 2>&1 || { echo "missing $b"; exit 1; }; done; echo "cpu image perf tools OK: perf numactl heaptrack likwid papi strace pprof objdump";'
+          apptainer exec optarena-cpu.sif sh -c 'set -e; test -e /usr/local/include/hptt.h; test -e /usr/local/lib/libhptt.so; for l in libhwy libsleef libhwloc liblapacke; do ldconfig -p | grep -q "$l" || { echo "missing $l"; exit 1; }; done; echo "cpu image native libs OK: hptt (src) + hwy + sleef + hwloc + lapacke"; for b in perf numactl heaptrack likwid-topology papi_avail strace objdump; do command -v $b >/dev/null 2>&1 || { echo "missing $b"; exit 1; }; done; echo "cpu image perf tools OK: perf numactl heaptrack likwid papi strace objdump";'
 
       - name: Phase 6b -- container functionality (sudoless two-container launch, gating)
         # GATES now. The launch is sudoless -- unprivileged userns supplies the container isolation,
@@ -353,6 +444,16 @@ jobs:
     name: mpi (distributed track -- descriptor + codegen + launch + scoring)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # OpenMPI on a GH-Actions runner has no high-speed fabric (no InfiniBand / UCX device), so pin
+      # the simple self + shared-memory transports and disable UCX's VFS probe -- otherwise MPI_Init
+      # selects a missing transport and the REAL multi-rank launches (Phase 3) fail or hang. The
+      # rmaps oversubscribe knob lets R ranks share the 4 CI cores (belt-and-suspenders with the
+      # launcher's mpirun --oversubscribe).
+      OMPI_MCA_pml: ob1
+      OMPI_MCA_btl: self,vader
+      OMPI_MCA_rmaps_base_oversubscribe: "1"
+      UCX_VFS_ENABLE: "n"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -360,14 +461,18 @@ jobs:
           python-version: '3.12'
       - uses: ./.github/actions/setup
 
-      - name: Setup -- MPICH + a source-built mpi4py (the track's ABI-matched toolchain)
-        # libmpich-dev provides mpicc.mpich (the mpich runtime pkg does not); python3-dev is
-        # needed to source-build mpi4py. --no-binary forces the source build against MPICH; the
-        # prebuilt wheel is multi-ABI and would auto-select OpenMPI at runtime, mismatching the
-        # MPICH-built C driver.
+      - name: Setup -- OpenMPI + a source-built mpi4py (real multi-rank on the CI runner)
+        # OpenMPI, not MPICH: MPICH's Hydra bootstraps as SINGLETON worlds on a GH-Actions runner
+        # (PMI/hwloc can't come up), so `mpiexec -n 4` yields four world-size-1 jobs and every
+        # multi-rank launch/scoring/correctness test could only self-skip or fail. OpenMPI's
+        # `mpirun --oversubscribe -n R` launches R REAL ranks on the 2 CI cores, so those tests
+        # actually RUN and pass -- no capability-gap skip. (cray-mpich ABI parity is for the Alps
+        # deployment, orthogonal to CI test correctness.) libopenmpi-dev ships mpicc + mpirun;
+        # python3-dev + --no-binary source-build mpi4py against THIS OpenMPI so its ABI matches the
+        # mpicc-built C driver.
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends mpich libmpich-dev python3-dev
-          MPICC=mpicc.mpich python -m pip install --no-binary=mpi4py mpi4py
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev python3-dev
+          MPICC=mpicc python -m pip install --no-binary=mpi4py mpi4py
 
       - name: Phase 1 -- data distribution + descriptor (pure numpy, no launcher)
         if: ${{ !cancelled() }}

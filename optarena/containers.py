@@ -18,8 +18,10 @@ entry point.
 """
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import List, Mapping, Optional, Sequence, Tuple
 
@@ -180,16 +182,76 @@ def harbor_env_for(backend: Optional[str] = None) -> str:
     return name
 
 
-def install_apptainer(prefix="~/.local"):
+def install_apptainer(prefix="~/.local", attempts=4):
     """Install Apptainer unprivileged (no sudo) into ``prefix`` via its official
     installer. Returns the subprocess return code.
 
     The installer is downloaded then piped to ``bash`` over stdin, with ``prefix``
     passed as a real argv element -- NOT interpolated into a ``shell=True`` string
-    (which would let a crafted ``prefix`` inject arbitrary commands)."""
+    (which would let a crafted ``prefix`` inject arbitrary commands).
+
+    Retried with backoff (as ``pip_retry`` does for the CI pip installs) because BOTH
+    fetches are live-network: the installer itself, and the EPEL package listing the
+    installer scrapes to resolve the latest apptainer RPM. That listing is served by the
+    ``download.fedoraproject.org`` REDIRECTOR, so a single bad mirror fails the install
+    outright. Upstream's own retry loop cannot absorb that -- it NEVER sleeps between
+    attempts, so a momentarily unreachable mirror burns all of its retries in under a second
+    (seen in CI: five attempts, 0.80 s total, against a listing that resolves in 0.43 s when
+    healthy). Retrying the whole script in a FRESH process is what actually helps: the
+    installer caches the fetched listing in a shell variable and skips the re-fetch when
+    it is non-empty, so only a new process re-queries the redirector and can land on a
+    different mirror.
+
+    Any partial tree a failed attempt left behind is removed before the next one. This is
+    what makes the retry work at all: the installer hard-refuses when its own
+    ``<prefix>/<arch>`` already exists (``fatal "$DEST/$ARCH is not empty"``, and it has no
+    force flag), and a mirror that dies midway has already unpacked into it -- so without
+    the clean, every retry fails INSTANTLY on that check instead of re-fetching, and the
+    real error is buried under "is not empty" (seen in CI: a bad mirror lost
+    ``fakeroot-libs``, then three retries reported only the leftover directory).
+    :func:`clean_partial_install` removes only paths this call created."""
     prefix = os.path.expanduser(prefix)
-    script = subprocess.run(["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True, text=True).stdout
-    return subprocess.run(["bash", "-s", "-", prefix], input=script, text=True).returncode
+    preexisting = set(os.listdir(prefix)) if os.path.isdir(prefix) else set()
+    returncode = 1
+    for attempt in range(1, attempts + 1):
+        try:
+            script = subprocess.run(["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True,
+                                    text=True).stdout
+            returncode = subprocess.run(["bash", "-s", "-", prefix], input=script, text=True).returncode
+            if returncode == 0:
+                return 0
+        except subprocess.CalledProcessError as exc:
+            returncode = exc.returncode
+        if attempt < attempts:
+            clean_partial_install(prefix, preexisting)
+            delay = 5 * attempt
+            print(f"apptainer install attempt {attempt}/{attempts} failed (rc={returncode}); retrying in {delay}s",
+                  file=sys.stderr)
+            time.sleep(delay)
+    return returncode
+
+
+def clean_partial_install(prefix: str, preexisting: Sequence[str]) -> None:
+    """Remove what a failed :func:`install_apptainer` attempt left in ``prefix`` -- and ONLY that.
+
+    ``preexisting`` is the prefix's entries from before the first attempt; anything named there is
+    left alone. Scoping it this way is the whole point rather than a nicety: ``prefix`` defaults to
+    ``~/.local`` and is caller-supplied, so a blanket wipe of it would delete a user's unrelated
+    installs. Only the names the installer itself added (its ``<arch>`` tree and ``bin`` shims) are
+    candidates."""
+    if not os.path.isdir(prefix):
+        return
+    for name in os.listdir(prefix):
+        if name in preexisting:
+            continue
+        path = os.path.join(prefix, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def install_apptainer_main(argv=None):

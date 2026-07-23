@@ -33,7 +33,7 @@ from optarena.support import distributions
 from optarena.precision import Precision, numpy_dtype
 
 
-def _fill_index_array(shape: Tuple[int, ...], dtype_str: str, rng=None) -> np.ndarray:
+def fill_index_array(shape: Tuple[int, ...], dtype_str: str, rng=None) -> np.ndarray:
     """Materialize an integer array whose values are valid array
     subscripts -- the canonical form for a gather/scatter index array
     (``k = ip[i]; c[... k ...]``).
@@ -171,7 +171,7 @@ def auto_initialize(
         # valid-subscript fills; everything else uses the distribution.
         override = init_dtypes.get(name)
         if override is not None and np.dtype(override).kind in "iu":
-            materialized[name] = _fill_index_array(shape, override, rng=rng)
+            materialized[name] = fill_index_array(shape, override, rng=rng)
         else:
             # Per-array distribution from the unified ``init.arrays`` surface
             # wins over the run-wide default (e.g. an ``spd`` matrix beside a

@@ -60,6 +60,11 @@ RUN set -eu; \
 
 # --- Common toolchain + numeric libs (containers/LIBRARIES.md) + perf/profiling tools, then the
 # per-HW GPU stack. The common apt list is verbatim from all three retired recipes (they matched).
+# perf comes from ``linux-perf``, NOT ``linux-tools-generic``: on this base neither linux-tools-common
+# nor linux-tools-generic ships a perf binary at all, so the image built clean and only died at the
+# Phase 6a ``command -v perf`` check. linux-tools-generic is also wrong in principle for a container --
+# it depends on a kernel-ABI-pinned linux-tools-<uname -r> whose wrapper dispatches on the HOST kernel,
+# which never matches the version baked into the image. linux-perf depends only on libs, so it works.
 # GPU note (UNVERIFIED): on the CSCS public GPU base the CUDA/ROCm stack is PREINSTALLED, so the
 # nvidia/amd apt packages below are redundant there (apt treats them as satisfied) and MAY conflict
 # with a newer base CUDA -- drop or version-pin them once the real base image is known.
@@ -67,8 +72,8 @@ RUN set -eu; \
     apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev \
       gcc g++ gfortran clang flang \
-      gdb valgrind linux-tools-common linux-tools-generic linux-cpupower util-linux hwloc \
-      msr-tools numactl google-perftools libgoogle-perftools-dev heaptrack likwid papi-tools \
+      gdb valgrind linux-tools-common linux-perf linux-cpupower util-linux hwloc \
+      msr-tools numactl libgoogle-perftools-dev heaptrack likwid papi-tools \
       libpapi-dev strace ltrace binutils \
       ca-certificates git curl wget openssh-client gnupg ripgrep fd-find jq less tree htop \
       unzip vim nano \
@@ -115,6 +120,22 @@ RUN set -eu; \
       MPICC=mpicc.mpich python3 -m pip install --break-system-packages --no-cache-dir \
         --no-binary=mpi4py -r /requirements/${HW}.txt; \
     fi
+
+# DaCe: editable install of spcl/dace @ extended -- the branch OptArena develops against -- NOT the
+# PyPI wheel, exactly as .github/actions/setup does for every other job. The stock wheel is an old
+# release whose dace/dtypes.py evaluates ``typeclass(numpy.int)`` at IMPORT, and ``np.int`` was
+# removed in numpy 2 (cpu.txt pins numpy>=2), so a PyPI dace made ``import dace`` -- the image smoke
+# test -- die outright. (The native no-cmake build mode extended also carries stays opt-in via
+# DACE_compiler_build_mode, as in the setup action; the image keeps the default.)
+# --recurse-submodules is REQUIRED: dace vendors its runtime headers as git submodules
+# (external/moodycamel/blockingconcurrentqueue.h is included by dace/runtime/include/dace/stream.h),
+# so a plain clone builds an SDFG straight into "fatal error: ... blockingconcurrentqueue.h: No such
+# file or directory". This is why the fork cannot be a ``git+https`` line in the requirement files:
+# pip does not recurse submodules.
+RUN set -eu; \
+    git clone --depth 1 --recurse-submodules --shallow-submodules \
+      --branch extended https://github.com/spcl/dace.git /opt/dace; \
+    python3 -m pip install --break-system-packages --no-cache-dir -e /opt/dace
 
 # DIVERGENCE PICKS for the tail:
 #  * LC_ALL=C -- set by every .def %environment; the old .Dockerfiles omitted it. Kept for a

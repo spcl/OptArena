@@ -39,6 +39,7 @@ from typing import Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 import sympy
 
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR
+from numpyto_common.numpy_desugar import _np_linalg_attr
 from numpyto_common.lib_nodes import (MESHGRID_AXIS_KW, _iter_extent_of,
                                       _scalarize_at_iters, expand_meshgrid)
 
@@ -1254,6 +1255,35 @@ class _BuiltinCastRewriter(ast.NodeTransformer):
         return node
 
 
+class _ScalarFloatTagger(ast.NodeVisitor):
+    """Tag a local scalar float when its DEFINING expression is provably non-integer.
+
+    :func:`_is_integer_expr` reads an untagged non-array Name as INTEGER -- right for the
+    symbols (``N`` / ``k`` / ``m``) it exists to classify, wrong for a float scalar, which
+    reaches it untagged: ``local_dtypes`` carries the arrays, and a scalar derived in the
+    body (``e = 0.5 * (b - a)``) is in no table at all. Reading those as integer makes
+    :class:`_TrueDivisionPromoter` fire on a float ``/`` and bake in an fp64 cast.
+
+    Visits in source order so a tag is available to the statements that follow it, and only
+    ever ADDS float tags it can prove (an integer expression stays untagged and keeps the
+    old reading). So this can only turn a false promotion OFF -- never a new one on."""
+
+    def __init__(self, tags: Dict[str, str], array_names: Set[str]):
+        self.tags = tags
+        self.array_names = array_names
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        from numpyto_common.lib_nodes import _is_integer_expr
+        self.generic_visit(node)
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            return
+        name = node.targets[0].id
+        if name in self.tags or name in self.array_names:
+            return
+        if not _is_integer_expr(node.value, self.tags, self.array_names):
+            self.tags[name] = "float64"
+
+
 class _TrueDivisionPromoter(ast.NodeTransformer):
     """numpy ``/`` is TRUE division: int / int -> float64. C ``/`` and Fortran
     ``/`` do INTEGER division on integer operands, so wrap the left operand of an
@@ -1261,7 +1291,14 @@ class _TrueDivisionPromoter(ast.NodeTransformer):
     render as ``(double)(x)`` / ``REAL(x, kind=c_double)``) to force a floating
     divide -- matching numpy. Float / complex operands are left untouched (the
     surrounding arithmetic already promotes); ``//`` (FloorDiv) is a distinct op
-    handled by the emitters' integer floor macro and is NOT touched here."""
+    handled by the emitters' integer floor macro and is NOT touched here.
+
+    ``np.float64`` is deliberate and stays fp64 even on an fp32 emit: numpy's int/int
+    IS float64 regardless of the kernel's float precision, so this cast is faithful. It
+    is only correct while the operands really are integers, though -- hence the dtype
+    table this is handed must be complete (see :class:`_ScalarFloatTagger`). Firing on a
+    float divide silently promotes the surrounding expression to double, which fp64
+    cannot reveal because there double IS the precision."""
 
     def __init__(self, local_dtypes, array_names):
         self.local_dtypes = local_dtypes or {}
@@ -1614,6 +1651,19 @@ def _harvest_local_shapes(tree: ast.AST,
         if not isinstance(target, ast.Name):
             continue
         rhs = stmt.value
+        # ``X = np.zeros(.., dtype=..) if cond else None`` -- vexx_k's ``deexx``,
+        # allocated only in the ultrasoft / PAW branch. The shape + dtype live in
+        # the constructor branch of the ternary; unwrap to it so the local is
+        # typed / sized like a direct ``X = np.zeros(..)``. Without this the local
+        # falls through untyped and defaults to real though it is np.complex128 --
+        # C narrows the complex accumulation silently (safe only while the branch
+        # is dead), but C++ rejects the complex->real assignment at compile.
+        if isinstance(rhs, ast.IfExp):
+            ctor = [b for b in (rhs.body, rhs.orelse) if isinstance(b, ast.Call)]
+            none_br = [b for b in (rhs.body, rhs.orelse)
+                       if isinstance(b, ast.Constant) and b.value is None]
+            if len(ctor) == 1 and len(none_br) == 1:
+                rhs = ctor[0]
         # Name = Name alias -- inherit shape and dtype from the source.
         if isinstance(rhs, ast.Name):
             src_shape = shape_table.get(rhs.id)
@@ -1623,6 +1673,23 @@ def _harvest_local_shapes(tree: ast.AST,
                 src_dt = dtype_table.get(rhs.id)
                 if src_dt is not None and target.id not in dtype_table:
                     dtype_table[target.id] = src_dt
+            continue
+        # ``np.linalg.<op>`` is a TWO-level attribute, so the single-level
+        # ``np.<attr>`` gate below never matches it and the last-ditch extent
+        # guess mirrors the FIRST operand instead -- sizing ``x = np.linalg.
+        # solve(A, b)`` like the SQUARE A rather than like b. A 1-D b then has
+        # its reads padded to a phantom second dim (``x[i]`` -> ``x[i, :]``).
+        # Register what the solve / inv / cholesky expanders actually write.
+        _lin_op = _np_linalg_attr(rhs)
+        if _lin_op in ("solve", "inv", "cholesky"):
+            # ``solve`` returns x with b's shape; ``inv`` / ``cholesky`` are
+            # shape-preserving in their single operand.
+            _src_arg = rhs.args[1] if _lin_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0]
+                                                                                      if rhs.args else None)
+            if isinstance(_src_arg, ast.Name):
+                _src_shape = shape_table.get(_src_arg.id)
+                if _src_shape:
+                    shape_table[target.id] = tuple(_src_shape)
             continue
         if not (isinstance(rhs, ast.Call)
                 and isinstance(rhs.func, ast.Attribute)
@@ -3632,6 +3699,17 @@ def _walk_complex(node: ast.AST, name_dtype: "Callable[[str], Optional[str]]") -
               else node.func.id if isinstance(node.func, ast.Name) else None)
         if fn in _REAL_FROM_COMPLEX:
             return None
+        # An explicit complex ``dtype=`` (``np.zeros((n,), dtype=np.complex128)``)
+        # or ``.astype(np.complex128)`` PRODUCES a complex value even when no
+        # operand is complex -- the dtype lives in a KEYWORD, not node.args, so
+        # inspect it directly. Without this a complex array whose only visible
+        # write is its zero-init (vexx_k's ``deexx``) reads as real and the
+        # complex->real narrowing pass unsoundly demotes it (compiles in C by
+        # dropping the imaginary part, but C++ rejects the assignment).
+        from numpyto_common.frontend import _dtype_from_constructor
+        ctor_dt = _dtype_from_constructor(node)
+        if ctor_dt is not None and ctor_dt.startswith("complex"):
+            return ctor_dt
         for a in node.args:
             r = _walk_complex(a, name_dtype)
             if r:
@@ -3745,6 +3823,84 @@ def _scalar_expr_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
     if isinstance(expr, ast.UnaryOp):
         return _scalar_expr_complex(expr.operand, local_dtypes)
     return False
+
+
+def _seed_complex_work_dtypes(tree: ast.AST, local_dtypes: Dict[str, str]) -> None:
+    """Seed ``local_dtypes`` for the complex work-array temps and their directly
+    derived scalar reads, EARLY -- before the ``promote-true-division`` and
+    ``libnode-expand`` phases consume those dtypes.
+
+    The eigh / eigvalsh cyclic-Jacobi lowering allocates its complex work matrices
+    (``L`` / ``Li`` / ``Tm`` / ``Cm`` / ``X`` / ``jv``) with ``np.zeros((n, n),
+    b.dtype)`` and derives scalars off them (``apq = Cm[i, j]``, ``m =
+    hypot(apq.real, apq.imag)``, ``ephi = apq / m``). Those dtypes are otherwise
+    only recorded at the whole-array phase (:class:`_WholeArrayAssignRewriter`),
+    which runs AFTER two phases that already consume them:
+
+    * ``promote-true-division`` reads an untagged ``apq`` as an INTEGER (a non-array
+      Name defaults integer), so ``apq / m`` is wrongly promoted with a
+      ``np.float64(apq)`` cast -- truncating the complex Jacobi phase (and that cast
+      is what C++ rejects as ``(double)(complex)``);
+    * ``libnode-expand``'s :class:`_RealConjDropper` classifies the still-untyped
+      complex work arrays as REAL via :func:`_walk_complex` and DROPS every
+      ``np.conj`` on them, so the reduction computes the wrong eigenvalues.
+
+    Seeding here (phase 4) makes both later phases see the true dtypes. It reuses
+    the SAME predicates the whole-array rewriter uses (:func:`_ctor_complex_tag` /
+    :func:`_scalar_expr_complex` / :func:`_walk_complex`), iterated to a fixpoint
+    because a derived scalar's dtype depends on the temp it reads
+    (``m`` / ``ephi`` <- ``apq`` <- ``Cm``'s constructor)."""
+    assigns = [
+        s for s in ast.walk(tree)
+        if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+    ]
+
+    def dtype_for(value: ast.expr) -> Optional[str]:
+        if isinstance(value, ast.Call):
+            # X = np.zeros/ones/empty/eye(shape, Y.dtype | np.complexNN)
+            ctag = _ctor_complex_tag(value, local_dtypes)
+            if ctag is not None:
+                return ctag
+            # X = Y.copy() / np.copy(Y) / np.ascontiguousarray(Y) -- inherit the complex source
+            if isinstance(value.func, ast.Attribute):
+                f = value.func
+                src = (f.value.id if f.attr == "copy" and isinstance(f.value, ast.Name) else
+                       value.args[0].id if f.attr in ("copy", "ascontiguousarray", "asarray", "array") and value.args
+                       and isinstance(value.args[0], ast.Name) else None)
+                sdt = local_dtypes.get(src) if src else None
+                if sdt and sdt.startswith("complex"):
+                    return sdt
+            # m = np.hypot/abs/real/imag(<complex ...>) -- a real-returning magnitude of a
+            # complex operand types to the MATCHING REAL width (so ``m`` is real, not complex).
+            fn = (value.func.attr if isinstance(value.func, ast.Attribute) else
+                  value.func.id if isinstance(value.func, ast.Name) else None)
+            if fn in _REAL_FROM_COMPLEX:
+                for sub in ast.walk(value):
+                    if isinstance(sub, ast.Name):
+                        bdt = local_dtypes.get(sub.id)
+                        if bdt and bdt.startswith("complex"):
+                            return _REAL_FOR_COMPLEX.get(bdt, "float64")
+            return None
+        # z = A[scalar-index] -- inherit a complex array's element dtype
+        if isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name):
+            sdt = local_dtypes.get(value.value.id)
+            return sdt if sdt and sdt.startswith("complex") else None
+        # ephi = apq / m -- a scalar BinOp/UnaryOp over complex operands
+        if isinstance(value, (ast.BinOp, ast.UnaryOp)) and _scalar_expr_complex(value, local_dtypes):
+            return "complex128"
+        return None
+
+    changed = True
+    while changed:
+        changed = False
+        for s in assigns:
+            name = s.targets[0].id
+            if name in local_dtypes:
+                continue
+            dt = dtype_for(s.value)
+            if dt is not None:
+                local_dtypes[name] = dt
+                changed = True
 
 
 class _PromoteMixedComplexIfExp(ast.NodeTransformer):
@@ -5951,6 +6107,12 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
                 if ((isinstance(_dv, ast.Attribute) and _dv.attr in ("bool_", "bool"))
                         or (isinstance(_dv, ast.Name) and _dv.id == "bool")):
                     ctx.local_dtypes.setdefault(_s.targets[0].id, "bool_")
+    # Seed the complex work-array temps (and their directly-derived scalar reads)
+    # that the eigh / eigvalsh cyclic-Jacobi lowering allocates from a complex
+    # signature array's ``.dtype`` -- BEFORE the true-division and libnode-expand
+    # phases, which otherwise consume those still-untyped temps and mis-lower the
+    # complex divide (``apq / m``) and the ``np.conj`` on the reduction matrices.
+    _seed_complex_work_dtypes(tree, ctx.local_dtypes)
     # SSA-style rename for Names reassigned with different broadcast extents (hdiff
     # / vadv ``res = ...; res = ...`` with two distinct shapes). Runs BEFORE harvest
     # so each version registers under its own name and downstream passes (harvest /
@@ -6099,6 +6261,19 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # single expand_reshape path serves lulesh's varargs spelling.
     _ReshapeMethodRewriter().visit(tree)
     ast.fix_missing_locations(tree)
+    # Seed the INTEGER/UINT element dtype of every kernel-parameter array into
+    # ``local_dtypes`` so the library-node hoister can see, e.g., that ``idx`` in
+    # ``int(np.max(idx))`` is int64 and tag the max-reduction temp int64 rather
+    # than the float default. Without this a value-preserving reduction over an
+    # int array declares a real accumulator, and the Fortran emit's ``merge(int,
+    # real)`` update is a kind mismatch (gfortran rejects it). Only int/uint tags
+    # are seeded: complex is handled by the dedicated complex-propagation pass, and
+    # a float tag would flip untagged-float-default code paths. Param arrays are
+    # declared from the ABI signature (not ``local_dtypes``), so tagging them here
+    # never redeclares them.
+    for arr in ctx.kir.arrays:
+        if arr.dtype.startswith(("int", "uint")):
+            ctx.local_dtypes.setdefault(arr.name, arr.dtype)
     # Library-node expansion -- reductions, matmul, etc. -- runs before
     # ``_ZerosRewriter`` so any matmul temps the rewriter introduces are picked up
     # by the zeros pass as local arrays.
@@ -6108,6 +6283,15 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
                                        local_dtypes=ctx.local_dtypes,
                                        sparse=ctx.original_kir.sparse)
     ctx.lib_rewriter.visit(tree)
+    # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
+    # nodes expand. ``np.sqrt(w @ (cov @ w))`` (portfolio_optimization) defers the rename in
+    # ``_lp_normalize_calls`` -- the arg reads arrays, so the elementwise expander gets first
+    # refusal -- but a 1-D x 1-D matmul lowers to a scalar dot temp, leaving ``np.sqrt(__mm2)``
+    # that no later pass renames and the backends reject as an unsupported call. Re-running the
+    # SAME rewriter (rather than special-casing the emitter) with the temps now known keeps the
+    # rule intact: an argument that is still array-valued -- a vector matmul temp, which IS in
+    # ``lib_shape_table`` -- keeps deferring; a scalar one renames to the math intrinsic.
+    _MathRewriter(set(ctx.arrays_shapes.keys()) | set(ctx.lib_shape_table.keys())).visit(tree)
     # Second free-name promotion: sparse matvec dispatchers introduce structural
     # scalar symbols that don't exist until the hoister runs (SELL-C-sigma's slice
     # height ``C``), so the first promotion at the top of lower() can't see them.
@@ -6433,9 +6617,19 @@ def _lp_promote_true_division(ctx: LoweringContext) -> None:
     generated index math. Array names come from the harvested shape tables so a
     float array element is not mistaken for an integer; a later scalarization of
     a whole-array ``np.float64(a) / b`` recurses into the cast operand
-    unchanged."""
+    unchanged.
+
+    The dtype table is ``local_dtypes`` (arrays) WIDENED with the declared scalar params
+    and the body's provable float scalars: neither is in ``local_dtypes``, and
+    ``_is_integer_expr`` reads an untagged non-array Name as integer, so without them a
+    float divide (chebyshev_filter_subspace's ``sigma1 / e``, over declared float64
+    params) is promoted as if it were int/int -- baking an fp64 cast into an otherwise
+    fp32 kernel."""
     array_names = set(ctx.lib_shape_table) | set(ctx.arrays_shapes)
-    _TrueDivisionPromoter(ctx.local_dtypes, array_names).visit(ctx.tree)
+    tags: Dict[str, str] = {s.name: s.dtype for s in ctx.kir.scalars}
+    tags.update(ctx.local_dtypes)  # the harvested tags win over the declaration
+    _ScalarFloatTagger(tags, array_names).visit(ctx.tree)
+    _TrueDivisionPromoter(tags, array_names).visit(ctx.tree)
     ast.fix_missing_locations(ctx.tree)
 
 
