@@ -22,6 +22,11 @@ GPUtil
 # dace is NOT the PyPI wheel (an old release that imports the numpy-2-removed
 # ``np.int`` and fails under numpy>=2) -- the container clones spcl/dace@extended
 # editable with submodules, mirroring .github/actions/setup. See the Dockerfile.
+# ordered-set is a dace runtime import (dace/sdfg/graph.py et al). dace@extended added the
+# import before declaring it in install_requires, so a fresh editable clone briefly shipped
+# without it and every dace-importing job died on ModuleNotFoundError. Declare it here too so
+# a gap in dace's own dep list can never silently drop it again.
+ordered-set >= 4.0.0
 numba
 pythran
 jax
